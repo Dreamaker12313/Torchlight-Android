@@ -1,0 +1,1423 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseSystem.h b/Plugins/ParticleUniverse/include/ParticleUniverseSystem.h
+index 919a8b7..3ba33d4 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseSystem.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseSystem.h
+@@ -175,11 +175,11 @@ namespace ParticleUniverse
+ 			*/
+ 			void _notifyAttached(Ogre::Node* parent, bool isTagPoint = false);
+ 
+-			/** Overridden from MovableObject
+-			@see
+-				MovableObject
++			/** Torchlight: `ParticleSystem::notifyCurrentCamera`. Not the OGRE
++				override: Torchlight's system has none, so only the camera the game hands it
++				(the player's) matters, and a null camera refreshes with the stored one.
+ 			*/
+-			inline virtual void _notifyCurrentCamera(Camera* cam);
++			virtual void notifyCurrentCamera(Camera* cam);
+ 
+ 			/** Overridden from MovableObject
+ 			@see
+@@ -219,11 +219,11 @@ namespace ParticleUniverse
+ 			*/
+ 			void _update(Real timeElapsed);
+ 
+-			/** Update all techniques and return the number of emitted particles for any function who is interested.
++			/** Update all techniques (Torchlight's returns nothing).
+ 			@param
+ 				timeElapsed The amount of time, in seconds, since the last frame.
+ 			*/
+-			size_t _updateTechniques(Real timeElapsed);
++			void _updateTechniques(Real timeElapsed);
+ 
+ 			/** 
+ 			*/
+@@ -483,6 +483,7 @@ namespace ParticleUniverse
+ 			void pushEvent(ParticleUniverseEvent& particleUniverseEvent);
+ 
+ 			/** @see MovableObject
++				Torchlight: `ParticleSystem::visitRenderables`: the same as the library's (empty).
+ 		    */
+ 			virtual void visitRenderables (Ogre::Renderable::Visitor* visitor,
+ 				bool debugRenderables = false) {/* No implementation */};
+@@ -519,6 +520,11 @@ namespace ParticleUniverse
+ 	        */
+ 			void setUseController(bool useController);
+ 
++			/** Torchlight: `ParticleSystem::setManualUpdate`: update by hand (no frame-time
++				controller) or not.
++			*/
++			void setManualUpdate(bool manualUpdate);
++
+ 			/** Returns 'true' if one of externs is of a certain type.
+ 			@remarks
+ 				All techniques are searched.
+@@ -541,11 +547,11 @@ namespace ParticleUniverse
+ 		protected:
+ 			/** Gets the LOD index to use at the given distance.
+ 			*/
+-			unsigned short _getLodIndex(Real distance) const;
++			int _getLodIndex(Real distance) const;
+ 
+             /** Gets the LOD index to use at the given squared distance.
+ 			*/
+-			unsigned short _getLodIndexSquaredDistance(Real squaredDistance) const;
++			int _getLodIndexSquaredDistance(Real squaredDistance) const;
+ 
+             /** Calculate rotation of the node.
+ 			*/
+@@ -671,6 +677,11 @@ namespace ParticleUniverse
+ 			bool mMainCameraNameSet;
+ 			Camera* mCurrentCamera;
+ 
++			/** Torchlight (+0x2e8): seconds this system stays idle, particles cleared,
++				because it was beyond the manager's falloff.
++			*/
++			Real mFalloffTimer;
++
+ 			/** Scale the Particle Systems� relative positions and size.
+ 			@remarks
+ 				Scaling is done on a Particle System level and is independent of the scaling of the SceneNode
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
+index 7961966..43a57d3 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
+@@ -52,12 +52,53 @@ namespace ParticleUniverse
+ 	{
+ 		protected:
+ 			ParticleSystem* mTarget;
++			// Torchlight: time not yet stepped (+0x10), 0 when the value is made.
++			Real mTimeToStep;
+ 		
+ 		public:
+-			ParticleSystemUpdateValue(ParticleSystem* target) : mTarget(target) {}
++			ParticleSystemUpdateValue(ParticleSystem* target) : mTarget(target), mTimeToStep(0.0f) {}
+ 			
++			// Torchlight: `ParticleSystemUpdateValue::getValue`, 0.
+ 			Real getValue(void) const {return 0;}
+-			void setValue(Real value) {mTarget->_update(value);}
++
++			/** Torchlight: `ParticleSystemUpdateValue::setValue`. A stopped or paused
++				system is left alone; while the game is paused (manager +0x540) the system is
++				only refreshed against its camera. Otherwise the frame's time, times the game
++				speed (manager +0x4dc) and capped at a tenth of a second of it, is stepped in
++				slices of 1 / `getParticleFPS()`; a frame of two slices or more is stepped
++				whole, and what was owed is dropped.
++			*/
++			void setValue(Real value)
++			{
++				const ParticleSystem::ParticleSystemState state = mTarget->getState();
++				if (state == ParticleSystem::PSS_STOPPED || state == ParticleSystem::PSS_PAUSED)
++					return;
++
++				ParticleSystemManager* manager = ParticleSystemManager::getSingletonPtr();
++				if (manager->isGamePaused())
++				{
++					mTarget->notifyCurrentCamera(0);
++					return;
++				}
++
++				// `minss`: the scaled frame time when it is not above the cap.
++				const Real speed = manager->getGameSpeed();
++				const Real scaled = value * speed;
++				const Real cap = speed * 0.1f;
++				const Real step = cap < scaled ? cap : scaled;
++				mTimeToStep += step;
++				if (step >= 1.0f / ParticleSystemManager::getParticleFPS() + 1.0f / ParticleSystemManager::getParticleFPS())
++				{
++					mTarget->_update(step);
++					mTimeToStep = 0.0f;
++					return;
++				}
++				while (mTimeToStep > 1.0f / ParticleSystemManager::getParticleFPS())
++				{
++					mTarget->_update(1.0f / ParticleSystemManager::getParticleFPS());
++					mTimeToStep += -1.0f / ParticleSystemManager::getParticleFPS();
++				}
++			}
+ 	};
+ 	//-----------------------------------------------------------------------
+ 	ParticleSystem::ParticleSystem(const String& name) :
+@@ -81,9 +122,10 @@ namespace ParticleUniverse
+ 		mTimeSinceLastUpdate(0.0f),
+ 		mFixedTimeout(DEFAULT_FIXED_TIMEOUT),
+ 		mFixedTimeoutSet(false),
+-		mBoundsAutoUpdate(true),
+-		mBoundsUpdateTime(10.0f),
+-		mOriginalBoundsUpdateTime(10.0f),
++		// Torchlight's defaults (`ParticleSystem::ParticleSystem`).
++		mBoundsAutoUpdate(false),
++		mBoundsUpdateTime(0.0f),
++		mOriginalBoundsUpdateTime(0.25f),
+ 		mFastForwardSet(false),
+ 		mOriginalFastForwardSet(false),
+ 		mFastForwardTime(DEFAULT_FAST_FORWARD_TIME),
+@@ -91,6 +133,7 @@ namespace ParticleUniverse
+ 		mMainCameraName(DEFAULT_MAIN_CAMERA_NAME),
+ 		mMainCameraNameSet(false),
+ 		mCurrentCamera(0),
++		mFalloffTimer(0.0f),
+ 		mParticleSystemScale(DEFAULT_SCALE),
+ 		mParticleSystemScaleVelocity(DEFAULT_SCALE_VELOCITY),
+ 		mParticleSystemScaleTime(DEFAULT_SCALE_TIME),
+@@ -111,6 +154,7 @@ namespace ParticleUniverse
+ 		particleType = PT_SYSTEM;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::ParticleSystem`: the same as the name-only constructor with the group given, and like the library's it leaves the particle type alone.
+ 	ParticleSystem::ParticleSystem(const String& name, const String& resourceGroupName) :
+ 		IElement(),
+ 		mAABB(),
+@@ -132,9 +176,10 @@ namespace ParticleUniverse
+ 		mTimeSinceLastUpdate(0.0f),
+ 		mFixedTimeout(DEFAULT_FIXED_TIMEOUT),
+ 		mFixedTimeoutSet(false),
+-		mBoundsAutoUpdate(true),
+-		mBoundsUpdateTime(10.0f),
+-		mOriginalBoundsUpdateTime(10.0f),
++		// Torchlight's defaults (`ParticleSystem::ParticleSystem`).
++		mBoundsAutoUpdate(false),
++		mBoundsUpdateTime(0.0f),
++		mOriginalBoundsUpdateTime(0.25f),
+ 		mFastForwardSet(false),
+ 		mOriginalFastForwardSet(false),
+ 		mFastForwardTime(DEFAULT_FAST_FORWARD_TIME),
+@@ -142,6 +187,7 @@ namespace ParticleUniverse
+ 		mMainCameraName(DEFAULT_MAIN_CAMERA_NAME),
+ 		mMainCameraNameSet(false),
+ 		mCurrentCamera(0),
++		mFalloffTimer(0.0f),
+ 		mParticleSystemScale(DEFAULT_SCALE),
+ 		mParticleSystemScaleVelocity(DEFAULT_SCALE_VELOCITY),
+ 		mParticleSystemScaleTime(DEFAULT_SCALE_TIME),
+@@ -161,14 +207,21 @@ namespace ParticleUniverse
+ 		mBoundingRadius = 1;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::~ParticleSystem`:
++	// no event; the system is first detached from its
++	// node (which runs `_notifyAttached(0)` while its techniques still exist), then the techniques
++	// destroyed and the frame-time controller, whenever there is one. It also counts the manager's
++	// systems down (+0x508), a statistic nothing reads, left out.
+ 	ParticleSystem::~ParticleSystem(void)
+ 	{
+-		// Generate the event
+-		_pushSystemEvent(PU_EVT_SYSTEM_DELETING);
++		if (getParentSceneNode())
++		{
++			getParentSceneNode()->detachObject(this);
++		}
+ 
+ 		destroyAllTechniques();
+ 
+-		if (mTimeController && mUseController)
++		if (mTimeController)
+ 		{
+ 			// Destroy controller
+ 			ControllerManager::getSingleton().destroyController(mTimeController);
+@@ -176,6 +229,11 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::operator=`, called by `CParticlePreloader::LoadParticle`
++	// and the manager's template copy: the techniques cloned first, then the library's
++	// attributes but for the pause time, template name, stop fade and category, which Torchlight's
++	// copy does not carry over; it also copies the bounds' auto-update and its two timers and the
++	// manual-update flag, and forgets the falloff idle time (+0x2e8).
+ 	ParticleSystem& ParticleSystem::operator=(const ParticleSystem& ps)
+ 	{
+ 		// Destroy all existing techniques.
+@@ -192,7 +250,7 @@ namespace ParticleUniverse
+ 			addTechnique(clonedTechnique);
+ 		}
+ 
+-		// Copy attributes
++		// Copy attributes, in the original's order
+ 		mNonvisibleUpdateTimeout = ps.mNonvisibleUpdateTimeout;
+ 		mNonvisibleUpdateTimeoutSet = ps.mNonvisibleUpdateTimeoutSet;
+ 		mResourceGroupName = ps.mResourceGroupName;
+@@ -217,13 +275,12 @@ namespace ParticleUniverse
+ 		mParticleSystemScaleTime = ps.mParticleSystemScaleTime;
+ 		mKeepLocal = ps.mKeepLocal;
+ 		mTightBoundingBox = ps.mTightBoundingBox;
+-		mPauseTime = ps.mPauseTime;
+-		mPauseTimeSet = ps.mPauseTimeSet;
+-		mPauseTimeElapsed = ps.mPauseTimeElapsed;
+-		mTemplateName = ps.mTemplateName;
+ 		mSceneManager = ps.mSceneManager;
+-		mStopFadeSet = ps.mStopFadeSet;
+-		mCategory = ps.mCategory;
++		mFalloffTimer = 0.0f;                   // +0x2e8
++		mUseController = ps.mUseController;     // +0x2ec, the manual-update flag (inverted here)
++		mBoundsAutoUpdate = ps.mBoundsAutoUpdate;
++		mBoundsUpdateTime = ps.mBoundsUpdateTime;
++		mOriginalBoundsUpdateTime = ps.mOriginalBoundsUpdateTime;
+ 
+ 		// Notify.
+ 		mSuppressNotifyEmissionChange = false;
+@@ -347,11 +404,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::hasTightBoundingBox`: the same as the library's.
+ 	bool ParticleSystem::hasTightBoundingBox(void) const
+ 	{
+ 		return mTightBoundingBox;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setTightBoundingBox`: the same as the library's.
+ 	void ParticleSystem::setTightBoundingBox(bool tightBoundingBox)
+ 	{
+ 		mTightBoundingBox = tightBoundingBox;
+@@ -412,29 +471,53 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setManualUpdate`, not in the library, which has
++	// `setUseController`: the frame-time controller is destroyed; unless updated by hand, a system in
++	// the scene gets a new one at once (its clock, `ParticleSystemUpdateValue`, starts at 0). Nothing
++	// in the game calls it.
++	void ParticleSystem::setManualUpdate(bool manualUpdate)
++	{
++		if (mTimeController)
++		{
++			ControllerManager::getSingleton().destroyController(mTimeController);
++			mTimeController = 0;
++		}
++		mUseController = !manualUpdate;
++		if (!manualUpdate && getParentNode())
++		{
++			ControllerManager& controllerManager = ControllerManager::getSingleton();
++			ControllerValueRealPtr particleSystemUpdateValue(PU_NEW ParticleSystemUpdateValue(this));
++			mTimeController = controllerManager.createFrameTimePassthroughController(particleSystemUpdateValue);
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::isKeepLocal`: the same as the library's.
+ 	bool ParticleSystem::isKeepLocal(void) const
+ 	{
+ 		return mKeepLocal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setKeepLocal`: the same as the library's.
+ 	void ParticleSystem::setKeepLocal(bool keepLocal)
+ 	{
+ 		mKeepLocal = keepLocal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::makeParticleLocal`: only the answer - true without a
++	// particle, false unless keep local, otherwise whether the system has not expired; the particle
++	// is not moved (the library shifts it by the system's movement). Nothing in Torchlight calls it.
+ 	bool ParticleSystem::makeParticleLocal(Particle* particle)
+ 	{
+ 		if (!particle)
+ 			return true;
+ 
+-		if (!mKeepLocal || hasEventFlags(Particle::PEF_EXPIRED))
++		if (!mKeepLocal)
+ 			return false;
+ 
+-		Vector3 diff = getDerivedPosition() - latestPosition;
+-		particle->position += diff;
+-		return true;
++		return !hasEventFlags(Particle::PEF_EXPIRED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getDerivedPosition`: the same as the library's.
+ 	const Vector3& ParticleSystem::getDerivedPosition(void)
+ 	{
+ 		if (mMarkedForEmission)
+@@ -456,6 +539,7 @@ namespace ParticleUniverse
+ 		return mDerivedPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getDerivedOrientation`: the same as the library's.
+ 	const Quaternion& ParticleSystem::getDerivedOrientation(void) const
+ 	{
+ 		if (mMarkedForEmission)
+@@ -520,6 +604,7 @@ namespace ParticleUniverse
+ 		pos = mRotationCentre + mRotationOffset * (pos - mRotationCentre);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::createTechnique`: the same as the library's.
+ 	ParticleTechnique* ParticleSystem::createTechnique(void)
+ 	{
+ 		ParticleTechnique* technique = ParticleSystemManager::getSingletonPtr()->createTechnique();
+@@ -527,12 +612,18 @@ namespace ParticleUniverse
+ 		return technique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::addTechnique`: also hands the technique the system's
++	// current camera, when it has one.
+ 	void ParticleSystem::addTechnique(ParticleTechnique* technique)
+ 	{
+ 		mTechniques.push_back(technique);
+ 		technique->setParentSystem(this);
+ 		technique->_notifyRescaled(mParticleSystemScale);
+ 		technique->_notifyVelocityRescaled(mParticleSystemScaleVelocity);
++		if (mCurrentCamera)
++		{
++			technique->notifyCurrentCamera(mCurrentCamera);
++		}
+ 		_notifyEmissionChange();
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -556,12 +647,14 @@ namespace ParticleUniverse
+ 		_notifyEmissionChange();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getTechnique`: the same as the library's.
+ 	ParticleTechnique* ParticleSystem::getTechnique (size_t index) const
+ 	{
+ 		assert(index < mTechniques.size() && "Technique index out of bounds!");
+ 		return mTechniques[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getTechnique`: the same as the library's.
+ 	ParticleTechnique* ParticleSystem::getTechnique (const String& techniqueName) const
+ 	{
+ 		if (techniqueName == BLANK_STRING)
+@@ -580,11 +673,13 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getNumTechniques`: the same as the library's.
+ 	size_t ParticleSystem::getNumTechniques (void) const
+ 	{
+ 		return mTechniques.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::destroyTechnique`: the same as the library's.
+ 	void ParticleSystem::destroyTechnique(ParticleTechnique* technique)
+ 	{
+ 		assert(technique && "Technique is null!");
+@@ -603,11 +698,13 @@ namespace ParticleUniverse
+ 		_notifyEmissionChange();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::destroyTechnique`: the same as the library's.
+ 	void ParticleSystem::destroyTechnique (size_t index)
+ 	{
+ 		destroyTechnique(getTechnique(index));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::destroyAllTechniques`: the same as the library's.
+ 	void ParticleSystem::destroyAllTechniques (void)
+ 	{
+ 		ParticleTechniqueIterator it;
+@@ -630,6 +727,7 @@ namespace ParticleUniverse
+ 		return mFastForwardInterval;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setFastForward`: the same as the library's.
+ 	void ParticleSystem::setFastForward(Real time, Real interval)
+ 	{
+ 		mFastForwardSet = true;
+@@ -638,6 +736,7 @@ namespace ParticleUniverse
+ 		mFastForwardInterval = interval;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getMainCameraName`: the same as the library's.
+ 	const String& ParticleSystem::getMainCameraName(void) const
+ 	{
+ 		return mMainCameraName;
+@@ -657,14 +756,12 @@ namespace ParticleUniverse
+ 		return mMainCameraNameSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setMainCameraName`: the name is kept, and no camera is
++	// looked up (Torchlight's system gets its camera only from `notifyCurrentCamera`).
+ 	void ParticleSystem::setMainCameraName(String cameraName)
+ 	{
+ 		mMainCameraName = cameraName;
+ 		mMainCameraNameSet = true;
+-		if (mSceneManager)
+-		{
+-			mCurrentCamera = mSceneManager->getCamera(cameraName);
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleSystem::setMainCamera(Camera* camera)
+@@ -682,6 +779,7 @@ namespace ParticleUniverse
+ 		return mCurrentCamera;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::fastForward`: the same as the library's.
+ 	void ParticleSystem::fastForward(void)
+ 	{
+ 		if (!mFastForwardSet)
+@@ -701,6 +799,9 @@ namespace ParticleUniverse
+ 		_pushSystemEvent(PU_EVT_SYSTEM_ATTACHING);
+ 
+ 		MovableObject::_notifyAttached(parent, isTagPoint);
++		// Torchlight: `ParticleSystem::_notifyAttached` also forgets
++		// the idle time.
++		mFalloffTimer = 0.0f;
+ 		
+ 		if (parent)
+ 		{
+@@ -736,98 +837,92 @@ namespace ParticleUniverse
+ 		_pushSystemEvent(PU_EVT_SYSTEM_ATTACHED);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void ParticleSystem::_notifyCurrentCamera(Camera* cam)
++	// Torchlight: `ParticleSystem::notifyCurrentCamera`. The same camera again does
++	// nothing; a null one refreshes with the stored camera. Only while visible and attached:
++	// every technique gets its square distance (no main-camera filter), every renderer the
++	// camera's direction and the system's z and y axes, LOD enables the technique whose index
++	// matches, and the technique is handed the camera.
++	void ParticleSystem::notifyCurrentCamera(Camera* cam)
+ 	{
+-		mCurrentCamera = cam;
+-		Ogre::MovableObject::_notifyCurrentCamera(cam);
++		if (cam == mCurrentCamera)
++			return;
++		if (cam)
++		{
++			mCurrentCamera = cam;
++		}
++
++		if (!getVisible())
++			return;
++		if (!getParentNode())
++			return;
++
++		Ogre::MovableObject::_notifyCurrentCamera(mCurrentCamera);
+ 		mLastVisibleFrame = Ogre::Root::getSingleton().getNextFrameNumber();
+ 		mTimeSinceLastVisible = 0.0f;
+ 
+-		// Notify all techniques
++		const Vector3 cameraPosition = mCurrentCamera->getDerivedPosition();
++		Real squareDistanceParentNode = (cameraPosition - getParentNode()->_getDerivedPosition()).squaredLength();
++		const Quaternion orientation = getDerivedOrientation();
++		const Vector3 cameraDirection = mCurrentCamera->getRealDirection();
++
+ 		ParticleTechniqueIterator it;
+ 		ParticleTechniqueIterator itEnd = mTechniques.end();
+-		Vector3 vec = Vector3::ZERO;
+-		Real squareDistance = 0;
+-		Vector3 vecCameraParentNode = cam->getDerivedPosition() - getParentNode()->_getDerivedPosition();
+-		Real squareDistanceCameraParentNode = vecCameraParentNode.squaredLength();
+-		unsigned short index = 0;
+-		bool doCamera = !mMainCameraNameSet || (mMainCameraNameSet && mMainCameraName == cam->getName());
+-
+ 		for (it = mTechniques.begin(); it != itEnd; ++it)
+ 		{
+-			// Calculate the distance between the camera and each ParticleTechnique (although it isn�t always used).
++			Real squareDistance = squareDistanceParentNode;
+ 			if ((*it)->_isMarkedForEmission())
+ 			{
+-				vec = cam->getDerivedPosition() - (*it)->position;
+-				squareDistance = vec.squaredLength();
+-			}
+-			else
+-			{
+-				vec = vecCameraParentNode;
+-				squareDistance = squareDistanceCameraParentNode;
++				squareDistance = (cameraPosition - (*it)->position).squaredLength();
+ 			}
++			(*it)->setCameraSquareDistance(squareDistance);
+ 
+-			if (doCamera)
++			ParticleRenderer* renderer = (*it)->getRenderer();
++			if (renderer)
+ 			{
+-				// Only set the square distance in certain conditions
+-				(*it)->setCameraSquareDistance(squareDistance);
++				renderer->mCameraDirection = cameraDirection;
++				renderer->mCommonDirection = orientation.zAxis();
++				renderer->mCommonUp = orientation.yAxis();
+ 			}
+ 
+-			// Determine lod, enable technique with the appropriate lod index 
+-			// (only if the distance list is filled). Note, that this really only works with a
+-			// 1-camera setup.
+ 			if (!mLodDistanceList.empty())
+ 			{
+-				if (doCamera)
+-				{
+-					index = _getLodIndexSquaredDistance(squareDistance);
+-					if ((*it)->getLodIndex() == index)
+-					{
+-						(*it)->setEnabled(true);
+-
+-						if (index != mLastLodIndex)
+-						{
+-							// Generate the event: It applies to a particle technique, although it is generated in the particle system
+-							ParticleUniverseEvent evt;
+-							evt.eventType = PU_EVT_LOD_TRANSITION;
+-							evt.componentType = CT_TECHNIQUE;
+-							evt.componentName = (*it)->getName();
+-							evt.technique = *it;
+-							evt.emitter = 0;
+-							pushEvent(evt);
+-						}
+-						mLastLodIndex = index;
+-					}
+-					else
+-					{
+-						(*it)->setEnabled(false);
+-					}
+-				}
++				// The low 16 bits, as the original compares them (-1 is 0xffff).
++				unsigned short index = static_cast<unsigned short>(_getLodIndexSquaredDistance(squareDistance));
++				(*it)->setEnabled((*it)->getLodIndex() == index);
+ 			}
+ 
+-			// Notify technique
+-			(*it)->_notifyCurrentCamera(cam);
++			(*it)->notifyCurrentCamera(mCurrentCamera);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getMovableType`: the same as the library's.
+ 	const String& ParticleSystem::getMovableType(void) const
+ 	{
+ 		return ParticleSystemFactory::PU_FACTORY_TYPE_NAME;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getBoundingBox`: the same as the library's.
+ 	const AxisAlignedBox& ParticleSystem::getBoundingBox(void) const
+ 	{
+ 		return mAABB;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getBoundingRadius`: the same as the library's.
+ 	Real ParticleSystem::getBoundingRadius(void) const
+ 	{
+ 		return mBoundingRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_updateRenderQueue`: nothing is queued while the
++	// system is detached, hidden, or idle beyond the falloff (unless its bounds update
++	// themselves).
+ 	void ParticleSystem::_updateRenderQueue(Ogre::RenderQueue* queue)
+ 	{
+-		// Update renderqueues of all techniques
++		if (!mParentNode || !getVisible())
++			return;
++		if (!mBoundsAutoUpdate && mFalloffTimer > 0.0f)
++			return;
++
+ 		ParticleTechniqueIterator it;
+ 		ParticleTechniqueIterator itEnd = mTechniques.end();
+ 		for (it = mTechniques.begin(); it != itEnd; ++it)
+@@ -849,257 +944,244 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_update`. Only attached and visible systems run.
++	// Unless its bounds update itself or one technique has NO CULLING, a system farther than the
++	// manager's falloff (x and z only) from the falloff position idles for distance / falloff - 1
++	// seconds with its particles cleared. While started, the camera notification is refreshed
++	// whenever a technique has live particles, the bounds timer counts down only then, and it
++	// restarts once it runs out. There are no events, no stop fade, no rotation offset, and a
++	// prepared system is prepared then stopped. A moved system re-derives its techniques'
++	// positions and forgets the idle time. The manager's statistics counter (+0x4ec, updates)
++	// is left out: nothing reads it.
+ 	void ParticleSystem::_update(Real timeElapsed)
+ 	{
+-		// Only update if attached to a node
+-		if (!mParentNode)
++		if (!mParentNode || !getVisible())
+ 			return;
+ 
+-		// Only update if the particle system is started or prepare the particle system before starting.
++		if (!mBoundsAutoUpdate)
++		{
++			bool noCull = false;
++			ParticleTechniqueIterator itCull;
++			for (itCull = mTechniques.begin(); itCull != mTechniques.end(); ++itCull)
++			{
++				if ((*itCull)->isNoCull())
++				{
++					noCull = true;
++					break;
++				}
++			}
++			if (!noCull)
++			{
++				mFalloffTimer -= timeElapsed;
++				if (mFalloffTimer > 0.0f)
++				{
++					for (itCull = mTechniques.begin(); itCull != mTechniques.end(); ++itCull)
++					{
++						(*itCull)->clearAllParticles();
++					}
++					return;
++				}
++				ParticleSystemManager* manager = ParticleSystemManager::getSingletonPtr();
++				Real dx = manager->getFalloffPosition().x - mDerivedPosition.x;
++				Real dz = manager->getFalloffPosition().z - mDerivedPosition.z;
++				Real distance = Math::Sqrt(dx * dx + 0.0f + dz * dz);
++				if (manager->getParticleFalloff() < distance)
++				{
++					mFalloffTimer = distance / manager->getParticleFalloff() - 1.0f;
++				}
++			}
++		}
++
+ 		if (mState == ParticleSystem::PSS_STARTED)
+ 		{
+ 			if (mNonvisibleUpdateTimeoutSet)
+ 			{
+-				long frameDiff = Ogre::Root::getSingleton().getNextFrameNumber() - mLastVisibleFrame;
+-				if (frameDiff > 1 || frameDiff < 0)
++				unsigned long frameDiff = Ogre::Root::getSingleton().getNextFrameNumber() - mLastVisibleFrame;
++				if (frameDiff > 1)
+ 				{
+ 					mTimeSinceLastVisible += timeElapsed;
+ 					if (mTimeSinceLastVisible >= mNonvisibleUpdateTimeout)
+ 					{
+-						// No update
+ 						return;
+ 					}
+ 				}
+ 			}
+ 
+-			// Speedup or slowdown
+ 			timeElapsed *= mParticleSystemScaleTime;
+-
+-			// Only update the time since start if the ParticleSystem is in the 'start' state.
+-			// Stop the ParticleSystem if the fixed timeout has been reached (if applicable).
+ 			mTimeElapsedSinceStart += timeElapsed;
+-			if (mFixedTimeoutSet)
++			if (mFixedTimeoutSet && mTimeElapsedSinceStart >= mFixedTimeout)
+ 			{
+-				if (mTimeElapsedSinceStart >= mFixedTimeout)
+-				{
+-					// Stop the ParticleSystem
+-					if (mStopFadeSet)
+-					{
+-						// Stop slowly
+-						stopFade();
+-						mFixedTimeoutSet = false;
+-					}
+-					else
+-					{
+-						// Stop immediately
+-						stop();
+-						return;
+-					}
+-				}
++				stop();
++				return;
+ 			}
+ 
+-			// Update bound timer (if not auto updated)
+-			if (!mBoundsAutoUpdate && mBoundsUpdateTime > 0.0f)
+-				mBoundsUpdateTime -= timeElapsed;
+-
+-			// Calculate rotation of the node
+-			calulateRotationOffset();
+-
+-			// Determine whether timeElapsed or iterationInterval is used
+-			bool particlesLeftTouched = false;
+-			size_t particlesLeft = 0;
+-			if (mIterationIntervalSet)
++			bool updating = false;
++			ParticleTechniqueIterator it;
++			ParticleTechniqueIterator itEnd = mTechniques.end();
++			for (it = mTechniques.begin(); it != itEnd; ++it)
+ 			{
+-				// Update time since last update
+-				mTimeSinceLastUpdate += timeElapsed;
+-				while (mTimeSinceLastUpdate >= mIterationInterval)
++				if ((*it)->getParticlesUpdating() != 0)
+ 				{
+-					// Update all techniques using the iteration interval value
+-					particlesLeft = _updateTechniques(mIterationInterval);
+-					particlesLeftTouched = true;
+-					mTimeSinceLastUpdate -= mIterationInterval;
++					updating = true;
++					break;
+ 				}
+ 			}
+-			else
+-			{
+-				// Update all techniques using the time elapsed (since last frame)
+-				particlesLeft = _updateTechniques(timeElapsed);
+-				particlesLeftTouched = true;
+-			}
+ 
+-			// Handle situation when no particles are emitted anymore
+-			if (particlesLeftTouched)
+-			{
+-			if (particlesLeft == 0)
++			if (updating)
+ 			{
+-				if (mAtLeastOneParticleEmitted)
++				if (mCurrentCamera)
+ 				{
+-					// Generate the event
+-					_pushSystemEvent(PU_EVT_NO_PARTICLES_LEFT);
+-					mAtLeastOneParticleEmitted = false;
++					notifyCurrentCamera(0);
+ 				}
+-
+-				// Determine whether the particle system should be stopped because of a fade out
+-				if (mStopFadeSet)
++				if (mIterationIntervalSet)
+ 				{
+-					if (!mFixedTimeoutSet || (mFixedTimeoutSet && mTimeElapsedSinceStart >= mFixedTimeout))
++					mTimeSinceLastUpdate += timeElapsed;
++					while (mTimeSinceLastUpdate >= mIterationInterval)
+ 					{
+-						stop();
+-						return;
++						_updateTechniques(mIterationInterval);
++						mTimeSinceLastUpdate -= mIterationInterval;
++						if (!mBoundsAutoUpdate)
++						{
++							if (mBoundsUpdateTime > 0.0f)
++							{
++								mBoundsUpdateTime -= mIterationInterval;
++							}
++							if (mBoundsUpdateTime <= 0.0f)
++							{
++								mBoundsUpdateTime = mOriginalBoundsUpdateTime;
++							}
++						}
++					}
++				}
++				else
++				{
++					if (!mBoundsAutoUpdate && mBoundsUpdateTime > 0.0f)
++					{
++						mBoundsUpdateTime -= timeElapsed;
++					}
++					_updateTechniques(timeElapsed);
++					if (!mBoundsAutoUpdate && mBoundsUpdateTime <= 0.0f)
++					{
++						mBoundsUpdateTime = mOriginalBoundsUpdateTime;
+ 					}
+ 				}
+ 			}
+ 			else
+ 			{
+-				// At least one particle was emitted, so if 'particlesLef' becomes 0, it concerns the period after the last emitted particle.
+-				mAtLeastOneParticleEmitted = true;
++				_updateTechniques(timeElapsed);
++				if (!mBoundsAutoUpdate && mBoundsUpdateTime <= 0.0f)
++				{
++					mBoundsUpdateTime = mOriginalBoundsUpdateTime;
++				}
++				// Only when nothing was alive before the update: a technique that has
++				// particles now has its bounds refreshed from the next frame on.
++				for (it = mTechniques.begin(); it != itEnd; ++it)
++				{
++					if ((*it)->getParticlesUpdating() != 0)
++					{
++						mBoundsUpdateTime = 0.0f;
++					}
++				}
+ 			}
+ 		}
+-		}
+ 		else if (mState == ParticleSystem::PSS_PREPARED)
+ 		{
+-			// Generate the event
+-			_pushSystemEvent(PU_EVT_SYSTEM_PREPARING);
+-
+-			// Prepare all techniques (perform some initialisation in advance)
+ 			ParticleTechniqueIterator it;
+ 			ParticleTechniqueIterator itEnd = mTechniques.end();
+ 			for (it = mTechniques.begin(); it != itEnd; ++it)
+ 			{
+ 				(*it)->_prepare();
+ 			}
+-
+-			// Only do it once.
+ 			mState = ParticleSystem::PSS_STOPPED;
+-
+-			// Generate the event
+-			_pushSystemEvent(PU_EVT_SYSTEM_PREPARED);
+ 		}
+-		else if (mState == ParticleSystem::PSS_PAUSED)
++
++		const Vector3& derived = getDerivedPosition();
++		if (latestPosition != derived)
+ 		{
+-			// Determine whether there is a limit to the pause
+-			if (mPauseTimeSet)
++			mFalloffTimer = 0.0f;
++			latestPosition = mDerivedPosition;
++			ParticleTechniqueIterator it;
++			ParticleTechniqueIterator itEnd = mTechniques.end();
++			for (it = mTechniques.begin(); it != itEnd; ++it)
+ 			{
+-				mPauseTimeElapsed += timeElapsed;
+-				if (mPauseTimeElapsed > mPauseTime)
+-				{
+-					mPauseTimeElapsed = 0.0f;
+-					resume();
+-				}
++				(*it)->getDerivedPosition();
+ 			}
+ 		}
+-
+-		// Set the latest position. This value is always needed, whether the Particle System is emitted or not.
+-		latestPosition = getDerivedPosition();
+-		mLatestOrientation = getDerivedOrientation();
+ 	}
+ 	//-----------------------------------------------------------------------
+-	size_t ParticleSystem::_updateTechniques(Real timeElapsed)
++	// Torchlight: `ParticleSystem::_updateTechniques`. The node is not updated
++	// first, and nothing is counted. Bounds are gathered only when they update themselves or their
++	// timer has run out, into a box that starts as the zero box - so it always holds the world
++	// origin (quirk kept) - and are brought into the node's space with the affine inverse. Every
++	// axis is kept at least 0.01 thick, and the node is told.
++	void ParticleSystem::_updateTechniques(Real timeElapsed)
+ 	{
+-		/** Update all techniques if particle system is started (only if the techniques aren't emitted 
+-			themselves) and return the total number of emitted particles.
+-			Note, that emitted techniques are updated by the technique that is responsible for emitting 
+-			them. The technique that is emitting pooled techniques is also responsible to take the 
+-			(world)AABB of that pooled technique into account.
+-		*/
+-
+-		/** V 1.4: Bug http://www.fxpression.com/phpBB3/viewtopic.php?f=5&t=438&p=1453#p1453
+-			For some reason particle nodes get updated before the 'make particle local' call in the particle technique, and others do not.
+-			Some kind of timing issue.  Explicitly calling Node::_update here fixes the problem
+-			Note, the patch in the link was to put the code in each technique. It seems more obvious to put it in the particle system itself, so it
+-			is updated only once.
+-		*/
+-		if (isInScene() && getParentNode())
+-		{
+-			getParentNode()->_update(true, true);
+-		}
++		bool aabbUpdate = mParentNode && (mBoundsAutoUpdate || mBoundsUpdateTime <= 0.0f);
++		bool merge = true;
++		AxisAlignedBox worldAABB(Vector3::ZERO, Vector3::ZERO);
+ 
+ 		ParticleTechniqueIterator it;
+ 		ParticleTechniqueIterator itEnd = mTechniques.end();
+-		size_t particlesLeft = 0;
+-		bool mAABBUpdate = mParentNode && (mBoundsAutoUpdate || mBoundsUpdateTime > 0.0f);
+-		bool merge = mAABBUpdate;
+-		AxisAlignedBox worldAABB(mParentNode->_getDerivedPosition(), mParentNode->_getDerivedPosition());
+ 		for (it = mTechniques.begin(); it != itEnd; ++it)
+ 		{
+-			if (!(*it)->_isMarkedForEmission())
+-			{
+-				// Only call this if update bounds is needed.
+-				if (merge)
+-				{
+-					// Call _notifyUpdateBounds() for each Particle Technique, so the mWorldAABB in the 
+-					// ParticleTechnique::_update() function is (re)calculated.
+-					(*it)->_notifyUpdateBounds();
+-				}
+-
+-				// Always update the ParticleTechniques
+-				(*it)->_update(timeElapsed);
++			if ((*it)->_isMarkedForEmission())
++				continue;
+ 
+-				// Merge worldAABB's of all ParticleTechniques
+-				if (merge)
++			if (merge && aabbUpdate)
++			{
++				(*it)->_notifyUpdateBounds();
++			}
++			(*it)->_update(timeElapsed);
++			if (merge && aabbUpdate)
++			{
++				worldAABB.merge((*it)->getWorldBoundingBox());
++				if (worldAABB.isInfinite())
+ 				{
+-					// Get the WorldAABB from each technique and merge it with the worldAABB.
+-					worldAABB.merge((*it)->getWorldBoundingBox());
+-
+-					// If worldAABB is infinite, ignore the other Particle Techniques.
+-					if (worldAABB.isInfinite())
+-					{
+-						merge = false;
+-					}
++					merge = false;
+ 				}
+-
+-				// Count all left particles, used for anyone who needs it.
+-				particlesLeft += (*it)->getNumberOfEmittedParticles();
+ 			}
+ 		}
+ 
+ 		if (mState == ParticleSystem::PSS_STOPPED)
+ 		{
+-			/** Don't bother to update the mAABB, because the system is stopped in one of the techniques.
+-				The bounds must be reset, because even though the stop() has been called (which alread resets the
+-				bounds) another technique in the list might set the bounds again.
+-			*/
+ 			_resetBounds();
++			return;
+ 		}
+-		else if (mAABBUpdate)
+-		{
+-			// If needed, update mAABB
+-			if (!worldAABB.isNull())
+-			{
+-				if (mTightBoundingBox)
+-				{
+-					// Wrap the bounding box tight around the particle system
+-					mAABB = worldAABB;
+-					mAABB.transform(mParentNode->_getFullTransform().inverse());
+-				}
+-				else
+-				{
+-					// Merge with the current bounding box
+-					// Note, that the mAABB must in localspace, so transformation of the worldAABB is required.
+-					AxisAlignedBox newAABB(worldAABB);
+-					newAABB.transform(mParentNode->_getFullTransform().inverse());
+-	
+-					// Merge calculated box with current AABB.
+-					mAABB.merge(newAABB);
+-				}
++		if (!aabbUpdate)
++			return;
+ 
+-				// Update bounding radius
+-				Real sqDist = std::max(mAABB.getMinimum().squaredLength(), mAABB.getMaximum().squaredLength());
+-				mBoundingRadius = Math::Sqrt(sqDist);
+-			}
+-			else
++		const Ogre::Affine3 toLocal = mParentNode->_getFullTransform().inverse();
++		if (!mTightBoundingBox)
++		{
++			// An infinite gathered box leaves the bounds as they were.
++			if (!worldAABB.isInfinite())
+ 			{
+-				_resetBounds();
++				AxisAlignedBox newAABB(worldAABB);
++				newAABB.transform(toLocal);
++				mAABB.merge(newAABB);
+ 			}
+-
+-			// V1.4 Remove this part, because the node is updated each frame.
+-			// Notify the parent node that the bounds are changed
+-			// mParentNode->needUpdate();
++		}
++		else
++		{
++			mAABB = worldAABB;
++			mAABB.transform(toLocal);
+ 		}
+ 
+-		return particlesLeft;
++		if (mAABB.isFinite())
++		{
++			Vector3 minimum = mAABB.getMinimum();
++			Vector3 maximum = mAABB.getMaximum();
++			if (maximum.x <= minimum.x) maximum.x = minimum.x + 0.01f;
++			if (maximum.y <= minimum.y) maximum.y = minimum.y + 0.01f;
++			if (maximum.z <= minimum.z) maximum.z = minimum.z + 0.01f;
++			mAABB.setExtents(minimum, maximum);
++		}
++		Real sqDist = std::max(mAABB.getMinimum().squaredLength(), mAABB.getMaximum().squaredLength());
++		mBoundingRadius = Math::Sqrt(sqDist);
++		mParentNode->needUpdate(false);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_resetBounds`: the same as the library's.
+ 	void ParticleSystem::_resetBounds(void)
+ 	{
+ 		// Reset the bounds to zero
+@@ -1114,18 +1196,22 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setBoundsAutoUpdated`: the timer itself starts
++	// run out.
+ 	void ParticleSystem::setBoundsAutoUpdated(bool autoUpdate, Real stopIn)
+ 	{
+ 		mBoundsAutoUpdate = autoUpdate;
+-		mBoundsUpdateTime = stopIn;
++		mBoundsUpdateTime = 0.0f;
+ 		mOriginalBoundsUpdateTime = stopIn;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getScale`: the same as the library's.
+ 	const Vector3& ParticleSystem::getScale(void) const
+ 	{
+ 		return mParticleSystemScale;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setScale`: the same as the library's.
+ 	void ParticleSystem::setScale(const Vector3& scale)
+ 	{
+ 		// Set the scale and notify the particle techniques
+@@ -1133,6 +1219,7 @@ namespace ParticleUniverse
+ 		_notifyRescaled();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_notifyRescaled`: the same as the library's.
+ 	void ParticleSystem::_notifyRescaled(void)
+ 	{
+ 		// Notify the particle techniques
+@@ -1144,11 +1231,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getScaleVelocity`: the same as the library's.
+ 	const Real& ParticleSystem::getScaleVelocity(void) const
+ 	{
+ 		return mParticleSystemScaleVelocity;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setScaleVelocity`: the same as the library's.
+ 	void ParticleSystem::setScaleVelocity(const Real& scaleVelocity)
+ 	{
+ 		// Set the scale and notify the particle techniques
+@@ -1156,6 +1245,7 @@ namespace ParticleUniverse
+ 		_notifyVelocityRescaled();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_notifyVelocityRescaled`: the same as the library's.
+ 	void ParticleSystem::_notifyVelocityRescaled(void)
+ 	{
+ 		// Notify the particle techniques
+@@ -1167,16 +1257,19 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getScaleTime`: the same as the library's.
+ 	const Real& ParticleSystem::getScaleTime(void) const
+ 	{
+ 		return mParticleSystemScaleTime;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setScaleTime`: the same as the library's.
+ 	void ParticleSystem::setScaleTime(const Real& scaleTime)
+ 	{
+ 		mParticleSystemScaleTime = scaleTime;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_initForEmission`: the same as the library's.
+ 	void ParticleSystem::_initForEmission(void)
+ 	{
+ 		// The system itself is emitted.
+@@ -1186,6 +1279,7 @@ namespace ParticleUniverse
+ 		start();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_initForExpiration`: the same as the library's.
+ 	void ParticleSystem::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// The system itself is expired.
+@@ -1195,6 +1289,7 @@ namespace ParticleUniverse
+ 		stop();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_process`: the same as the library's.
+ 	void ParticleSystem::_process(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// Inherited from the Particle class and is only called if the Particle System is emitted.
+@@ -1213,17 +1308,19 @@ namespace ParticleUniverse
+ 		return mNonvisibleUpdateTimeout;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setNonVisibleUpdateTimeout`: the library's, but tested as
++	// `timeout <= 0` (so a NaN is kept as set).
+ 	void ParticleSystem::setNonVisibleUpdateTimeout(Real timeout)
+ 	{
+-		if (timeout > 0)
++		if (timeout <= 0)
+ 		{
+-			mNonvisibleUpdateTimeout = timeout;
+-			mNonvisibleUpdateTimeoutSet = true;
++			mNonvisibleUpdateTimeout = 0;
++			mNonvisibleUpdateTimeoutSet = false;
+ 		}
+ 		else
+ 		{
+-			mNonvisibleUpdateTimeout = 0;
+-			mNonvisibleUpdateTimeoutSet = false;
++			mNonvisibleUpdateTimeout = timeout;
++			mNonvisibleUpdateTimeoutSet = true;
+ 		}
+ 	}
+ 	// --------------------------------------------------------------------
+@@ -1242,39 +1339,46 @@ namespace ParticleUniverse
+ 		mLodDistanceList.push_back(distance * distance);
+ 	}
+ 	// --------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setLodDistances`: a 0 goes first, then the squares of the
++	// distances given (see `_getLodIndexSquaredDistance`).
+ 	void ParticleSystem::setLodDistances(const LodDistanceList& lodDistances)
+ 	{
+ 		LodDistanceConstIterator it, itEnd;
+ 		itEnd = lodDistances.end();
+ 		mLodDistanceList.clear();
++		mLodDistanceList.push_back(0.0f);
+ 		for (it = lodDistances.begin(); it != itEnd; ++it)
+ 		{
+ 			mLodDistanceList.push_back((*it) * (*it));
+ 		}
+ 	}
+ 	// --------------------------------------------------------------------
+-	unsigned short ParticleSystem::_getLodIndex(Real distance) const
++	// Torchlight: `ParticleSystem::_getLodIndex`: the same as the library's.
++	int ParticleSystem::_getLodIndex(Real distance) const
+ 	{
+ 		return _getLodIndexSquaredDistance(distance * distance);
+ 	}
+ 	// --------------------------------------------------------------------
+-	unsigned short ParticleSystem::_getLodIndexSquaredDistance(Real squaredDistance) const
+-	{
+-		LodDistanceConstIterator it, itEnd;
+-		itEnd = mLodDistanceList.end();
+-		unsigned short index = 0;
+-		for (it = mLodDistanceList.begin(); it != itEnd; ++it, ++index)
++	// Torchlight: `ParticleSystem::_getLodIndexSquaredDistance`: the index of the last
++	// distance the squared distance is not below - -1 below the first or with no list, the last index
++	// beyond all - one less than the library's (the first distance it is below). With the 0 that
++	// `setLodDistances` puts first, the two agree for any distance. `notifyCurrentCamera` compares its
++	// low 16 bits with a technique's LOD index.
++	int ParticleSystem::_getLodIndexSquaredDistance(Real squaredDistance) const
++	{
++		int index = -1;
++		for (LodDistanceConstIterator it = mLodDistanceList.begin(); it != mLodDistanceList.end(); ++it)
+ 		{
+ 			if (squaredDistance < (*it))
+ 			{
+ 				return index;
+ 			}
++			++index;
+ 		}
+-
+-		// No match, so use max. value
+-		return static_cast<unsigned short>(mLodDistanceList.size());
++		return index;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getNumEmittedTechniques`: the same as the library's.
+ 	size_t ParticleSystem::getNumEmittedTechniques (void) const
+ 	{
+ 		ParticleTechniqueConstIterator it;
+@@ -1291,6 +1395,7 @@ namespace ParticleUniverse
+ 		return count;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_markForEmission`: the same as the library's.
+ 	void ParticleSystem::_markForEmission(void)
+ 	{
+ 		// Reset the marks on all techniques.
+@@ -1314,6 +1419,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_resetMarkForEmission`: the same as the library's.
+ 	void ParticleSystem::_resetMarkForEmission(void)
+ 	{
+ 		ParticleTechniqueIterator it;
+@@ -1324,11 +1430,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::suppressNotifyEmissionChange`: the same as the library's.
+ 	void ParticleSystem::suppressNotifyEmissionChange(bool suppress)
+ 	{
+ 		mSuppressNotifyEmissionChange = suppress;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::_notifyEmissionChange`: the same as the library's.
+ 	void ParticleSystem::_notifyEmissionChange(void)
+ 	{
+ 		if (mSuppressNotifyEmissionChange)
+@@ -1338,85 +1446,97 @@ namespace ParticleUniverse
+ 		_markForEmission();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getIterationInterval`: the same as the library's.
+ 	const Real ParticleSystem::getIterationInterval(void) const
+ 	{
+ 		return mIterationInterval;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setIterationInterval`: the library's, but tested as
++	// `interval <= 0` (so a NaN is kept as set).
+ 	void ParticleSystem::setIterationInterval(const Real iterationInterval)
+ 	{
+-		if (iterationInterval > 0)
++		if (iterationInterval <= 0)
+ 		{
+-			mIterationInterval = iterationInterval;
+-			mIterationIntervalSet = true;
++			mIterationInterval = 0;
++			mIterationIntervalSet = false;
+ 		}
+ 		else
+ 		{
+-			mIterationInterval = 0;
+-			mIterationIntervalSet = false;
++			mIterationInterval = iterationInterval;
++			mIterationIntervalSet = true;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::getFixedTimeout`: the same as the library's.
+ 	const Real ParticleSystem::getFixedTimeout(void) const
+ 	{
+ 		return mFixedTimeout;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::setFixedTimeout`. A timeout also makes the
++	// bounds update themselves; no timeout restores the 0.25 s bounds timer.
+ 	void ParticleSystem::setFixedTimeout(const Real fixedTimeout)
+ 	{
+ 		if (fixedTimeout > 0.0f)
+ 		{
+ 			mFixedTimeout = fixedTimeout;
+ 			mFixedTimeoutSet = true;
++			mBoundsAutoUpdate = true;
++			mBoundsUpdateTime = 0.0f;
++			mOriginalBoundsUpdateTime = 0.0f;
+ 		}
+ 		else
+ 		{
++			mBoundsAutoUpdate = false;
++			mBoundsUpdateTime = 0.0f;
++			mOriginalBoundsUpdateTime = 0.25f;
+ 			mFixedTimeout = 0.0f;
+ 			mFixedTimeoutSet = false;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::prepare`: the same as the library's.
+ 	void ParticleSystem::prepare (void)
+ 	{
+ 		mState = ParticleSystem::PSS_PREPARED;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::start`. No events; positions are zeroed rather
++	// than re-derived (the next update re-derives them); the bounds are nulled and their timer
++	// starts run out; a technique that does not loop makes the bounds update themselves.
+ 	void ParticleSystem::start(void)
+ 	{
+-		// Generate the event; this must be done at the start
+-		_pushSystemEvent(PU_EVT_SYSTEM_STARTING);
+-
+ 		setVisible(true);
++		mFalloffTimer = 0.0f;
+ 		mState = ParticleSystem::PSS_STARTED;
+ 		mTimeElapsedSinceStart = 0;
+ 		mLastVisibleFrame = 0;
+ 		mTimeSinceLastVisible = 0;
+ 		mTimeSinceLastUpdate = 0;
+-		mBoundsUpdateTime = mOriginalBoundsUpdateTime;
+-		ParticleTechniqueIterator it;
+-		ParticleTechniqueIterator itEnd = mTechniques.end();
+-		mAABB.setExtents(0, 0, 0, 0, 0, 0);
++		mBoundsUpdateTime = 0.0f;
++		mAABB.setNull();
+ 		mFastForwardSet = mOriginalFastForwardSet;
+ 		position = Vector3::ZERO;
++		torchlightVector28 = Vector3::ZERO;
+ 		mDerivedPosition = Vector3::ZERO;
+-		latestPosition = getDerivedPosition();
+-		mLatestOrientation = getDerivedOrientation(); // Added for 1.3 (orientation not pr)
+-		mEnabled = true;
+-		mStopFadeSet = false;
+-		mAtLeastOneParticleEmitted = false;
+-		mLastLodIndex = 0; // This triggers the event at least once if lod distances are used.
+-
+-		// Run through the ParticleTechniques to perform some start-initialisation actions.
++		latestPosition = Vector3::ZERO;
++		originalPosition = Vector3::ZERO;
++		originalDirection = Vector3::ZERO;
++		originalVelocity = 0.0f;
++
++		ParticleTechniqueIterator it;
++		ParticleTechniqueIterator itEnd = mTechniques.end();
+ 		for (it = mTechniques.begin(); it != itEnd; ++it)
+ 		{
+ 			(*it)->_notifyStart();
++			if (!(*it)->isLooping())
++			{
++				mBoundsAutoUpdate = true;
++			}
+ 		}
+-		
+-		// Perform fast forward if needed (the fastforward() function determines whether it is needed)
+-		fastForward();
+ 
+-		// Generate the event; this must be done at the end
+-		_pushSystemEvent(PU_EVT_SYSTEM_STARTED);
++		fastForward();
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleSystem::start(Real stopTime)
+@@ -1431,37 +1551,21 @@ namespace ParticleUniverse
+ 		stopFade(stopTime);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::stop`: no events, and the system's own enabled
++	// flag is left alone.
+ 	void ParticleSystem::stop(void)
+ 	{
+-		/*  Note, that the ParticleSystem ins�t visible anymore, but it is still attached to the
+-			node and still consumes resources, but it allows fast start/stop iterations if needed.
+-			An important thing why it keeps attached to the node is that attaching and detaching the 
+-			ParticleSystem to/from a node must be done outside of the ParticleSystem. If the ParticleSystem
+-			isn't used anymore you have to detach it from the node yourself.
+-		*/
+ 		if (mState != ParticleSystem::PSS_STOPPED)
+ 		{
+-			// Generate the event
+-			_pushSystemEvent(PU_EVT_SYSTEM_STOPPING);
+-
+-			/** Notify all techniques to stop.
+-			*/
+-			setVisible(false); // Set this movable to invisible
++			setVisible(false);
+ 			ParticleTechniqueIterator it;
+ 			ParticleTechniqueIterator itEnd = mTechniques.end();
+ 			for (it = mTechniques.begin(); it != itEnd; ++it)
+ 			{
+ 				(*it)->_notifyStop();
+ 			}
+-
+ 			_resetBounds();
+ 			mState = ParticleSystem::PSS_STOPPED;
+-
+-			mStopFadeSet = false;
+-			mEnabled = false;
+-
+-			// Generate the event
+-			_pushSystemEvent(PU_EVT_SYSTEM_STOPPED);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -1509,13 +1613,11 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystem::pause`: no events; a stopped system is not paused.
+ 	void ParticleSystem::pause(void)
+ 	{
+ 		if (mState != ParticleSystem::PSS_STOPPED)
+ 		{
+-			// Generate the event
+-			_pushSystemEvent(PU_EVT_SYSTEM_PAUSING);
+-
+ 			mState = ParticleSystem::PSS_PAUSED;
+ 
+ 			ParticleTechniqueIterator it;
+@@ -1525,9 +1627,6 @@ namespace ParticleUniverse
+ 				(*it)->_notifyPause();
+ 			}
+ 		}
+-
+-		// Generate the event
+-		_pushSystemEvent(PU_EVT_SYSTEM_PAUSED);
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleSystem::pause(Real pauseTime)
+@@ -1543,6 +1642,9 @@ namespace ParticleUniverse
+ 			// Generate the event
+ 			_pushSystemEvent(PU_EVT_SYSTEM_RESUMING);
+ 
++			// Torchlight: `ParticleSystem::resume` also forgets the idle time; anything
++			// but a stopped system (state 2) is started again.
++			mFalloffTimer = 0.0f;
+ 			mState = ParticleSystem::PSS_STARTED;
+ 
+ 			ParticleTechniqueIterator it;

@@ -1,0 +1,451 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
+index 3a686a3..e387676 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
+@@ -31,12 +31,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
+-	/** The TextureAnimator makes it possible to have an animated texture for each individual particle. It relies on the uv coordinate 
+-	    settings in the ParticleRenderer.
+-    */
++	/** Torchlight's TextureAnimator, which replaces the library's: each particle
++		runs through its technique's sprite sheet (its flipbook) at a speed read at
++		launch - or every frame, without `USE OWN ANIMATION` - from a starting frame
++		read off the system's age, or a random one. Transcribed from the binary
++		(`TextureAnimator`). The library's animation-type,
++		time-step and texture-coordinate settings stay as inert shims for its
++		script code, which the port does not use.
++	*/
+ 	class _ParticleUniverseExport TextureAnimator : public ParticleAffector
+ 	{
+ 		public:
++			/** The library script code's. */
+ 			enum TextureAnimationType
+ 			{
+ 				TAT_LOOP,
+@@ -44,7 +50,7 @@ namespace ParticleUniverse
+ 				TAT_RANDOM
+ 			};
+ 
+-			// Constants
++			// Constants (the library script code's)
+ 			static const Real DEFAULT_TIME_STEP;
+ 			static const uint16 DEFAULT_TEXCOORDS_START;
+ 			static const uint16 DEFAULT_TEXCOORDS_END;
+@@ -52,63 +58,63 @@ namespace ParticleUniverse
+ 			static const bool DEFAULT_START_RANDOM;
+ 
+ 			TextureAnimator(void);
+-	        virtual ~TextureAnimator(void);
++			virtual ~TextureAnimator(void);
+ 
+-			/** Returns the AnimationTimeStep. The AnimationTimeStep defines the time between each animation frame. */
+-			Real getAnimationTimeStep(void) const;
+-
+-			/** Set the  AnimationTimeStep */
+-			void setAnimationTimeStep(Real animationTimeStep);
+-
+-			/** Returns the type of texture animation. */
+-			TextureAnimationType getTextureAnimationType(void) const;
+-
+-			/** Set the type of texture animation. */
+-			void setTextureAnimationType(TextureAnimationType textureAnimationType);
+-
+-			/** Todo */
+-			uint16 getTextureCoordsStart(void) const;
+-
+-			/** Todo */
+-			void setTextureCoordsStart(uint16 textureCoordsStart);
+-
+-			/** Todo */
+-			uint16 getTextureCoordsEnd(void) const;
+-
+-			/** Todo */
+-			void setTextureCoordsEnd(uint16 textureCoordsEnd);
+-
+-			/** Todo */
+-			bool isStartRandom(void) const;
++			/** The starting frame, read at the system's age (`getFrame`,
++				`setFrame`). Takes ownership.
++			*/
++			DynamicAttribute* getFrame(void) const {return mFrame;}
++			void setFrame(DynamicAttribute* frame);
+ 
+-			/** Todo */
+-			void setStartRandom(bool startRandom);
++			/** Frames a second, read at the particle's time fraction
++				(`getAnimationSpeed`, `setAnimationSpeed`). Takes ownership.
++			*/
++			DynamicAttribute* getAnimationSpeed(void) const {return mAnimationSpeed;}
++			void setAnimationSpeed(DynamicAttribute* animationSpeed);
++
++			/** `useOwnAnimationSpeed`, `setUseOwnAnimationSpeed`. */
++			bool useOwnAnimationSpeed(void) const {return mUseOwnAnimationSpeed;}
++			void setUseOwnAnimationSpeed(bool useOwnAnimationSpeed) {mUseOwnAnimationSpeed = useOwnAnimationSpeed;}
++
++			/** `useRandomStartingFrame`, `setUseRandomStartingFrame`. */
++			bool useRandomStartingFrame(void) const {return mUseRandomStartingFrame;}
++			void setUseRandomStartingFrame(bool useRandomStartingFrame) {mUseRandomStartingFrame = useRandomStartingFrame;}
++
++			/** The library script code's settings; nothing reads them. */
++			Real getAnimationTimeStep(void) const {return mAnimationTimeStep;}
++			void setAnimationTimeStep(Real animationTimeStep) {mAnimationTimeStep = animationTimeStep;}
++			TextureAnimationType getTextureAnimationType(void) const {return mTextureAnimationType;}
++			void setTextureAnimationType(TextureAnimationType textureAnimationType) {mTextureAnimationType = textureAnimationType;}
++			uint16 getTextureCoordsStart(void) const {return mTextureCoordsStart;}
++			void setTextureCoordsStart(uint16 textureCoordsStart) {mTextureCoordsStart = textureCoordsStart;}
++			uint16 getTextureCoordsEnd(void) const {return mTextureCoordsEnd;}
++			void setTextureCoordsEnd(uint16 textureCoordsEnd) {mTextureCoordsEnd = textureCoordsEnd;}
++			bool isStartRandom(void) const {return mUseRandomStartingFrame;}
++			void setStartRandom(bool startRandom) {mUseRandomStartingFrame = startRandom;}
+ 
+-			/** @copydoc ParticleAffector::copyAttributesTo */
+ 			virtual void copyAttributesTo (ParticleAffector* affector);
+-
+-			/** @copydoc ParticleAffector::_preProcessParticles */
+-			virtual void _preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed);
+-
+-			/** @copydoc ParticleAffector::_initParticleForEmission */
+ 			virtual void _initParticleForEmission(Particle* particle);
+-
+-			/** @copydoc ParticleAffector::_affect */
+ 			virtual void _affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed);
+ 
+ 		protected:
++			bool mUseOwnAnimationSpeed;          // +0x154
++			bool mUseRandomStartingFrame;        // +0x155
++			Real mLastStep;                      // +0x158
++			DynamicAttribute* mFrame;            // +0x160
++			DynamicAttribute* mAnimationSpeed;   // +0x168
++			DynamicAttributeFactory mDynamicAttributeFactory;
++			DynamicAttributeHelper mDynamicAttributeHelper;
++
+ 			Real mAnimationTimeStep;
+-			Real mAnimationTimeStepCount;
+-			bool mStartRandom;
+-			bool mAnimationTimeStepSet;
+-			bool mNextIndex;
+ 			TextureAnimationType mTextureAnimationType;
+ 			uint16 mTextureCoordsStart;
+ 			uint16 mTextureCoordsEnd;
+ 
+-			/** Todo.
+-			*/
+-			void _determineNextTextureCoords(VisualParticle* visualParticle);
++			/** `_calculateAnimationSpeed`. */
++			Real _calculateAnimationSpeed(Particle* particle);
++
++			/** `_calculateFrame`. */
++			int _calculateFrame(void);
+ 	};
+ 
+ }
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
+index 582e18a..3addec8 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
+@@ -28,10 +28,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleAffectors/ParticleUniverseTextureAnimator.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
+-	// Constants
++	// Torchlight: this file's static initialiser (`TextureAnimator::_GLOBAL__I_TextureAnimator`)
++	// sets only HALFSCALE, the same as the library's.
++	// Constants (the library script code's)
+ 	const Real TextureAnimator::DEFAULT_TIME_STEP = 0.0f;
+ 	const uint16 TextureAnimator::DEFAULT_TEXCOORDS_START = 0;
+ 	const uint16 TextureAnimator::DEFAULT_TEXCOORDS_END = 0;
+@@ -39,230 +42,114 @@ namespace ParticleUniverse
+ 	const bool TextureAnimator::DEFAULT_START_RANDOM = true;
+ 
+ 	//-----------------------------------------------------------------------
+-	TextureAnimator::TextureAnimator(void) : 
++	// Torchlight: `TextureAnimator::TextureAnimator`: its own speed on, no
++	// random start, starting frame fixed 0, 30 frames a second.
++	TextureAnimator::TextureAnimator(void) :
+ 		ParticleAffector(),
++		mUseOwnAnimationSpeed(true),
++		mUseRandomStartingFrame(false),
++		mLastStep(0.0f),
++		mFrame(0),
++		mAnimationSpeed(0),
+ 		mAnimationTimeStep(DEFAULT_TIME_STEP),
+-		mAnimationTimeStepSet(false),
+-		mNextIndex(false),
+ 		mTextureAnimationType(DEFAULT_ANIMATION_TYPE),
+ 		mTextureCoordsStart(DEFAULT_TEXCOORDS_START),
+-		mTextureCoordsEnd(DEFAULT_TEXCOORDS_END),
+-		mStartRandom(DEFAULT_START_RANDOM),
+-		mAnimationTimeStepCount(0.0f)
++		mTextureCoordsEnd(DEFAULT_TEXCOORDS_END)
+ 	{
++		mAffectorType = "TextureAnimator";
++		DynamicAttributeFixed* frame = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
++		frame->setValue(0.0f);
++		mFrame = frame;
++		DynamicAttributeFixed* speed = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
++		speed->setValue(30.0f);
++		mAnimationSpeed = speed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `~TextureAnimator`.
+ 	TextureAnimator::~TextureAnimator(void)
+ 	{
++		if (mFrame)
++			PU_DELETE_T(mFrame, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++		if (mAnimationSpeed)
++			PU_DELETE_T(mAnimationSpeed, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	Real TextureAnimator::getAnimationTimeStep(void) const
++	void TextureAnimator::setFrame(DynamicAttribute* frame)
+ 	{
+-		return mAnimationTimeStep;
++		if (mFrame)
++			PU_DELETE_T(mFrame, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++		mFrame = frame;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void TextureAnimator::setAnimationTimeStep(Real animationTimeStep)
++	void TextureAnimator::setAnimationSpeed(DynamicAttribute* animationSpeed)
+ 	{
+-		mAnimationTimeStep = animationTimeStep;
+-		mAnimationTimeStepSet = true;
++		if (mAnimationSpeed)
++			PU_DELETE_T(mAnimationSpeed, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++		mAnimationSpeed = animationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	TextureAnimator::TextureAnimationType TextureAnimator::getTextureAnimationType(void) const
++	Real TextureAnimator::_calculateAnimationSpeed(Particle* particle)
+ 	{
+-		return mTextureAnimationType;
++		return mDynamicAttributeHelper.calculate(particle, mAnimationSpeed, particle->timeFraction, 0.0f);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void TextureAnimator::setTextureAnimationType(TextureAnimator::TextureAnimationType textureAnimationType)
++	int TextureAnimator::_calculateFrame(void)
+ 	{
+-		mTextureAnimationType = textureAnimationType;
+-	}
+-	//-----------------------------------------------------------------------
+-	uint16 TextureAnimator::getTextureCoordsStart(void) const
+-	{
+-		return mTextureCoordsStart;
+-	}
+-	//-----------------------------------------------------------------------
+-	void TextureAnimator::setTextureCoordsStart(uint16 textureCoordsStart)
+-	{
+-		mTextureCoordsStart = textureCoordsStart;
+-	}
+-	//-----------------------------------------------------------------------
+-	uint16 TextureAnimator::getTextureCoordsEnd(void) const
+-	{
+-		return mTextureCoordsEnd;
+-	}
+-	//-----------------------------------------------------------------------
+-	void TextureAnimator::setTextureCoordsEnd(uint16 textureCoordsEnd)
+-	{
+-		mTextureCoordsEnd = textureCoordsEnd;
+-	}
+-	//-----------------------------------------------------------------------
+-	bool TextureAnimator::isStartRandom(void) const
+-	{
+-		return mStartRandom;
+-	}
+-	//-----------------------------------------------------------------------
+-	void TextureAnimator::setStartRandom(bool startRandom)
+-	{
+-		mStartRandom = startRandom;
++		return x86FloatToInt32(mDynamicAttributeHelper.calculate(0, mFrame,
++			mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), 0.0f)); // portable: x86's answer on every CPU
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureAnimator::_initParticleForEmission`. The random
++	// start is `rand() % 32`, whatever the sheet's size.
+ 	void TextureAnimator::_initParticleForEmission(Particle* particle)
+ 	{
+-		// Only continue if the particle is a visual particle
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+-
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-
+-		// Set first image
+-		if (mStartRandom)
++		visualParticle->animationFrame = (Real)_calculateFrame();
++		if (mUseRandomStartingFrame)
+ 		{
+-			visualParticle->textureCoordsCurrent = (uint16)Math::RangeRandom((Real)mTextureCoordsStart, (Real)mTextureCoordsEnd + 0.999f);
++			visualParticle->animationFrame = (Real)(rand() % 32);
+ 		}
+-		else
+-		{
+-			visualParticle->textureCoordsCurrent = mTextureCoordsStart;
+-		}
+-
+-		// Calculate the animationTimeStep
+-		if (!mAnimationTimeStepSet)
+-		{
+-			// Set the animation time step for each particle
+-			switch(mTextureAnimationType)
+-			{
+-				case TAT_LOOP:
+-				{
+-					visualParticle->textureAnimationTimeStep = visualParticle->timeToLive / (mTextureCoordsEnd - mTextureCoordsStart + 1);
+-				}
+-				break;
+-
+-				case TAT_UP_DOWN:
+-				{
+-					visualParticle->textureAnimationTimeStep = visualParticle->timeToLive / (2 * (mTextureCoordsEnd - mTextureCoordsStart) + 1);
+-				}
+-				break;
+-
+-				case TAT_RANDOM:
+-				{
+-					visualParticle->textureAnimationTimeStep = visualParticle->timeToLive;
+-				}
+-				break;
+-			}
+-		}
+-	}
+-	//-----------------------------------------------------------------------
+-	void TextureAnimator::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+-	{
+-		// Determine the next texture coords index (global)
+-		if (mAnimationTimeStepSet)
++		ParticleTechnique* technique = particle->parentEmitter->getParentTechnique();
++		if (technique->getRenderer())
+ 		{
+-			mNextIndex = false;
+-			mAnimationTimeStepCount += timeElapsed;
+-			if (mAnimationTimeStepCount > mAnimationTimeStep)
+-			{
+-				mAnimationTimeStepCount -= mAnimationTimeStep;
+-				mNextIndex = true;
+-			}
++			technique->getRenderer()->_notifyParticleZRotated();
+ 		}
++		visualParticle->animationSpeed = _calculateAnimationSpeed(particle);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureAnimator::_affect`: the frame advances by the
++	// speed the particle launched with, or - without `USE OWN ANIMATION` - by the
++	// speed read now at its time fraction.
+ 	void TextureAnimator::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		// Only continue if the particle is a visual particle
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+-
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-
+-		// Determine the next texture coords index
+-		if (mAnimationTimeStepSet)
++		if (!mUseOwnAnimationSpeed)
+ 		{
+-			if (mNextIndex)
+-			{
+-				// Use the global one for all particles
+-				_determineNextTextureCoords(visualParticle);
+-			}
++			mLastStep = _calculateAnimationSpeed(particle) * timeElapsed;
+ 		}
+ 		else
+ 		{
+-			visualParticle->textureAnimationTimeStepCount += timeElapsed;
+-			if (visualParticle->textureAnimationTimeStepCount > visualParticle->textureAnimationTimeStep)
+-			{
+-				visualParticle->textureAnimationTimeStepCount -= visualParticle->textureAnimationTimeStep;
+-				_determineNextTextureCoords(visualParticle);
+-			}
++			mLastStep = visualParticle->animationSpeed * timeElapsed;
+ 		}
+-	}
+-	//-----------------------------------------------------------------------
+-	void TextureAnimator::_determineNextTextureCoords(VisualParticle* visualParticle)
+-	{
+-		switch(mTextureAnimationType)
++		visualParticle->animationFrame = mLastStep + visualParticle->animationFrame;
++		if (particleTechnique->getRenderer())
+ 		{
+-			case TAT_LOOP:
+-			{
+-				if (visualParticle->textureCoordsCurrent >= mTextureCoordsEnd)
+-				{
+-					visualParticle->textureCoordsCurrent = mTextureCoordsStart;
+-				}
+-				else
+-				{
+-					(visualParticle->textureCoordsCurrent)++;
+-				}
+-			}
+-			break;
+-
+-			case TAT_UP_DOWN:
+-			{
+-				if (visualParticle->textureAnimationDirectionUp == true)
+-				{
+-					// Going up
+-					if (visualParticle->textureCoordsCurrent >= mTextureCoordsEnd)
+-					{
+-						(visualParticle->textureCoordsCurrent)--;
+-						visualParticle->textureAnimationDirectionUp = false;
+-					}
+-					else
+-					{
+-						(visualParticle->textureCoordsCurrent)++;
+-					}
+-				}
+-				else
+-				{
+-					// Going down
+-					if (visualParticle->textureCoordsCurrent <= mTextureCoordsStart)
+-					{
+-						(visualParticle->textureCoordsCurrent)++;
+-						visualParticle->textureAnimationDirectionUp = true;
+-					}
+-					else
+-					{
+-						(visualParticle->textureCoordsCurrent)--;
+-					}
+-				}
+-			}
+-			break;
+-
+-			case TAT_RANDOM:
+-			{
+-				// Generate a random texcoord index
+-				visualParticle->textureCoordsCurrent = (uint16)Math::RangeRandom((Real)mTextureCoordsStart, (Real)mTextureCoordsEnd + 0.999f);
+-			}
+-			break;
++			particleTechnique->getRenderer()->_notifyParticleZRotated();
+ 		}
+ 	}
+-
+ 	//-----------------------------------------------------------------------
+-	void TextureAnimator::copyAttributesTo (ParticleAffector* affector)
++	// Torchlight: `TextureAnimator::copyAttributesTo`.
++	void TextureAnimator::copyAttributesTo(ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);
+ 		TextureAnimator* textureAnimator = static_cast<TextureAnimator*>(affector);
+-		textureAnimator->mAnimationTimeStep = mAnimationTimeStep;
+-		textureAnimator->mAnimationTimeStepSet = mAnimationTimeStepSet;
+-		textureAnimator->mTextureAnimationType = mTextureAnimationType;
+-		textureAnimator->mTextureCoordsStart = mTextureCoordsStart;
+-		textureAnimator->mTextureCoordsEnd = mTextureCoordsEnd;
+-		textureAnimator->mStartRandom = mStartRandom;
++		textureAnimator->setFrame(mDynamicAttributeFactory.cloneDynamicAttribute(mFrame));
++		textureAnimator->setAnimationSpeed(mDynamicAttributeFactory.cloneDynamicAttribute(mAnimationSpeed));
++		textureAnimator->mUseOwnAnimationSpeed = mUseOwnAnimationSpeed;
++		textureAnimator->mUseRandomStartingFrame = mUseRandomStartingFrame;
+ 	}
+-
+ }

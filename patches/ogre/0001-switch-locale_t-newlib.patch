@@ -1,0 +1,20 @@
+diff --git a/OgreMain/include/OgreStringConverter.h b/OgreMain/include/OgreStringConverter.h
+index b8b5f40..1fdc722 100644
+--- a/OgreMain/include/OgreStringConverter.h
++++ b/OgreMain/include/OgreStringConverter.h
+@@ -50,6 +50,15 @@ THE SOFTWARE.
+ #   include <xlocale.h>
+ #endif
+ 
++// Nintendo Switch (devkitA64 / newlib): locale_t is declared in
++// <sys/_locale.h>, which is only reachable through <locale.h>. Unlike glibc,
++// newlib does not pull it in transitively, and OgrePlatform.h classifies the
++// Switch as OGRE_PLATFORM_LINUX via its final #else, so neither the define
++// above nor the Apple include applies.
++#if defined(__SWITCH__)
++#   include <locale.h>
++#endif
++
+ namespace Ogre {
+ 
+     /** \addtogroup Core

@@ -1,0 +1,284 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffector.h
+index 1ca5e1d..bd3a49b 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffector.h
+@@ -47,12 +47,21 @@ namespace ParticleUniverse
+ 		protected:
+ 			Particle* mPreviousParticle;
+ 			bool mResize;
++			/** Torchlight: +0x161, the node's `TO VELOCITY`. `AlignAffectorFactory::createAffector`
++				makes it true, and `copyAttributesTo` does not copy it.
++			*/
++			bool mAlignByVelocity;
++
++			/** Torchlight: `AlignAffector::calculateRotationByVelocity`.
++			*/
++			void calculateRotationByVelocity(ParticleTechnique* particleTechnique, VisualParticle* visualParticle);
+ 
+ 		public:
+ 			// Constants
+ 			static const bool DEFAULT_RESIZE;
+ 
+ 			AlignAffector(void);
++	        // Torchlight: `AlignAffector::~AlignAffector`: the same as the library's.
+ 	        virtual ~AlignAffector(void){};
+ 
+ 			/** @copydoc ParticleAffector::copyAttributesTo */
+@@ -67,6 +76,13 @@ namespace ParticleUniverse
+ 	        */
+ 			void setResize(bool resize);
+ 
++			/** Torchlight: whether a particle is turned (in 2D) to the way it moves on screen
++				rather than pointed at the previous particle. `CAlignDescriptor::Set_setAlignByVelocity`
++				writes the field straight.
++	        */
++			bool isAlignByVelocity(void) const {return mAlignByVelocity;}
++			void setAlignByVelocity(bool alignByVelocity) {mAlignByVelocity = alignByVelocity;}
++
+ 			/** @copydoc ParticleAffector::_firstParticle */
+ 			virtual void _firstParticle(ParticleTechnique* particleTechnique, 
+ 				Particle* particle, 
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseAlignAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseAlignAffector.cpp
+index aa09694..05be32a 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseAlignAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseAlignAffector.cpp
+@@ -1,91 +1,148 @@
+-/*
+------------------------------------------------------------------------------------------------
+-Copyright (C) 2013 Henry van Merode. All rights reserved.
+-
+-Permission is hereby granted, free of charge, to any person obtaining a copy of
+-this software and associated documentation files (the "Software"), to deal in
+-the Software without restriction, including without limitation the rights to
+-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+-the Software, and to permit persons to whom the Software is furnished to do so,
+-subject to the following conditions:
+-
+-The above copyright notice and this permission notice shall be included in all
+-copies or substantial portions of the Software.
+-
+-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+------------------------------------------------------------------------------------------------
+-*/
+-
+-#include "ParticleUniversePCH.h"
+-
+-#ifndef PARTICLE_UNIVERSE_EXPORTS
+-#define PARTICLE_UNIVERSE_EXPORTS
+-#endif
+-
+-#include "ParticleAffectors/ParticleUniverseAlignAffector.h"
+-
+-namespace ParticleUniverse
+-{
+-	// Constants
+-	const bool AlignAffector::DEFAULT_RESIZE = false;
+-	
+-	//-----------------------------------------------------------------------
+-	AlignAffector::AlignAffector(void) : 
+-		ParticleAffector(),
+-		mPreviousParticle(0),
+-		mResize(DEFAULT_RESIZE)
+-	{
+-	}
+-	//-----------------------------------------------------------------------
+-	void AlignAffector::_firstParticle(ParticleTechnique* particleTechnique, 
+-		Particle* particle, 
+-		Real timeElapsed)
+-	{
+-		mPreviousParticle = particle;
+-	}
+-	//-----------------------------------------------------------------------
+-	bool AlignAffector::isResize(void) const
+-	{
+-		return mResize;
+-	}
+-	//-----------------------------------------------------------------------
+-	void AlignAffector::setResize(bool resize)
+-	{
+-		mResize = resize;
+-	}
+-	//-----------------------------------------------------------------------
+-	void AlignAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+-	{
+-		if (particle->particleType == Particle::PT_VISUAL)
+-		{
+-			// Set the orientation towards the previous particle, but rotation is undetermined.
+-			VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-
+-			// Get difference
+-			Vector3 diff = (mPreviousParticle->position - particle->position);
+-			if (mResize)
+-			{
+-				visualParticle->setOwnDimensions (visualParticle->width, diff.length(), visualParticle->depth);
+-			}
+-			diff.normalise();
+-			visualParticle->orientation.x = diff.x;
+-			visualParticle->orientation.y = diff.y;
+-			visualParticle->orientation.z = diff.z;
+-		}
+-
+-		mPreviousParticle = particle;
+-	}
+-	//-----------------------------------------------------------------------
+-	void AlignAffector::copyAttributesTo (ParticleAffector* affector)
+-	{
+-		ParticleAffector::copyAttributesTo(affector);
+-
+-		AlignAffector* alignAffector = static_cast<AlignAffector*>(affector);
+-		alignAffector->mResize = mResize;
+-	}
+-}
++/*
++-----------------------------------------------------------------------------------------------
++Copyright (C) 2013 Henry van Merode. All rights reserved.
++
++Permission is hereby granted, free of charge, to any person obtaining a copy of
++this software and associated documentation files (the "Software"), to deal in
++the Software without restriction, including without limitation the rights to
++use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++the Software, and to permit persons to whom the Software is furnished to do so,
++subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++-----------------------------------------------------------------------------------------------
++*/
++
++#include "ParticleUniversePCH.h"
++
++#ifndef PARTICLE_UNIVERSE_EXPORTS
++#define PARTICLE_UNIVERSE_EXPORTS
++#endif
++
++#include "ParticleAffectors/ParticleUniverseAlignAffector.h"
++
++namespace ParticleUniverse
++{
++	// Torchlight: this file's static initialiser (`AlignAffector::_GLOBAL__I__firstParticle`)
++	// sets only HALFSCALE, the same as the library's.
++	// Constants
++	const bool AlignAffector::DEFAULT_RESIZE = false;
++	
++	//-----------------------------------------------------------------------
++	AlignAffector::AlignAffector(void) : 
++		ParticleAffector(),
++		mPreviousParticle(0),
++		mResize(DEFAULT_RESIZE),
++		mAlignByVelocity(true)
++	{
++		// Torchlight: `AlignAffectorFactory::createAffector` - previous particle 0,
++		// resize off, align by velocity on.
++	}
++	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `AlignAffector::_firstParticle`: the same.
++	void AlignAffector::_firstParticle(ParticleTechnique* particleTechnique, 
++		Particle* particle, 
++		Real timeElapsed)
++	{
++		mPreviousParticle = particle;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `AlignAffector::isResize`: the same as the library's.
++	bool AlignAffector::isResize(void) const
++	{
++		return mResize;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `AlignAffector::setResize`: the same as the library's.
++	void AlignAffector::setResize(bool resize)
++	{
++		mResize = resize;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `AlignAffector::_affect`. Aligned by velocity (the default, and all
++	// the data ever uses) the particle is only turned on screen. Otherwise as the library's, but a
++	// resized particle is at most five times as tall as it is wide, and the direction is
++	// normalised as OGRE 1.6 did (nothing below a length of 1e-8).
++	void AlignAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
++	{
++		if (particle->particleType == Particle::PT_VISUAL)
++		{
++			VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
++			if (mAlignByVelocity)
++			{
++				calculateRotationByVelocity(particleTechnique, visualParticle);
++				mPreviousParticle = particle;
++				return;
++			}
++
++			Vector3 diff = (mPreviousParticle->position - particle->position);
++			if (mResize)
++			{
++				Real length = Math::Sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
++				if (length <= 0.0f || visualParticle->width * 5.0f < length)
++					length = visualParticle->width * 5.0f;
++				visualParticle->setOwnDimensions (visualParticle->width, length, visualParticle->depth);
++			}
++			Real length = Math::Sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
++			if ((double)length > 1e-08)
++			{
++				Real inverse = 1.0f / length;
++				diff.x *= inverse;
++				diff.y *= inverse;
++				diff.z *= inverse;
++			}
++			visualParticle->orientation.x = diff.x;
++			visualParticle->orientation.y = diff.y;
++			visualParticle->orientation.z = diff.z;
++		}
++
++		mPreviousParticle = particle;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `AlignAffector::calculateRotationByVelocity`. The particle's direction
++	// is taken through the inverse of the main camera's orientation (as a point, projectively) and
++	// the particle's 2D rotation becomes atan2(x, y) of the result, worked in double. Nothing
++	// happens without a system, a camera, or a direction of any length (OGRE's `isZeroLength`).
++	void AlignAffector::calculateRotationByVelocity(ParticleTechnique* particleTechnique, VisualParticle* visualParticle)
++	{
++		if (!particleTechnique)
++			return;
++		const Vector3& direction = visualParticle->direction;
++		const Real squared = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
++		if ((double)squared < 1e-06 * 1e-06)
++			return;
++		ParticleSystem* system = particleTechnique->getParentSystem();
++		if (!system || !system->getCurrentCamera())
++			return;
++
++		// OGRE 1.6's `Camera::getOrientation` - the game moves `PlayerCam` itself, on no node
++		// (`CCameraControl::updateGameCamera`) - is OGRE 14's derived orientation.
++		Ogre::Matrix3 rotation;
++		system->getCurrentCamera()->getDerivedOrientation().ToRotationMatrix(rotation);
++		const Ogre::Matrix4 inverse = Ogre::Matrix4(rotation).inverse();
++		const Real w = 1.0f / (inverse[3][0] * direction.x + inverse[3][1] * direction.y + inverse[3][2] * direction.z + inverse[3][3]);
++		const Real x = (inverse[0][0] * direction.x + inverse[0][1] * direction.y + inverse[0][2] * direction.z + inverse[0][3]) * w;
++		const Real y = (inverse[1][0] * direction.x + inverse[1][1] * direction.y + inverse[1][2] * direction.z + inverse[1][3]) * w;
++		visualParticle->zRotation = Radian((Real)std::atan2((double)x, (double)y));
++		if (particleTechnique->getRenderer())
++			particleTechnique->getRenderer()->_notifyParticleZRotated();
++	}
++	//-----------------------------------------------------------------------
++	void AlignAffector::copyAttributesTo (ParticleAffector* affector)
++	{
++		ParticleAffector::copyAttributesTo(affector);
++
++		// Torchlight: `AlignAffector::copyAttributesTo` copies the resize flag only;
++		// a copy keeps the factory's align by velocity.
++		AlignAffector* alignAffector = static_cast<AlignAffector*>(affector);
++		alignAffector->mResize = mResize;
++	}
++}

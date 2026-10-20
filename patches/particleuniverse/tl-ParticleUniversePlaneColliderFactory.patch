@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneColliderFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneColliderFactory.h
+index 839c6b4..33b04a2 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneColliderFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneColliderFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			PlaneColliderFactory(void){};
++	        // Torchlight: `PlaneColliderFactory::~PlaneColliderFactory`: the same as the library's. Torchlight's `setupTokenDefinitions` is the older token parser's hook, which the library's translators replace (script input only).
+ 	        virtual ~PlaneColliderFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `PlaneColliderFactory::getAffectorType`: the same as the library's.
+ 			String getAffectorType(void) const
+ 			{
+ 				return "PlaneCollider";

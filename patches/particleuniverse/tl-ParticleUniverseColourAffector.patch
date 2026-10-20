@@ -1,0 +1,108 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffector.h
+index 11ce9fe..1797d72 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffector.h
+@@ -49,6 +49,7 @@ namespace ParticleUniverse
+ 			ColourAffector(void);
+ 
+ 			// Destructor
++	        // Torchlight: `ColourAffector::~ColourAffector`: the same as the library's.
+ 	        virtual ~ColourAffector(void) {};
+ 
+ 			/** 
+@@ -62,6 +63,15 @@ namespace ParticleUniverse
+ 			/** 
+ 	        */
+ 			void clearColourMap (void);
++
++			/** Torchlight: `ColourAffector::colourCount`: the number of keys.
++	        */
++			size_t colourCount(void) const {return mColourMap.size();}
++
++			/** Torchlight: `ColourAffector::getColourList`: the keys' times and colours,
++				in order, into two lists it empties first.
++	        */
++			void getColourList(vector<Real>& times, vector<ColourValue>& colours) const;
+ 				
+ 			/** 
+ 	        */
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseColourAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseColourAffector.cpp
+index a817363..2ea9668 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseColourAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseColourAffector.cpp
+@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`ColourAffector::_GLOBAL__I_copyAttributesTo`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
+ 	const ColourAffector::ColourOperation ColourAffector::DEFAULT_COLOUR_OPERATION = ColourAffector::CAO_SET;
+ 
+@@ -41,6 +43,7 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::copyAttributesTo`: the same as the library's.
+ 	void ColourAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);
+@@ -50,16 +53,19 @@ namespace ParticleUniverse
+ 		colourAffector->mColourOperation = mColourOperation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::getColourOperation`: the same as the library's.
+ 	const ColourAffector::ColourOperation& ColourAffector::getColourOperation (void) const
+ 	{
+ 		return mColourOperation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::setColourOperation`: the same as the library's.
+ 	void ColourAffector::setColourOperation (const ColourAffector::ColourOperation& colourOperation)
+ 	{
+ 		mColourOperation = colourOperation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::addColour`: the same as the library's.
+ 	void ColourAffector::addColour (Real timeFraction, const ColourValue& colour)
+ 	{
+ 		mColourMap[timeFraction] = colour;
+@@ -70,14 +76,29 @@ namespace ParticleUniverse
+ 		return mColourMap;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::clearColours`, under the library's name: the same.
+ 	void ColourAffector::clearColourMap (void)
+ 	{
+ 		mColourMap.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	void ColourAffector::getColourList(vector<Real>& times, vector<ColourValue>& colours) const
++	{
++		times.clear();
++		colours.clear();
++		ColourMap::const_iterator it;
++		for (it = mColourMap.begin(); it != mColourMap.end(); ++it)
++		{
++			times.push_back(it->first);
++			colours.push_back(it->second);
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ColourAffector::_affect`: the same as the library's, but for the empty-map test below.
+ 	void ColourAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		// Fast rejection
++		// Fast rejection. DIVERGENCE: Torchlight's has no such test and would read past an empty
++		// map; the game's colour nodes always start with a white key, so it never has one.
+ 		if (mColourMap.empty())
+ 			return;
+ 
+@@ -116,6 +137,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+     //-----------------------------------------------------------------------
++    // Torchlight: `ColourAffector::_findNearestColourMapIterator`: the same as the library's.
+     ColourAffector::ColourMapIterator ColourAffector::_findNearestColourMapIterator(Real timeFraction)
+     {
+ 		ColourMapIterator it;

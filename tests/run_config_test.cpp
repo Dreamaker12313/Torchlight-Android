@@ -1,0 +1,70 @@
+// core/run_config.h: `config.txt`, read over defaults and rewritten one value at a time.
+#include "core/run_config.h"
+#include "test_support.h"
+
+#include <string>
+
+using tl::core::parse_run_config;
+using tl::core::run_config_text;
+using tl::core::RunConfig;
+using tl::core::set_run_config_value;
+
+TL_TEST(a_new_config_file_reads_back_as_its_defaults) {
+    const RunConfig defaults{false, false, false};
+    const RunConfig read = parse_run_config(run_config_text(defaults), RunConfig{true, true, true});
+    TL_CHECK(!read.debug);
+    TL_CHECK(!read.logs);
+    TL_CHECK(!read.fps);
+}
+
+TL_TEST(config_values_ignore_case_spaces_and_comments) {
+    const RunConfig read = parse_run_config(
+        "# a comment\n  DEBUG = 1\nlogs=0 # off\r\nFps=on\nunknown=1\n", RunConfig{});
+    TL_CHECK(read.debug);
+    TL_CHECK(!read.logs);
+    TL_CHECK(read.fps);
+}
+
+TL_TEST(a_key_the_file_leaves_out_keeps_its_default) {
+    const RunConfig read = parse_run_config("fps=1\n", RunConfig{true, true, false});
+    TL_CHECK(read.debug);
+    TL_CHECK(read.logs);
+    TL_CHECK(read.fps);
+}
+
+TL_TEST(setting_a_value_rewrites_only_its_line) {
+    const std::string text = "# keep me\ndebug=0\r\nfps=0 # mine\nlogs=1\n";
+    TL_CHECK_EQ(set_run_config_value(text, "fps", true),
+                std::string("# keep me\ndebug=0\r\nfps=1\nlogs=1\n"));
+    TL_CHECK_EQ(set_run_config_value(text, "DEBUG", true),
+                std::string("# keep me\ndebug=1\r\nfps=0 # mine\nlogs=1\n"));
+}
+
+TL_TEST(setting_a_missing_value_adds_its_line) {
+    TL_CHECK_EQ(set_run_config_value("debug=1", "fps", true), std::string("debug=1\nfps=1\n"));
+    TL_CHECK_EQ(set_run_config_value("", "fps", false), std::string("fps=0\n"));
+}
+
+TL_TEST(the_desktop_resolution_reads_as_numbers) {
+    const RunConfig read =
+        parse_run_config("width = 1920\nheight=1080\nfullscreen=1\n", RunConfig{});
+    TL_CHECK_EQ(read.width, 1920u);
+    TL_CHECK_EQ(read.height, 1080u);
+    TL_CHECK(read.fullscreen);
+    // Nonsense leaves the default.
+    const RunConfig bad = parse_run_config("width=abc\nheight=-5\n", RunConfig{});
+    TL_CHECK_EQ(bad.width, 0u);
+    TL_CHECK_EQ(bad.height, 0u);
+}
+
+TL_TEST(only_a_desktop_file_carries_the_resolution) {
+    const std::string device = run_config_text(RunConfig{});
+    TL_CHECK(device.find("width=") == std::string::npos);
+    RunConfig desktop;
+    desktop.width = 1280;
+    desktop.height = 720;
+    const RunConfig read = parse_run_config(run_config_text(desktop), RunConfig{});
+    TL_CHECK_EQ(read.width, 1280u);
+    TL_CHECK_EQ(read.height, 720u);
+    TL_CHECK(!read.fullscreen);
+}

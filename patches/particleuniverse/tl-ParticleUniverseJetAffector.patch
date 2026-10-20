@@ -1,0 +1,55 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseJetAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseJetAffector.cpp
+index e9e8b6f..403748b 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseJetAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseJetAffector.cpp
+@@ -31,10 +31,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`JetAffector::_GLOBAL__I_JetAffector`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Real JetAffector::DEFAULT_ACCELERATION = 1.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `JetAffector::JetAffector`: acceleration fixed 1.
+ 	JetAffector::JetAffector (void) : 
+ 		ParticleAffector(),
+ 		mScaled(0.0f)
+@@ -43,6 +46,7 @@ namespace ParticleUniverse
+ 		(static_cast<DynamicAttributeFixed*>(mDynAcceleration))->setValue(DEFAULT_ACCELERATION);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `JetAffector::~JetAffector`: the same as the library's.
+ 	JetAffector::~JetAffector (void)
+ 	{
+ 		if (!mDynAcceleration)
+@@ -52,6 +56,7 @@ namespace ParticleUniverse
+ 		mDynAcceleration = 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `JetAffector::copyAttributesTo`: the same clone.
+ 	void JetAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);
+@@ -60,9 +65,11 @@ namespace ParticleUniverse
+ 		jetAffector->setDynAcceleration(mDynamicAttributeFactory.cloneDynamicAttribute(getDynAcceleration()));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `JetAffector::_affect`: as the library's, the acceleration read with
++	// the particle (a random acceleration is one draw per particle).
+ 	void JetAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		mScaled = timeElapsed * (mDynAcceleration->getValue(particle->timeFraction));
++		mScaled = timeElapsed * (mDynAcceleration->getValue(particle, particle->timeFraction));
+ 		if (particle->direction == Vector3::ZERO)
+ 		{
+ 			// Existing direction is zero, so use original direction
+@@ -74,6 +81,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `JetAffector::setDynAcceleration`: the same.
+ 	void JetAffector::setDynAcceleration(DynamicAttribute* dynAcceleration)
+ 	{
+ 		if (mDynAcceleration)

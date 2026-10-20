@@ -1,0 +1,30 @@
+Torchlight: RTSS lighting leaves the sum of the lights unclamped, as Runic's
+RT Shader System library does (the Xbox build's rtshaderlib/FFPLib_Lighting.hlsl:
+FFP_Light_Directional_Diffuse is `vOut = vBaseColour + vDiffuseColour *
+saturate(nDotL)`, nothing clamps vOut). Torchlight's lights are brighter than 1:
+the town's key light reaches the console's shaders as (1.77, 1.63, 1.15)
+(read off a captured town frame). Clamping the sum capped every lit
+surface at the texture's own colour. Not __SWITCH__-guarded (a GLSL library
+file; both targets need it). The port lights per vertex (FFP_Lighting), as the
+console's generated shaders do.
+
+diff --git a/Media/RTShaderLib/SGXLib_PerPixelLighting.glsl b/Media/RTShaderLib/SGXLib_PerPixelLighting.glsl
+index 7cca0d5f9..7fc88ffd6 100644
+--- a/Media/RTShaderLib/SGXLib_PerPixelLighting.glsl
++++ b/Media/RTShaderLib/SGXLib_PerPixelLighting.glsl
+@@ -40,11 +40,11 @@ THE SOFTWARE.
+ #include "RTSLib_LTC.glsl"
+ #endif
+ 
+-#ifdef USE_LINEAR_COLOURS
++// Torchlight port: Runic's RT Shader System library (the Xbox build's
++// rtshaderlib/FFPLib_Lighting.hlsl, FFP_Light_*_Diffuse) adds each light to the
++// colour and clamps nothing, and its lights are brighter than 1 (the town's key
++// light is 1.77): the sum is left unclamped here too.
+ #define FFP_SATURATE(x) x
+-#else
+-#define FFP_SATURATE(x) saturate(x)
+-#endif
+ 
+ #ifdef OGRE_HLSL
+ void SGX_Flip_Backface_Normal(in float triArea, in float targetFlipped, inout vec3 normal)

@@ -1,0 +1,18 @@
+diff --git a/src/egl/drivers/switch/egl_switch.c b/src/egl/drivers/switch/egl_switch.c
+--- a/src/egl/drivers/switch/egl_switch.c
++++ b/src/egl/drivers/switch/egl_switch.c
+@@ -63,7 +63,13 @@
+ 
+ #include "mapi/glapi/glapi.h"
+ 
+-#define NUM_BUFFERS 3
++/* Four, not three. With vsync, one buffer is on the display and one queued
++ * for the next refresh; glthread's worker dequeuing the third for the next
++ * frame waited for one to come back, about 9.5 ms of every 28 ms town frame on
++ * the console, and the game's thread waited on the worker's full queue
++ * meanwhile. Four: 36 -> 41.5 fps in the town centre, and smoother. Five was
++ * tried and was no better (36 fps, a longer wait). */
++#define NUM_BUFFERS 4
+ 
+ #ifdef DEBUG
+ #	define TRACE(x...) _eglLog(_EGL_DEBUG, "egl_switch: " x)

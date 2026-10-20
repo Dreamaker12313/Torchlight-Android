@@ -1,0 +1,164 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseForceField.h b/Plugins/ParticleUniverse/include/ParticleUniverseForceField.h
+index 52e86e6..3ca9cf7 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseForceField.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseForceField.h
+@@ -128,9 +128,11 @@ namespace ParticleUniverse
+ 	/** Factory class to calculate forces based on a precalculated force field
+ 	*/
+ 	class _ParticleUniverseExport MatrixForceFieldCalculationFactory : 
+-		public ForceFieldCalculationFactory, 
+-		public Ogre::WorkQueue::RequestHandler, 
++		public ForceFieldCalculationFactory
++#if OGRE_VERSION < 0xE0000
++		, public Ogre::WorkQueue::RequestHandler, 
+ 		public Ogre::WorkQueue::ResponseHandler
++#endif
+ 	{
+ 		public:
+ 			static const uint16 WORKQUEUE_GENERATE_REQUEST;
+@@ -161,6 +163,7 @@ namespace ParticleUniverse
+ 			*/
+ 			virtual void determineForce(const Vector3& position, Vector3& force, Real delta);
+ 
++#if OGRE_VERSION < 0xE0000
+ 			/** WorkQueue::RequestHandler override
+ 			*/
+ 			bool canHandleRequest(const Ogre::WorkQueue::Request* req, const Ogre::WorkQueue* srcQ);
+@@ -176,6 +179,7 @@ namespace ParticleUniverse
+ 			/** WorkQueue::ResponseHandler override
+ 			*/
+ 			void handleResponse(const Ogre::WorkQueue::Response* res, const Ogre::WorkQueue* srcQ);
++#endif
+ 
+ 			/** Get/Set Forcefield size.
+ 			@remarks
+@@ -207,6 +211,11 @@ namespace ParticleUniverse
+ 					{return o;}
+ 				MatrixRequest(MatrixForceFieldCalculationFactory* f): src(f) {};
+ 			};
++
++			/** Builds the matrix a request describes. The work of handleRequest,
++				which on OGRE 14 generate() calls directly.
++			*/
++			void buildMatrix(const MatrixRequest& preq);
+ 			
+ 			struct MatrixResponse
+ 			{
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseForceField.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseForceField.cpp
+index 9aa862b..b5e6a62 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseForceField.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseForceField.cpp
+@@ -23,6 +23,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ #include "ParticleUniversePCH.h"
+ #include "ParticleUniverseForceField.h"
++#include "ParticleUniverseFloatConvert.h"
+ #include "OgreRoot.h"
+ 
+ #ifndef PARTICLE_UNIVERSE_EXPORTS
+@@ -166,17 +167,21 @@ namespace ParticleUniverse
+ 		mZ(0),
+ 		mInitialising(false)
+ 	{
++#if OGRE_VERSION < 0xE0000
+ 		Ogre::WorkQueue* wq = Ogre::Root::getSingleton().getWorkQueue();
+ 		mWorkQueueChannel = wq->getChannel("ParticleUniverse/MatrixForceFieldCalculationFactory");
+ 		wq->addRequestHandler(mWorkQueueChannel, this);
+ 		wq->addResponseHandler(mWorkQueueChannel, this);
++#endif
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	MatrixForceFieldCalculationFactory::~MatrixForceFieldCalculationFactory(void)
+ 	{
++#if OGRE_VERSION < 0xE0000
+ 		Ogre::WorkQueue* wq = Ogre::Root::getSingleton().getWorkQueue();
+ 		wq->removeRequestHandler(mWorkQueueChannel, this);
+ 		wq->removeResponseHandler(mWorkQueueChannel, this);
++#endif
+ 		deleteMatrix();
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -195,8 +200,16 @@ namespace ParticleUniverse
+ 		req.amplitude = amplitude;
+ 		req.persistence = persistence;
+ 		req.worldSize = worldSize;
++#if OGRE_VERSION < 0xE0000
+ 		mInitialising = true;
+ 		Ogre::Root::getSingleton().getWorkQueue()->addRequest(mWorkQueueChannel, WORKQUEUE_GENERATE_REQUEST, Any(req), 0, false);
++#else
++		// OGRE 14 removed the WorkQueue's request/response channels. The matrix
++		// is built here, on the caller's thread - which is where OGRE built with
++		// OGRE_CONFIG_THREADS=0 ran the request anyway - so it is complete
++		// before the next determineForce.
++		buildMatrix(req);
++#endif
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void MatrixForceFieldCalculationFactory::deleteMatrix(void)
+@@ -224,9 +237,18 @@ namespace ParticleUniverse
+ 		}
+ 
+ 		// Ignore delta, because it is not needed to search into the matrix
++#if OGRE_VERSION < 0xE0000
+ 		mX = (unsigned int)(mMapScale.x * position.x);
+ 		mY = (unsigned int)(mMapScale.y * position.y);
+ 		mZ = (unsigned int)(mMapScale.z * position.z);
++#else
++		// Portable (the OGRE 14 port's targets include AArch64): a position below the field makes
++		// these negative, which x86-64 turns into a huge index (outside, no force) and AArch64 into
++		// 0 (the first cell's force). x86's answer on every CPU.
++		mX = x86FloatToUint32(mMapScale.x * position.x);
++		mY = x86FloatToUint32(mMapScale.y * position.y);
++		mZ = x86FloatToUint32(mMapScale.z * position.z);
++#endif
+ 		if (mX >= mForceFieldSize || mY >= mForceFieldSize || mZ >= mForceFieldSize)
+ 		{
+ 			// Position is outside the forcefield
+@@ -237,6 +259,7 @@ namespace ParticleUniverse
+ 		force.y = mMatrixPositions[mX][mY][mZ].y;
+ 		force.z = mMatrixPositions[mX][mY][mZ].z;
+ 	}
++#if OGRE_VERSION < 0xE0000
+ 	//---------------------------------------------------------------------
+ 	bool MatrixForceFieldCalculationFactory::canHandleRequest(const Ogre::WorkQueue::Request* req, const Ogre::WorkQueue* srcQ)
+ 	{
+@@ -262,6 +285,22 @@ namespace ParticleUniverse
+ 		if (preq.src != this)
+ 			return 0;
+ 
++		buildMatrix(preq);
++
++		MatrixResponse res;
++		Ogre::WorkQueue::Response* response = PU_NEW Ogre::WorkQueue::Response(req, true, Any(res));
++		return response;
++	}
++	//---------------------------------------------------------------------
++	void MatrixForceFieldCalculationFactory::handleResponse(const Ogre::WorkQueue::Response* res, const Ogre::WorkQueue* srcQ)
++	{
++		// Response itself is not used
++		mInitialising = false;
++	}
++#endif
++	//---------------------------------------------------------------------
++	void MatrixForceFieldCalculationFactory::buildMatrix(const MatrixRequest& preq)
++	{
+ 		// Setup the 3D matrix with precalculated force field vectors
+ 		mNoise3D.initialise(preq.octaves, preq.frequency, preq.amplitude, preq.persistence);
+ 		mMapScale.x = preq.forceFieldSize / preq.worldSize.x;
+@@ -298,16 +337,6 @@ namespace ParticleUniverse
+ 				}
+ 			}
+ 		}
+-
+-		MatrixResponse res;
+-		Ogre::WorkQueue::Response* response = PU_NEW Ogre::WorkQueue::Response(req, true, Any(res));
+-		return response;
+-	}
+-	//---------------------------------------------------------------------
+-	void MatrixForceFieldCalculationFactory::handleResponse(const Ogre::WorkQueue::Response* res, const Ogre::WorkQueue* srcQ)
+-	{
+-		// Response itself is not used
+-		mInitialising = false;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	unsigned int MatrixForceFieldCalculationFactory::getForceFieldSize(void) const

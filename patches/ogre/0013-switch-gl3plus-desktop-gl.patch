@@ -1,0 +1,57 @@
+diff --git a/RenderSystems/GL3Plus/src/OgreGL3PlusHardwareBufferManager.cpp b/RenderSystems/GL3Plus/src/OgreGL3PlusHardwareBufferManager.cpp
+index 2baefb109..3da9bd5cb 100644
+--- a/RenderSystems/GL3Plus/src/OgreGL3PlusHardwareBufferManager.cpp
++++ b/RenderSystems/GL3Plus/src/OgreGL3PlusHardwareBufferManager.cpp
+@@ -58,6 +58,14 @@ namespace Ogre {
+                                                          HardwareBuffer::Usage usage,
+                                                          bool useShadowBuffer)
+     {
++#ifdef __SWITCH__
++        // As GLES2's manager does: without RSC_MAPBUFFER a buffer is shadowed in
++        // memory and uploaded with glBufferSubData, never mapped. The Torchlight
++        // port clears the capability when Mesa's glthread runs, where every
++        // glMapBufferRange waits for the driver's thread to drain.
++        if(!mRenderSystem->getCapabilities()->hasCapability(RSC_MAPBUFFER))
++            useShadowBuffer = true;
++#endif
+         auto impl = new GL3PlusHardwareBuffer(GL_ARRAY_BUFFER, vertexSize * numVerts, usage, useShadowBuffer);
+         auto buf = std::make_shared<HardwareVertexBuffer>(this, vertexSize, numVerts, impl);
+         {
+@@ -72,6 +80,14 @@ namespace Ogre {
+                                                                                      HardwareBuffer::Usage usage,
+                                                                                      bool useShadowBuffer)
+     {
++#ifdef __SWITCH__
++        // As GLES2's manager does: without RSC_MAPBUFFER a buffer is shadowed in
++        // memory and uploaded with glBufferSubData, never mapped. The Torchlight
++        // port clears the capability when Mesa's glthread runs, where every
++        // glMapBufferRange waits for the driver's thread to drain.
++        if(!mRenderSystem->getCapabilities()->hasCapability(RSC_MAPBUFFER))
++            useShadowBuffer = true;
++#endif
+         // Calculate the size of the indexes
+         auto indexSize = HardwareIndexBuffer::indexSize(itype);
+         auto impl = new GL3PlusHardwareBuffer(GL_ELEMENT_ARRAY_BUFFER, indexSize * numIndexes, usage, useShadowBuffer);
+diff --git a/RenderSystems/GL3Plus/src/gl3w.c b/RenderSystems/GL3Plus/src/gl3w.c
+index 66401e70e..065eecad4 100644
+--- a/RenderSystems/GL3Plus/src/gl3w.c
++++ b/RenderSystems/GL3Plus/src/gl3w.c
+@@ -81,6 +81,18 @@ static GL3WglProc get_proc(const char *proc)
+     *(void **)(&res) = dlsym(libgl, proc);
+ 	return res;
+ }
++#elif defined(__SWITCH__)
++/* Nintendo Switch: no dynamic loader and no libGL.so; switch-mesa is linked
++   statically and hands out every entry point through EGL. */
++#include <EGL/egl.h>
++
++static void open_libgl(void) {}
++static void close_libgl(void) {}
++
++static GL3WglProc get_proc(const char *proc)
++{
++	return (GL3WglProc)eglGetProcAddress(proc);
++}
+ #else
+ #include <dlfcn.h>
+ 

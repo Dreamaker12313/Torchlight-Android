@@ -1,0 +1,108 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseVortexAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseVortexAffector.cpp
+index 1f7159d..a355bbc 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseVortexAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseVortexAffector.cpp
+@@ -31,11 +31,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`VortexAffector::_GLOBAL__I_VortexAffector`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Vector3 VortexAffector::DEFAULT_ROTATION_VECTOR(0, 0, 0);
+ 	const Real VortexAffector::DEFAULT_ROTATION_SPEED = 1.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::VortexAffector`: the same as the library's (speed fixed 1).
+ 	VortexAffector::VortexAffector(void) : 
+ 		ParticleAffector(),
+ 		mRotation(Quaternion::IDENTITY),
+@@ -45,6 +48,7 @@ namespace ParticleUniverse
+ 		(static_cast<DynamicAttributeFixed*>(mDynRotationSpeed))->setValue(DEFAULT_ROTATION_SPEED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::~VortexAffector`: the same as the library's.
+ 	VortexAffector::~VortexAffector(void)
+ 	{
+ 		if (mDynRotationSpeed)
+@@ -54,21 +58,25 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::getRotationVector`: the same as the library's.
+ 	const Vector3& VortexAffector::getRotationVector(void) const
+ 	{
+ 		return mRotationVector;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::setRotationVector`: the same as the library's (stored as given, not normalised).
+ 	void VortexAffector::setRotationVector(const Vector3& rotationVector)
+ 	{
+ 		mRotationVector = rotationVector;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::getRotationSpeed`: the same as the library's.
+ 	DynamicAttribute* VortexAffector::getRotationSpeed(void) const
+ 	{
+ 		return mDynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::setRotationSpeed`: the same as the library's.
+ 	void VortexAffector::setRotationSpeed(DynamicAttribute* dynRotationSpeed)
+ 	{
+ 		if (mDynRotationSpeed)
+@@ -77,23 +85,20 @@ namespace ParticleUniverse
+ 		mDynRotationSpeed = dynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::_preProcessParticles`. The turn is about the authored
++	// vector as it stands - not turned by the system's orientation, and not normalised.
+ 	void VortexAffector::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		ParticleSystem* sys = mParentTechnique->getParentSystem();
+-		if (sys)
+-		{
+-			mRotation.FromAngleAxis(Radian(_calculateRotationSpeed() * timeElapsed), sys->getDerivedOrientation() * mRotationVector);
+-		}
+-		else
+-		{
+-			mRotation.FromAngleAxis(Radian(_calculateRotationSpeed() * timeElapsed), mRotationVector);
+-		}
++		mRotation.FromAngleAxis(Radian(_calculateRotationSpeed() * timeElapsed), mRotationVector);
+ 		getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	Radian VortexAffector::_calculateRotationSpeed(void)
+ 	{
+-		return Radian(mDynamicAttributeHelper.calculate(mDynRotationSpeed, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart()));
++		// Torchlight: `VortexAffector::_calculateRotationSpeed`: at the system's age,
++		// with no particle, in radians a second.
++		return Radian(mDynamicAttributeHelper.calculate(0, mDynRotationSpeed,
++			mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), 0.0f));
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void VortexAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+@@ -102,10 +107,11 @@ namespace ParticleUniverse
+ 		if (particle->isFreezed())
+ 			return;
+ 
+-		// Rotate position, direction and orientation (visible particle only) and compensate for the affector position
+-		// Also take the affect specialisation into account
+-		Vector3 local = particle->position - mDerivedPosition;
+-		particle->position = mDerivedPosition + mRotation * local;
++		// Torchlight: `VortexAffector::_affect`. A keep-local technique's particles
++		// turn about the affector's own position, the others about its derived one.
++		const Vector3& centre = particleTechnique->isKeepLocal() ? position : mDerivedPosition;
++		Vector3 local = particle->position - centre;
++		particle->position = centre + mRotation * local;
+ 		particle->direction = mRotation * particle->direction;
+ 
+ 		if (particle->particleType == Particle::PT_VISUAL)
+@@ -115,6 +121,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VortexAffector::copyAttributesTo`: the same as the library's.
+ 	void VortexAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);

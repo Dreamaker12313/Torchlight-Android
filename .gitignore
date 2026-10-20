@@ -1,0 +1,90 @@
+# Game assets are never committed. You supply your own copy of Torchlight and
+# the engine reads it at runtime. Extensions are blocked by pattern so that an
+# accidental `git add -A` cannot stage game data from anywhere in the tree.
+game_data/*
+torchlight-*/
+console_ui/
+save/
+**/MEDIA/
+**/media/
+
+*.pak
+*.PAK
+*.zip
+*.mesh
+*.MESH
+*.skeleton
+*.SKELETON
+*.material
+*.dat
+*.DAT
+*.raw
+*.adm
+*.ADM
+*.cmp
+*.CMP
+*.layout
+*.LAYOUT
+*.animation
+*.dds
+*.DDS
+*.tga
+*.imageset
+*.looknfeel
+*.scheme
+*.ogg
+*.wav
+*.mp3
+
+# Rendered frames are game content too (--dump-frame writes PNGs to the root).
+*.png
+*.jpg
+*.jpeg
+*.psd
+!docs/**/*.png
+# Torchlight's logos (from SteamGridDB), kept by exception: the README's and
+# the game's icon (logo.jpg, and the 256x256 logo_icon.jpg made from it).
+!src/logo_wide.png
+!src/logo.jpg
+!src/logo_icon.jpg
+
+# Fetched, not committed: stb_vorbis.c (scripts/fetch_stb.py)
+external/stb/
+
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+pgo/
+
+*.nro
+*.nso
+*.nacp
+*.elf
+*.nsp
+*.kip
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.lib
+*.exe
+*.apk
+*.apk.idsig
+*.keystore
+
+# Logs, local state, editors
+logs/
+*.log
+shadercache.bin
+shadercache.bin.part
+__pycache__/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

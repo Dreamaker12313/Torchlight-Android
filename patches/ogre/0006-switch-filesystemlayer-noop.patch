@@ -1,0 +1,16 @@
+diff --git a/OgreMain/CMakeLists.txt b/OgreMain/CMakeLists.txt
+index 483f9f3..7b1c9bc 100644
+--- a/OgreMain/CMakeLists.txt
++++ b/OgreMain/CMakeLists.txt
+@@ -40,7 +40,10 @@ list(REMOVE_ITEM SOURCE_FILES
+ )
+ 
+ # Add platform specific files
+-if (EMSCRIPTEN)
++# Nintendo Switch has no config-file search paths and no bundle layout; plugins
++# are installed programmatically, so the no-op layer is the correct choice here
++# for the same reasons it is on Emscripten.
++if (EMSCRIPTEN OR NINTENDO_SWITCH)
+   set(PLATFORM_SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/OgreFileSystemLayerNoOp.cpp")
+ elseif (WIN32)
+   file(GLOB PLATFORM_SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/WIN32/*.cpp")

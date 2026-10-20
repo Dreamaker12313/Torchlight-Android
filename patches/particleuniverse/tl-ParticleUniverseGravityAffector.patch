@@ -1,0 +1,82 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffector.h
+index 6b76de6..d081d43 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffector.h
+@@ -40,6 +40,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_GRAVITY;
+ 			
+ 			GravityAffector(void);
++	        // Torchlight: `GravityAffector::~GravityAffector`: the same as the library's.
+ 	        virtual ~GravityAffector(void) {};
+ 
+ 			/** @copydoc ParticleAffector::copyAttributesTo */
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGravityAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGravityAffector.cpp
+index cc862fd..3a4b460 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGravityAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGravityAffector.cpp
+@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`GravityAffector::_GLOBAL__I_copyAttributesTo`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Real GravityAffector::DEFAULT_GRAVITY = 1.0f;
+ 
+@@ -41,6 +43,7 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GravityAffector::copyAttributesTo`: the same as the library's.
+ 	void GravityAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);
+@@ -51,34 +54,35 @@ namespace ParticleUniverse
+ 	//-----------------------------------------------------------------------
+ 	void GravityAffector::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Calculate the affectors' position so it is also safe to use mDerivedPosition.
++		// Checked against Torchlight's `GravityAffector::_preProcessParticles`, which is
++		// `ParticleAffector::getDerivedPosition` inline.
+ 		getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	inline void GravityAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		 // Applied scaling in V1.3.1
+-		/** Applying Newton's law of universal gravitation.	*/
+-		Vector3 distance = mDerivedPosition - particle->position;
++		// Torchlight: `GravityAffector::_affect`. A keep-local technique's particles are
++		// pulled to the affector's own position, the others to its derived one; the system's
++		// velocity scale is not applied.
++		Vector3 distance = (particleTechnique->isKeepLocal() ? position : mDerivedPosition) - particle->position;
+ 		Real length = distance.squaredLength();
+-		Real scaleVelocity = 1.0f;
+-		if (mParentTechnique)
++		if (length > 0)
+ 		{
+-			scaleVelocity = mParentTechnique->getParticleSystemScaleVelocity();
+-		}
+-		if (length > 0 && mParentTechnique)
+-		{
+-			//Real force = (mGravity * particle->mass * mass) / length;
+-			Real force = (scaleVelocity * mGravity * particle->mass * mass) / length;
+-			particle->direction += force * distance * timeElapsed * _calculateAffectSpecialisationFactor(particle);
++			Real force = (mGravity * particle->mass * mass) / length;
++			Real factor = _calculateAffectSpecialisationFactor(particle);
++			particle->direction.x = distance.x * force * timeElapsed * factor + particle->direction.x;
++			particle->direction.y = distance.y * force * timeElapsed * factor + particle->direction.y;
++			particle->direction.z = distance.z * force * timeElapsed * factor + particle->direction.z;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GravityAffector::getGravity`: the same as the library's.
+ 	Real GravityAffector::getGravity(void) const
+ 	{
+ 		return mGravity;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GravityAffector::setGravity`: the same as the library's.
+ 	void GravityAffector::setGravity(Real gravity)
+ 	{
+ 		mGravity = gravity;

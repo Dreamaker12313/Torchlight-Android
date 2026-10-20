@@ -1,0 +1,347 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseParticlePool.h b/Plugins/ParticleUniverse/include/ParticleUniverseParticlePool.h
+index b1a755b..6c2a606 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseParticlePool.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseParticlePool.h
+@@ -105,6 +105,10 @@ namespace ParticleUniverse
+ 		    */
+ 			void destroyParticles(const Particle::ParticleType particleType);
+ 			void destroyAllVisualParticles(void);
++
++			/** Torchlight: give the visual particles back to the manager's store.
++		    */
++			void freeParticlePool(void);
+ 			void destroyAllEmitterParticles(void);
+ 			void destroyAllTechniqueParticles(void);
+ 			void destroyAllAffectorParticles(void);
+@@ -158,6 +162,11 @@ namespace ParticleUniverse
+ 
+ 			/** 
+ 		    */
++			/** The port's accessor for `ParticleTechnique::getParticlesCreated`, which reads
++				this list's size (pool +0x228) inline: the visual particles taken from the store.
++		    */
++			size_t _getNumberOfVisualParticlesTaken(void) const {return mVisualParticles.size();}
++
+ 			Pool<VisualParticle>::PoolList& getVisualParticlesList(void)
+ 			{
+ 				return mVisualParticlesPool.getActiveElementsList();
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseParticlePool.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseParticlePool.cpp
+index 7de7e86..807fc2d 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseParticlePool.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseParticlePool.cpp
+@@ -35,6 +35,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ namespace ParticleUniverse
+ {
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::~ParticlePool`: the library's order,
++	// the visual particles going back to the manager's store first (`freeParticlePool`).
+ 	ParticlePool::~ParticlePool (void)
+ 	{
+ 		// Destroy all visual particles
+@@ -79,15 +81,27 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// The visual particles belong to the manager's store (Torchlight), so they go back to it, as
++	// `freeParticlePool` does. DIVERGENCE: once the manager is gone they are deleted instead (the
++	// original always hands them to the manager).
+ 	void ParticlePool::destroyAllVisualParticles(void)
+ 	{
+-		vector<VisualParticle*>::iterator it;
+-		for (it = mVisualParticles.begin(); it != mVisualParticles.end(); ++it)
++		ParticleSystemManager* manager = ParticleSystemManager::getSingletonPtr();
++		if (manager)
+ 		{
+-			PU_DELETE_T(*it, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
++			manager->_FreePoolOfParticles(mVisualParticles);
++		}
++		else
++		{
++			vector<VisualParticle*>::iterator it;
++			for (it = mVisualParticles.begin(); it != mVisualParticles.end(); ++it)
++			{
++				PU_DELETE_T(*it, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
++			}
+ 		}
+ 		mVisualParticles.clear();
+ 		mVisualParticlesPool.clear();
++		mLatestParticle = 0;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticlePool::destroyAllEmitterParticles(void)
+@@ -140,11 +154,13 @@ namespace ParticleUniverse
+ 		mParticleSystemPool.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::setParentTechnique`: the same as the library's.
+ 	void ParticlePool::setParentTechnique(ParticleTechnique* parentTechnique)
+ 	{
+ 		mParentTechnique = parentTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::isEmpty`: the same as the library's.
+ 	bool ParticlePool::isEmpty(void)
+ 	{
+ 		return mVisualParticlesPool.isEmpty() && 
+@@ -154,6 +170,7 @@ namespace ParticleUniverse
+ 			mParticleSystemPool.isEmpty();
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::isEmpty`: the same as the library's.
+ 	bool ParticlePool::isEmpty(const Particle::ParticleType particleType)
+ 	{
+ 		switch(particleType)
+@@ -182,6 +199,7 @@ namespace ParticleUniverse
+ 		return true;
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getSize`: the same as the library's.
+ 	size_t ParticlePool::getSize(void)
+ 	{
+ 		return mVisualParticlesPool.getSize() + 
+@@ -191,6 +209,7 @@ namespace ParticleUniverse
+ 			mParticleSystemPool.getSize();
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getSize`: the same as the library's.
+ 	size_t ParticlePool::getSize(const Particle::ParticleType particleType)
+ 	{
+ 		switch(particleType)
+@@ -219,30 +238,31 @@ namespace ParticleUniverse
+ 		return 0;
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::_increaseVisualParticlePool`. `size` is how many
++	// more, not the new total, and they come from the manager's store.
+ 	void ParticlePool::_increaseVisualParticlePool(size_t size, 
+ 		Particle::ParticleBehaviourList& behaviours)
+ 	{
+-		size_t oldSize = mVisualParticles.size();
+-		if (size < oldSize)
+-			return;
+-
+-		// Create new visual particles
+-		VisualParticle* particle = 0;
+-		for (size_t i = oldSize; i < size; i++)
+-		{
+-			particle = PU_NEW_T(VisualParticle, MEMCATEGORY_SCENE_OBJECTS)();
+-			particle->copyBehaviours(behaviours);
+-			mVisualParticlesPool.addElement(particle);
+-			mVisualParticles.push_back(particle);
+-		}
++		ParticleSystemManager::getSingletonPtr()->_FillPoolOfParticles(mVisualParticles, mVisualParticlesPool,
++			behaviours, (unsigned int)size);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::freeParticlePool`.
++	void ParticlePool::freeParticlePool(void)
++	{
++		ParticleSystemManager::getSingletonPtr()->_FreePoolOfParticles(mVisualParticles);
++		mVisualParticlesPool.clear();
++		mLatestParticle = 0;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::_increaseParticleEmitterPool`: the check and the count differ (below).
+ 	void ParticlePool::_increaseParticleEmitterPool(size_t size, 
+ 		Particle::ParticleBehaviourList& behaviours, 
+ 		ParticleTechnique* technique)
+ 	{
+-		size_t oldSize = mEmitters.size();
+-		if (size < oldSize)
++		// Torchlight: the pool's released count (getSize) is what is checked, and each emitted
++		// emitter adds `size / n` more, whatever is already there (the library adds up to `size`).
++		if (mParticleEmitterPool.getSize() > size)
+ 			return;
+ 
+ 		// Create new emitters, based on the already created emitters in the technique and which are marked for emission.
+@@ -255,7 +275,7 @@ namespace ParticleUniverse
+ 		size_t numEmitters = technique->getNumEmitters();
+ 
+ 		// Distribute size equally
+-		size_t increment = (size-oldSize) / numberOfEmittedEmitters;
++		size_t increment = size / numberOfEmittedEmitters;
+ 
+ 		// Run through emitters of the technique
+ 		for (size_t emitterCount = 0; emitterCount < numEmitters; emitterCount++)
+@@ -281,12 +301,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::_increaseParticleTechniquePool`: the check and the count differ (below).
+ 	void ParticlePool::_increaseParticleTechniquePool(size_t size, 
+ 		Particle::ParticleBehaviourList& behaviours, 
+ 		ParticleSystem* system)
+ 	{
+-		size_t oldSize = mTechniques.size();
+-		if (size < oldSize)
++		// Torchlight: the pool's released count (getSize) is what is checked, and each emitted
++		// technique adds `size / n` more, whatever is already there (the library adds up to `size`).
++		if (mParticleTechniquePool.getSize() > size)
+ 			return;
+ 
+ 		// Create new techniques, based on the techniques in the particle system and which are marked for emission.
+@@ -299,7 +321,7 @@ namespace ParticleUniverse
+ 		size_t numTechniques = system->getNumTechniques();
+ 
+ 		// Distribute size equally
+-		size_t increment = (size-oldSize) / numberOfEmittedTechniques;
++		size_t increment = size / numberOfEmittedTechniques;
+ 
+ 		// Run through techniques of the system
+ 		for (size_t techniqueCount = 0; techniqueCount < numTechniques; techniqueCount++)
+@@ -326,12 +348,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::_increaseParticleAffectorPool`: the check and the count differ (below).
+ 	void ParticlePool::_increaseParticleAffectorPool(size_t size, 
+ 		Particle::ParticleBehaviourList& behaviours, 
+ 		ParticleTechnique* technique)
+ 	{
+-		size_t oldSize = mAffectors.size();
+-		if (size < oldSize)
++		// Torchlight: the pool's released count (getSize) is what is checked, and each emitted
++		// affector adds `size / n` more, whatever is already there (the library adds up to `size`).
++		if (mParticleAffectorPool.getSize() > size)
+ 			return;
+ 
+ 		// Create new affectors, based on the already created affectors in the technique and which are marked for emission.
+@@ -344,7 +368,7 @@ namespace ParticleUniverse
+ 		size_t numAffectors = technique->getNumAffectors();
+ 
+ 		// Distribute size equally
+-		size_t increment = (size-oldSize) / numberOfEmittedAffectors;
++		size_t increment = size / numberOfEmittedAffectors;
+ 
+ 		// Run through affectors of the technique
+ 		for (size_t affectorCount = 0; affectorCount < numAffectors; affectorCount++)
+@@ -370,12 +394,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::_increaseParticleSystemPool`: the check and the count differ (below); the rest is the library's.
+ 	void ParticlePool::_increaseParticleSystemPool(size_t size, 
+ 		Particle::ParticleBehaviourList& behaviours, 
+ 		ParticleTechnique* technique)
+ 	{
+-		size_t oldSize = mSystems.size();
+-		if (size < oldSize)
++		// Torchlight: the pool's released count (getSize) is what is checked, and each emitted
++		// system adds `size / n` more, whatever is already there (the library adds up to `size`).
++		if (mParticleSystemPool.getSize() > size)
+ 			return;
+ 
+ 		// Run through all emitters in the technique and check which one emits a particle system
+@@ -403,7 +429,7 @@ namespace ParticleUniverse
+ 			return;
+ 
+ 		// Distribute size equally
+-		size_t increment = (size-oldSize) / numberOfEmittedSystems;
++		size_t increment = size / numberOfEmittedSystems;
+ 
+ 		// Fill the pool
+ 		for (systemCount = 0; systemCount < numberOfEmitters; systemCount++)
+@@ -438,6 +464,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::initialisePool`: the same as the library's.
+ 	void ParticlePool::initialisePool(void)
+ 	{
+ 		// Not sure what to do here.
+@@ -470,9 +497,12 @@ namespace ParticleUniverse
+ 				_increaseParticleSystemPool(size, behaviours, technique);
+ 				break;
+ 		}
++		// Torchlight: `ParticlePool::increasePool` also forgets the latest particle.
++		mLatestParticle = 0;
+ 		resetIterator();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::releaseParticle`: the same as the library's.
+ 	Particle* ParticlePool::releaseParticle (const Particle::ParticleType particleType, const String& name)
+ 	{
+ 		switch(particleType)
+@@ -501,8 +531,10 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::releaseAllParticles`: the visual particles go back to the manager's store first (`freeParticlePool`), then the library's. Nothing calls it.
+ 	void ParticlePool::releaseAllParticles (void)
+ 	{
++		freeParticlePool();
+ 		mVisualParticlesPool.releaseAllElements();
+ 		mParticleEmitterPool.releaseAllElements();
+ 		mParticleTechniquePool.releaseAllElements();
+@@ -511,6 +543,7 @@ namespace ParticleUniverse
+ 		resetIterator();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::lockLatestParticle`: the library's, with Torchlight's lockLatestElement (ParticleUniversePool.h, ParticleUniversePoolMap.h).
+ 	void ParticlePool::lockLatestParticle (void)
+ 	{
+ 		if (mLatestParticle)
+@@ -540,6 +573,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::lockAllParticles`: the same as the library's.
+ 	void ParticlePool::lockAllParticles (void)
+ 	{
+ 		mVisualParticlesPool.lockAllElements();
+@@ -550,6 +584,7 @@ namespace ParticleUniverse
+ 		resetIterator();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::resetIterator`: the same as the library's.
+ 	void ParticlePool::resetIterator(void)
+ 	{
+ 		mVisualParticlesPool.resetIterator();
+@@ -560,6 +595,7 @@ namespace ParticleUniverse
+ 		mLatestParticle = 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getFirst`: the same as the library's.
+ 	Particle* ParticlePool::getFirst(void)
+ 	{
+ 		resetIterator();
+@@ -588,6 +624,7 @@ namespace ParticleUniverse
+ 		return mLatestParticle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getNext`: the same as the library's.
+ 	Particle* ParticlePool::getNext(void)
+ 	{
+ 		// The getFirst() function must be called first, to get the first element.
+@@ -684,6 +721,7 @@ namespace ParticleUniverse
+ 		return mLatestParticle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getFirst`: the same as the library's.
+ 	Particle* ParticlePool::getFirst(const Particle::ParticleType particleType)
+ 	{
+ 		resetIterator();
+@@ -713,6 +751,7 @@ namespace ParticleUniverse
+ 		return mLatestParticle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::getNext`: the same as the library's.
+ 	Particle* ParticlePool::getNext(const Particle::ParticleType particleType)
+ 	{
+ 		mLatestParticle = 0;
+@@ -742,6 +781,7 @@ namespace ParticleUniverse
+ 		return mLatestParticle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::end`: the same as the library's.
+ 	bool ParticlePool::end(void)
+ 	{
+ 		return mVisualParticlesPool.end() && 
+@@ -751,6 +791,7 @@ namespace ParticleUniverse
+ 			mParticleSystemPool.end();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticlePool::end`: the same as the library's.
+ 	bool ParticlePool::end(const Particle::ParticleType particleType)
+ 	{
+ 		switch (particleType)

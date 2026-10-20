@@ -1,0 +1,175 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRenderer.h
+index 1557346..ba8bca1 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRenderer.h
+@@ -45,9 +45,6 @@ namespace ParticleUniverse
+ 			/** @copydoc ParticleRenderer::_prepare */
+ 			virtual void _prepare(ParticleTechnique* technique);
+ 
+-			/** @copydoc ParticleRenderer::_unprepare */
+-			virtual void _unprepare(ParticleTechnique* technique);
+-
+ 			/** @copydoc ParticleRenderer::_updateRenderQueue */
+ 			virtual void _updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool);
+ 
+@@ -75,7 +72,8 @@ namespace ParticleUniverse
+ 			/** @copydoc ParticleRenderer::setRenderQueueGroup */
+ 			virtual void setRenderQueueGroup(uint8 queueId);
+ 
+-			/** @copydoc ParticleRenderer::_getSortMode */
++			/** @copydoc ParticleRenderer::_getSortMode
++				Torchlight: `SphereRenderer::_getSortMode`, 1 (distance). */
+ 			virtual SortMode _getSortMode(void) const {return SM_DISTANCE;};
+ 
+ 			/** @copydoc ParticleRenderer::copyAttributesTo */
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereRenderer.cpp
+index e2dc3f7..8dc71ef 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereRenderer.cpp
+@@ -32,7 +32,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`SphereRenderer::_GLOBAL__I_SphereRenderer`)
++	// sets only HALFSCALE, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::SphereRenderer` makes the set with no name, no
++	// pool and external data, and puts its spheres in world space. (`autoRotate` is the
++	// library's field; Torchlight's renderer has none to write.)
+ 	SphereRenderer::SphereRenderer(void) : ParticleRenderer()
+ 	{
+ 		// Create sphere set
+@@ -44,6 +49,8 @@ namespace ParticleUniverse
+ 		autoRotate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::~SphereRenderer`,
++	// the library's: deletes the set.
+ 	SphereRenderer::~SphereRenderer(void)
+ 	{
+ 		if (mSphereSet)
+@@ -53,14 +60,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_prepare`. The library's, less its
++	// `setQueryFlags(0)`: Torchlight's set keeps OGRE's default query flags.
+ 	void SphereRenderer::_prepare(ParticleTechnique* technique)
+ 	{
+ 		// Use the given technique, although it should be the same as mParentTechnique (must be set already)
+ 		if (!technique || mRendererInitialised)
+ 			return;
+ 
+-		// By default, make this transparent to query requests
+-		mSphereSet->setQueryFlags(0);
+ 		_notifyParticleQuota(technique->getVisualParticleQuota());
+ 
+ 		// Notify attached, but only if the parentnode exists
+@@ -77,26 +84,20 @@ namespace ParticleUniverse
+ 		mRendererInitialised = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void SphereRenderer::_unprepare(ParticleTechnique* technique)
+-	{
+-		_notifyAttached(0); // Bugfix V1.5: If detached from scenenode, do not use the pointer to it
+-	}
+-	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_updateRenderQueue`. Unlike the library's, no
++	// base call (its only work is soft particles) and no test of the renderer's visible
++	// flag; the set's buffers are locked whole (`beginSpheres(0)`), and each sphere stands at
++	// the particle's position plus Torchlight's third particle vector (+0x28), as the
++	// billboard and entity renderers place theirs.
+ 	void SphereRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
+ 	{
+-		// Always perform this one
+-		ParticleRenderer::_updateRenderQueue(queue, pool);
+-
+-		if (!mVisible)
+-			return;
+-
+ 		// Fast check to determine whether there are visual particles
+ 		if (pool->isEmpty(Particle::PT_VISUAL))
+ 			return;
+ 
+ 		mSphereSet->setCullIndividually(mCullIndividual);
+ 
+-		mSphereSet->beginSpheres(pool->getSize(Particle::PT_VISUAL));
++		mSphereSet->beginSpheres(0);
+ 		Sphere sphere;
+ 		
+ 		VisualParticle* particle = static_cast<VisualParticle*>(pool->getFirst(Particle::PT_VISUAL));
+@@ -114,7 +115,7 @@ namespace ParticleUniverse
+ 		{
+ 			if (particle)
+ 			{
+-				sphere.mPosition = particle->position;
++				sphere.mPosition = particle->position + particle->torchlightVector28;
+ 				sphere.mColour = particle->colour;
+ 				sphere.mOrientation = particle->orientation;
+ 
+@@ -136,41 +137,49 @@ namespace ParticleUniverse
+ 		mSphereSet->_updateRenderQueue(queue);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_notifyAttached`, the library's: forwards to the set.
+ 	void SphereRenderer::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+ 		mSphereSet->_notifyAttached(parent, isTagPoint);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_setMaterialName`, the library's: forwards to the set.
+ 	void SphereRenderer::_setMaterialName(const String& materialName)
+ 	{
+ 		mSphereSet->setMaterialName(materialName);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::notifyCurrentCamera`, the library's: forwards to the set.
+ 	void SphereRenderer::_notifyCurrentCamera(Camera* cam)
+ 	{
+ 		mSphereSet->_notifyCurrentCamera(cam);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_notifyParticleQuota`, the library's: the set's pool.
+ 	void SphereRenderer::_notifyParticleQuota(size_t quota)
+ 	{
+ 		mSphereSet->setPoolSize(static_cast<unsigned int>(quota));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_notifyDefaultDimensions`, the library's: half the width is the default radius.
+ 	void SphereRenderer::_notifyDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+ 		mSphereSet->setDefaultRadius(0.5f * width);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_notifyParticleResized`, the library's: forwards to the set.
+ 	void SphereRenderer::_notifyParticleResized(void)
+ 	{	
+ 		mSphereSet->_notifyResized();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::_notifyParticleZRotated`, the library's: forwards to the set.
+ 	void SphereRenderer::_notifyParticleZRotated(void)
+ 	{
+ 		mSphereSet->_notifyZRotated();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::setRenderQueueGroup`, the library's: stored and forwarded.
+ 	void SphereRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
+ 		mQueueId = queueId;
+@@ -180,12 +189,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::setVisible` only hides or shows the set; the
++	// renderer's own flag is not written (and `_updateRenderQueue` reads neither).
+ 	void SphereRenderer::setVisible(bool visible)
+ 	{
+-		ParticleRenderer::setVisible(visible);
+ 		mSphereSet->setVisible(visible);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereRenderer::copyAttributesTo`, the library's: the base's attributes only.
+ 	void SphereRenderer::copyAttributesTo (ParticleRenderer* renderer)
+ 	{
+ 		// First copy parent attributes

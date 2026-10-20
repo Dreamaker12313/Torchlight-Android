@@ -1,0 +1,18 @@
+diff --git a/RenderSystems/GLSupport/include/EGL/OgreEGLSupport.h b/RenderSystems/GLSupport/include/EGL/OgreEGLSupport.h
+index 5919e5b..d95c4f1 100644
+--- a/RenderSystems/GLSupport/include/EGL/OgreEGLSupport.h
++++ b/RenderSystems/GLSupport/include/EGL/OgreEGLSupport.h
+@@ -30,7 +30,12 @@ THE SOFTWARE.
+ #ifndef __EGLSupport_H__
+ #define __EGLSupport_H__
+ 
+-#ifndef OGRE_WAYLAND
++#if defined(__SWITCH__)
++// Nintendo Switch: switch-mesa's eglplatform.h has its own __SWITCH__ branch,
++// but it is tested after USE_X11/__unix__. Declaring either here steers it into
++// the X11 path and it tries to include <X11/Xlib.h>, which does not exist.
++// Define neither and let mesa select the Switch types itself.
++#elif !defined(OGRE_WAYLAND)
+ // Tell EGL that we are using X11 (to select the appropriate definitions)
+ #define USE_X11
+ #else

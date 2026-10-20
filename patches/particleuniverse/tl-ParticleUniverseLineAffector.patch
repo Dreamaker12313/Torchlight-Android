@@ -1,0 +1,169 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp
+index a4fa625..79b47f3 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp
+@@ -31,14 +31,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`LineAffector::_GLOBAL__I_getMaxDeviation`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
++	// Checked against Torchlight's `LineAffectorFactory::createAffector`: deviation 1
++	// (scaled 1), the end at the origin, step 0.1, no drift, and both flags set - the library's.
+ 	const Real LineAffector::DEFAULT_MAX_DEVIATION = 1.0f;
+ 	const Real LineAffector::DEFAULT_TIME_STEP = 0.1f;
+ 	const Vector3 LineAffector::DEFAULT_END(0, 0, 0);
+ 	const Real LineAffector::DEFAULT_DRIFT = 0.0f;
+ 
+ 	//-----------------------------------------------------------------------
+-	LineAffector::LineAffector(void) : 
++	LineAffector::LineAffector(void) :
+ 		ParticleAffector(),
+ 		mMaxDeviation(DEFAULT_MAX_DEVIATION),
+ 		_mScaledMaxDeviation(1.0f),
+@@ -52,107 +56,123 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::getMaxDeviation`: the same as the library's.
+ 	Real LineAffector::getMaxDeviation(void) const
+ 	{
+ 		return mMaxDeviation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LineAffector::setMaxDeviation`: the deviation, and
++	// it times the length of the affector's scale.
+ 	void LineAffector::setMaxDeviation(Real maxDeviation)
+ 	{
+ 		mMaxDeviation = maxDeviation;
+ 		_mScaledMaxDeviation = mMaxDeviation * _mAffectorScale.length();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::getEnd`: the same as the library's.
+ 	const Vector3& LineAffector::getEnd(void) const
+ 	{
+ 		return mEnd;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::setEnd`: the same as the library's.
+ 	void LineAffector::setEnd(const Vector3& end)
+ 	{
+ 		mEnd = end;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::getTimeStep`: the same as the library's.
+ 	Real LineAffector::getTimeStep(void) const
+ 	{
+ 		return mTimeStep;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::setTimeStep`: a step of 0 is taken as 0.1 (the
++	// library keeps 0, and its `_preProcessParticles` would never leave its loop).
+ 	void LineAffector::setTimeStep(Real timeStep)
+ 	{
+-		mTimeStep = timeStep;
++		mTimeStep = timeStep == 0.0f ? 0.1f : timeStep;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::getDrift`: the same as the library's.
+ 	Real LineAffector::getDrift(void) const
+ 	{
+ 		return mDrift;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::setDrift`: the same as the library's.
+ 	void LineAffector::setDrift(Real drift)
+ 	{
+ 		mDrift = drift;
+ 		mOneMinusDrift = 1.0f - drift;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LineAffector::_notifyRescaled`: the same as the
++	// library's.
+ 	void LineAffector::_notifyRescaled(const Vector3& scale)
+ 	{
+ 		ParticleAffector::_notifyRescaled(scale);
+ 		_mScaledMaxDeviation = mMaxDeviation * scale.length();
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void LineAffector::_firstParticle(ParticleTechnique* particleTechnique, 
+-		Particle* particle, 
++	// Torchlight: `LineAffector::_firstParticle`: the same as the library's.
++	void LineAffector::_firstParticle(ParticleTechnique* particleTechnique,
++		Particle* particle,
+ 		Real timeElapsed)
+ 	{
+ 		// The first particle should stay on its place
+ 		mFirst = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::_preProcessParticles`: the clock and the update flag as
++	// the library's, but the end is not turned by the system's rotation (`rotationOffset`).
+ 	void LineAffector::_preProcessParticles(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		if (technique->getNumberOfEmittedParticles() > 0)
+ 		{
+-			mTimeSinceLastUpdate += timeElapsed;
+-			while (mTimeSinceLastUpdate > mTimeStep)
++			mTimeSinceLastUpdate = timeElapsed + mTimeSinceLastUpdate;
++			if (mTimeSinceLastUpdate > mTimeStep)
+ 			{
+-				mTimeSinceLastUpdate -= mTimeStep;
++				do
++				{
++					mTimeSinceLastUpdate -= mTimeStep;
++				} while (mTimeSinceLastUpdate > mTimeStep);
+ 				mUpdate = true;
+ 			}
+ 		}
+-		mParentTechnique->getParentSystem()->rotationOffset(mEnd); // Always update
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::_affect`. As the library's, but with no
++	// `rotationOffset` of the original or the new position, and the three draws of the random
++	// vector in the binary's order: the first is its z, the second its y, the third its x.
+ 	void LineAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		mParentTechnique->getParentSystem()->rotationOffset(particle->originalPosition); // Always update
+ 		if (mUpdate && Math::UnitRandom() > 0.5 && !mFirst)
+ 		{
+ 			// Generate a random vector perpendicular on the line
+-			Vector3 perpendicular = mEnd.crossProduct(Vector3(Math::RangeRandom(-1, 1), 
+-				Math::RangeRandom(-1, 1), 
+-				Math::RangeRandom(-1, 1)));
++			const Real randomZ = Math::RangeRandom(-1, 1);
++			const Real randomY = Math::RangeRandom(-1, 1);
++			const Real randomX = Math::RangeRandom(-1, 1);
++			Vector3 perpendicular = mEnd.crossProduct(Vector3(randomX, randomY, randomZ));
+ 			perpendicular.normalise();
+ 
+ 			// Determine a random point near the line.
+-			Vector3 targetPosition = particle->originalPosition + _mScaledMaxDeviation * Math::UnitRandom() * perpendicular;
+-
+-			/** Set the new position.
+-			@remarks
+-				This affector already takes rotational offset of the particle system into account. This means that there is no need
+-				to set the particle system to keep_local to 'true'. The reason is that this is a specialized affector that calculates
+-				a new particle position instead of a direction.
+-			*/
+-			particle->position = mDrift * targetPosition + mOneMinusDrift * particle->position;
+-			mParentTechnique->getParentSystem()->rotationOffset(particle->position);
++			const Real deviation = Math::UnitRandom() * _mScaledMaxDeviation;
++			Vector3 targetPosition = perpendicular * deviation + particle->originalPosition;
++			particle->position = particle->position * mOneMinusDrift + targetPosition * mDrift;
+ 		}
+ 		mFirst = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineAffector::_postProcessParticles`: the same as the library's.
+ 	void LineAffector::_postProcessParticles(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		mUpdate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LineAffector::copyAttributesTo`: the same as the
++	// library's.
+ 	void LineAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);

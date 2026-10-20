@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffectorFactory.h
+index cc30436..2e3ea7a 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseColourAffectorFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			ColourAffectorFactory(void) {};
++	        // Torchlight: `ColourAffectorFactory::~ColourAffectorFactory`: the same as the library's. Torchlight's factory also has `setupTokenDefinitions`, the older token parser's hook, which the library's translators below replace (script input only; the game never reads scripts).
+ 	        virtual ~ColourAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `ColourAffectorFactory::getAffectorType`: the same as the library's.
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Colour";
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `ColourAffectorFactory::createAffector`: the same as the library's (CAO_SET by default).
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<ColourAffector>();

@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffectorFactory.h
+index d7c68c2..4fd93b0 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGravityAffectorFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			GravityAffectorFactory(void){};
++	        // Torchlight: `GravityAffectorFactory::~GravityAffectorFactory`: the same as the library's. Torchlight's `setupTokenDefinitions` is the older token parser's hook, which the library's translators replace (script input only).
+ 	        virtual ~GravityAffectorFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `GravityAffectorFactory::getAffectorType`: the same as the library's.
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Gravity";
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `GravityAffectorFactory::createAffector`: the same as the library's (gravity 1).
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<GravityAffector>();

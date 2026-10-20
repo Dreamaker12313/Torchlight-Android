@@ -1,0 +1,24 @@
+diff --git a/OgreMain/src/OgreZip.cpp b/OgreMain/src/OgreZip.cpp
+index 80953cfb2..4b257897b 100644
+--- a/OgreMain/src/OgreZip.cpp
++++ b/OgreMain/src/OgreZip.cpp
+@@ -100,10 +100,19 @@ namespace {
+         OGRE_LOCK_AUTO_MUTEX;
+         if (!mZipFile)
+         {
++#ifdef __SWITCH__
++            // Reading the archive into a MemoryDataStream costs its full size
++            // in RAM before a single asset is touched. Torchlight's Pak.zip is
++            // 318 MB, which does not fit alongside OGRE and its GPU resources
++            // in the memory an applet gets. zip_open() reads entries from the
++            // file on demand instead, at the cost of SD-card seeks.
++            mZipFile = zip_open(mName.c_str(), 0, 'r');
++#else
+             if(!mBuffer)
+                 mBuffer.reset(new MemoryDataStream(_openFileStream(mName, std::ios::binary)));
+ 
+             mZipFile = zip_stream_open((const char*)mBuffer->getPtr(), mBuffer->size(), 0, 'r');
++#endif
+ 
+             // Cache names
+             int n = zip_entries_total(mZipFile);

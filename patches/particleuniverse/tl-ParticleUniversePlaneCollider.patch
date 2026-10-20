@@ -1,0 +1,287 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneCollider.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneCollider.h
+index 5ca5ba1..7a88b7f 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneCollider.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniversePlaneCollider.h
+@@ -39,6 +39,7 @@ namespace ParticleUniverse
+ 			static const Vector3 DEFAULT_NORMAL;
+ 
+ 			PlaneCollider(void);
++	        // Torchlight: `PlaneCollider::~PlaneCollider`: the same as the library's.
+ 	        virtual ~PlaneCollider(void){};
+ 
+ 			/** Returns the normal of the plane
+@@ -49,9 +50,11 @@ namespace ParticleUniverse
+ 			*/
+ 			void setNormal(const Vector3& normal);
+ 
+-			/** Notify that the Affector is rescaled.
++			/** Torchlight: the plane follows the affector's derived position every update
++				(`PlaneCollider::_preProcessParticles`). Torchlight's collider has no
++				`_notifyRescaled` of its own.
+ 	        */
+-			virtual void _notifyRescaled(const Vector3& scale);
++			virtual void _preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed);
+ 
+ 			/** 
+ 			*/
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniversePlaneCollider.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniversePlaneCollider.cpp
+index e658b84..0ec563e 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniversePlaneCollider.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniversePlaneCollider.cpp
+@@ -28,59 +28,81 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleAffectors/ParticleUniversePlaneCollider.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`PlaneCollider::_GLOBAL__I_getNormal`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
+ 	const Vector3 PlaneCollider::DEFAULT_NORMAL(0, 0, 0);
+ 
+ 	//-----------------------------------------------------------------------
+-	PlaneCollider::PlaneCollider(void) : 
++	// Checked against Torchlight's `PlaneColliderFactory::createAffector`: the normal and
++	// the predicted position zero, a default plane.
++	PlaneCollider::PlaneCollider(void) :
+ 		BaseCollider(),
+ 		mPredictedPosition(Vector3::ZERO),
+ 		mNormal(DEFAULT_NORMAL)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `PlaneCollider::getNormal`.
+ 	const Vector3 PlaneCollider::getNormal(void) const
+ 	{
+ 		return mNormal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `PlaneCollider::setNormal`: the plane redefined through
++	// the derived position.
+ 	void PlaneCollider::setNormal(const Vector3& normal)
+ 	{
+ 		mNormal = normal;
+-		mPlane.redefine(mNormal, getDerivedPosition()); // Changed in 1.3.1
++		mPlane.redefine(mNormal, getDerivedPosition());
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void PlaneCollider::_notifyRescaled(const Vector3& scale)
++	// Torchlight: `PlaneCollider::_preProcessParticles`. The plane is redefined through the
++	// derived position before every update; the library's base (a velocity scale) is not called.
++	void PlaneCollider::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Function added in 1.3.1
+-		ParticleAffector::_notifyRescaled(scale);
+ 		mPlane.redefine(mNormal, getDerivedPosition());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PlaneCollider::_affect`. Different from the library's:
++	// - the prediction is the particle one frame on, position + dt x direction (no velocity scale);
++	// - `Fast` (point) tests only a particle heading into the plane (normal . direction < 0), and one
++	//   already on or behind it is put back on the plane (minus its distance along the normal), where
++	//   the library steps it back by its velocity;
++	// - on a collision of any type but `Stop` the particle's original direction is cleared, so a Jet
++	//   no longer restores it.
+ 	void PlaneCollider::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		mPredictedPosition = particle->position + mVelocityScale * particle->direction;
++		mPredictedPosition.x = timeElapsed * particle->direction.x + particle->position.x;
++		mPredictedPosition.y = timeElapsed * particle->direction.y + particle->position.y;
++		mPredictedPosition.z = timeElapsed * particle->direction.z + particle->position.z;
+ 		bool collision = false;
+ 
+ 		switch(mIntersectionType)
+ 		{
+ 			case BaseCollider::IT_POINT:
+ 			{
+-				// Validate for a point-plane intersection (on the plane or the back side)
+-				// First determine whether it is now colliding (some affector made the particle move), else
+-				// determine whether it WILL be colliding
+-				if (mPlane.getDistance(particle->position) <= 0.0f)
++				Real heading = mPlane.normal.x * particle->direction.x +
++					mPlane.normal.y * particle->direction.y +
++					mPlane.normal.z * particle->direction.z;
++				if (!(heading < 0.0f))
++					return;
++
++				Real distance = mPlane.getDistance(particle->position);
++				if (0.0f >= distance)
+ 				{
+-					// Collision detected (re-position the particle)
+-					particle->position -= mVelocityScale * particle->direction;
++					distance = mPlane.getDistance(particle->position);
++					particle->position.x -= distance * mPlane.normal.x;
++					particle->position.y -= mPlane.normal.y * distance;
++					particle->position.z -= mPlane.normal.z * distance;
+ 					collision = true;
+ 				}
+-				else if (mPlane.getDistance(mPredictedPosition) <= 0.0f)
++				else if (0.0f >= mPlane.getDistance(mPredictedPosition))
+ 				{
+-					// Collision detected
+ 					collision = true;
+ 				}
+ 			}
+@@ -88,81 +110,116 @@ namespace ParticleUniverse
+ 
+ 			case BaseCollider::IT_BOX:
+ 			{
+-				// Validate for a box-plane intersection
+ 				if (particle->particleType != Particle::PT_VISUAL)
+-					break;
++					return;
+ 
+ 				VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+ 				AxisAlignedBox box;
+ 				populateAlignedBox(box,
+-					visualParticle->position, 
+-					visualParticle->width, 
++					visualParticle->position,
++					visualParticle->width,
+ 					visualParticle->height,
+ 					visualParticle->depth);
+-				if (box.intersects(mPlane))
++				if (Math::intersects(mPlane, box))
+ 				{
+-					// Collision detected (re-position the particle)
+-					particle->position -= mVelocityScale * particle->direction;
++					particle->position.x -= timeElapsed * particle->direction.x;
++					particle->position.y -= timeElapsed * particle->direction.y;
++					particle->position.z -= timeElapsed * particle->direction.z;
+ 					collision = true;
+ 				}
+-				else 
++				else
+ 				{
+ 					populateAlignedBox(box,
+-						mPredictedPosition, 
+-						visualParticle->width, 
++						mPredictedPosition,
++						visualParticle->width,
+ 						visualParticle->height,
+ 						visualParticle->depth);
+-					if (box.intersects(mPlane))
+-					{
+-						// Collision detected
+-						collision = true;
+-					}
++					collision = Math::intersects(mPlane, box);
+ 				}
+ 			}
+ 			break;
+-		}
+ 
+-		if (collision)
+-		{
+-			calculateDirectionAfterCollision(particle, timeElapsed);
+-			calculateRotationSpeedAfterCollision(particle);
+-			particle->addEventFlags(Particle::PEF_COLLIDED);
++			default:
++				return;
+ 		}
++
++		if (!collision)
++			return;
++
++		if (mCollisionType != BaseCollider::CT_NONE)
++			particle->originalDirection = Vector3::ZERO;
++		calculateDirectionAfterCollision(particle, timeElapsed);
++		calculateRotationSpeedAfterCollision(particle);
++		particle->addEventFlags(Particle::PEF_COLLIDED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PlaneCollider::calculateDirectionAfterCollision`. Different from the
++	// library's:
++	// - `Bounce` normalises the direction as OGRE 1.6 did (only longer than 1e-08, compared in
++	//   double) and reflects it about the normal, then applies FRICTION: the speed loses
++	//   |(int)(normal . direction)| x speed x friction - the dot product truncated to an integer
++	//   (`cvttss2si`), a quirk kept, so only a head-on hit (|dot| = 1) slows it - and **a particle
++	//   slower than 1 after that stops dead** (direction and original direction cleared). Friction
++	//   0 skips both.
++	// - `Flow` moves the particle out along the normal by speed x dt, as the library.
++	// - `Stop` (the library's CT_NONE) changes nothing here.
+ 	void PlaneCollider::calculateDirectionAfterCollision(Particle* particle, Real timeElapsed)
+ 	{
+-		Real directionLength = particle->direction.length();
++		Real x = particle->direction.x;
++		Real y = particle->direction.y;
++		Real z = particle->direction.z;
++		Real directionLength = Math::Sqrt(x * x + y * y + z * z);
+ 		switch (mCollisionType)
+ 		{
+ 			case BaseCollider::CT_BOUNCE:
+ 			{
+-				/** If the particle is on the plane or at the back of the plane, bounce it.
+-					Make use of the same formula as the sphere collider.
+-				*/
+-				particle->direction.normalise();
+-				particle->direction = 2 * (-particle->direction.dotProduct(-mNormal)) * -mNormal + particle->direction;
+-
+-				// Adjust to original speed
+-				particle->direction *= directionLength;
+-
+-				// Accelerate/slow down, using the bounce value
++				if ((double)directionLength > 1e-08)
++				{
++					Real inverse = 1.0f / directionLength;
++					x = particle->direction.x * inverse;
++					y = particle->direction.y * inverse;
++					z = inverse * particle->direction.z;
++					particle->direction.x = x;
++					particle->direction.y = y;
++					particle->direction.z = z;
++				}
++				Real dot = mNormal.x * x + mNormal.y * y + mNormal.z * z;
++				if (mFriction != 0.0f)
++				{
++					int truncated = x86FloatToInt32(dot); // portable: x86's answer on every CPU
++					truncated = truncated < 0 ? -truncated : truncated;
++					directionLength -= (Real)truncated * directionLength * mFriction;
++					if (directionLength < 1.0f)
++					{
++						particle->originalDirection = Vector3::ZERO;
++						particle->direction = Vector3::ZERO;
++						return;
++					}
++				}
++				Real twice = dot + dot;
++				particle->direction.x = (x - twice * mNormal.x) * directionLength;
++				particle->direction.y = (y - twice * mNormal.y) * directionLength;
++				particle->direction.z = (z - twice * mNormal.z) * directionLength;
+ 				particle->direction *= mBouncyness;
+ 			}
+ 			break;
++
+ 			case BaseCollider::CT_FLOW:
+ 			{
+-				/** Reset the position (just in front of the plane), but keep the direction.
+-				@remarks
+-					This is not really the correct way, because the particle 'jumps'. Maybe it is better to change 
+-					the direction parallel to the plane.
+-				*/
+-				particle->position += timeElapsed * directionLength * mNormal;
++				Real scaled = directionLength * timeElapsed;
++				particle->position.x += scaled * mNormal.x;
++				particle->position.y += mNormal.y * scaled;
++				particle->position.z += mNormal.z * scaled;
+ 			}
+ 			break;
++
++			default:
++			break;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `PlaneCollider::copyAttributesTo`: the base's values,
++	// then `setNormal`.
+ 	void PlaneCollider::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		BaseCollider::copyAttributesTo(affector);
+@@ -170,4 +227,5 @@ namespace ParticleUniverse
+ 		PlaneCollider* planeCollider = static_cast<PlaneCollider*>(affector);
+ 		planeCollider->setNormal(mNormal);
+ 	}
++
+ }

@@ -1,0 +1,216 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h b/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
+index 8d501a1..f8bd896 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
+@@ -79,6 +79,7 @@ namespace ParticleUniverse
+ 			/** Defines the renderqueue.
+ 	        */
+ 			uint8 mQueueId;
++			uint8 mTorchlightQueueId = 0;
+ 
+ 			/** Determines whether renderer is initialised.
+ 	        */
+@@ -138,6 +139,15 @@ namespace ParticleUniverse
+ 			//Ogre::SceneBlendType mSceneBlending; // Not used, because Pass::getSceneBlending() doesn't exist.
+ 
+ 		public:
++			/** Torchlight's renderer fields (+0x58, +0x64, +0x70; `ParticleRenderer::
++				ParticleRenderer`): the camera's direction and the system's z and y
++				axes, written for every renderer by `ParticleSystem::notifyCurrentCamera`
++				and read by the billboard renderer's oriented types.
++			*/
++			Vector3 mCameraDirection;
++			Vector3 mCommonDirection;
++			Vector3 mCommonUp;
++
+ 			// Public attributes
+ 			bool autoRotate; // Means that the objects to render automatically rotate if the node to which the particle system is attached, rotates.
+ 
+@@ -257,10 +267,21 @@ namespace ParticleUniverse
+ 			/** The particle default size has changed */
+ 			virtual void _notifyDefaultDimensions(Real width, Real height, Real depth) = 0;
+ 
++			/** Torchlight: the technique's sprite sheet changed (`ParticleRenderer::
++				_notifyFlipbookWidthHeight` does nothing; the billboard renderer
++				overrides it). */
++			virtual void _notifyFlipbookWidthHeight(int width, int height) {}
++
++			/** Torchlight: the technique is about to give its visual particles back
++				(`ParticleRenderer::_releaseParticles` does nothing; the entity and
++				ribbon renderers override it). */
++			virtual void _releaseParticles(ParticlePool* pool) {}
++
+ 			/** Callback when particles are resized */
+ 			virtual void _notifyParticleResized(void) = 0;
+ 
+ 			/** Callback when particles are rotated */
++			// Torchlight: `ParticleRenderer::_notifyParticleZRotated`: the same as the library's.
+ 			virtual void _notifyParticleZRotated(void) {}
+ 
+ 			/** Sets renderqueue group */
+@@ -268,6 +289,12 @@ namespace ParticleUniverse
+ 
+ 			/** Get renderqueue group */
+ 			virtual uint8 getRenderQueueGroup(void) const;
++
++			/** The port's own (DIVERGENCE: the port draws Torchlight's groups 90-100 on groups of
++				its own): the group as Torchlight numbers it, which `ParticleTechnique::_update`
++				compares with 95 to pick its cull radius. 0 when it is the drawn one. */
++			void setTorchlightRenderQueueGroup(uint8 queueId) {mTorchlightQueueId = queueId;};
++			uint8 getTorchlightRenderQueueGroup(void) const {return mTorchlightQueueId ? mTorchlightQueueId : getRenderQueueGroup();};
+ 			
+ 			/** Gets the particles sort mode */
+ 			virtual SortMode _getSortMode(void) const = 0;
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseRenderer.cpp
+index 641c393..a78b3d9 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseRenderer.cpp
+@@ -35,6 +35,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`ParticleRenderer::_GLOBAL__I_ParticleRenderer`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const uint8 ParticleRenderer::DEFAULT_RENDER_QUEUE_GROUP = Ogre::RENDER_QUEUE_MAIN;
+ 	const bool ParticleRenderer::DEFAULT_SORTED = false;
+@@ -47,6 +49,10 @@ namespace ParticleUniverse
+ 	const String SOFT_PREFIX = "NewSoft_";
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::ParticleRenderer` has these
++	// defaults: 100 x 100 x 100, unsorted, render queue 50 (`RENDER_QUEUE_MAIN`), not culled one
++	// by one, not initialised, scale 1. The soft-particle and texture-coordinate fields are the
++	// library's newer additions.
+ 	ParticleRenderer::ParticleRenderer(void) : 
+ 		IAlias(),
+ 		IElement(),
+@@ -68,11 +74,17 @@ namespace ParticleUniverse
+ 		mSoftParticlesDelta(DEFAULT_SOFT_PARTICLES_DELTA),
+ 		mNotifiedDepthMap(false),
+ 		mTextureCoordsRowsAndColumnsSet(false),
+-		mVisible(true)
++		mVisible(true),
++		mCameraDirection(Vector3::UNIT_Z),
++		mCommonDirection(Vector3::UNIT_Z),
++		mCommonUp(Vector3::UNIT_Y)
+ 	{
+ 		mAliasType = AT_RENDERER;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::~ParticleRenderer`:
++	// the same as the library's; Torchlight's renderer has no texture-coordinate list or
++	// soft particles to let go of (the port keeps the library's, which are empty or off).
+ 	ParticleRenderer::~ParticleRenderer(void)
+ 	{
+ 		// Remove texture coordinates
+@@ -90,61 +102,73 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::_notifyStart` does nothing, where the library's
++	// shows the renderer; `ParticleTechnique::_update` sets its visibility every frame.
+ 	void ParticleRenderer::_notifyStart(void)
+ 	{
+-		setVisible(true);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::_notifyStop` does nothing, where the library's
++	// hides the renderer.
+ 	void ParticleRenderer::_notifyStop(void)
+ 	{
+-		setVisible(false);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::getRendererType`: the same as the library's.
+ 	const String& ParticleRenderer::getRendererType(void) const
+ 	{
+ 		return mRendererType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::setRendererType`: the same as the library's.
+ 	void ParticleRenderer::setRendererType(String rendererType)
+ 	{
+ 		mRendererType = rendererType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::getParentTechnique`: the same as the library's.
+ 	ParticleTechnique* ParticleRenderer::getParentTechnique(void) const
+ 	{
+ 		return mParentTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::setParentTechnique`: the same as the library's.
+ 	void ParticleRenderer::setParentTechnique(ParticleTechnique* parentTechnique)
+ 	{
+ 		mParentTechnique = parentTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::isRendererInitialised`: the same as the library's.
+ 	bool ParticleRenderer::isRendererInitialised(void) const
+ 	{
+ 		return mRendererInitialised;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::setRendererInitialised`: the same as the library's.
+ 	void ParticleRenderer::setRendererInitialised(bool rendererInitialised)
+ 	{
+ 		mRendererInitialised = rendererInitialised;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::getRenderQueueGroup`: the same as the library's.
+ 	uint8 ParticleRenderer::getRenderQueueGroup(void) const
+ 	{
+ 		return mQueueId;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::setRenderQueueGroup`: the same as the library's.
+ 	void ParticleRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
+ 		mQueueId = queueId;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::isSorted`: the same as the library's.
+ 	const bool ParticleRenderer::isSorted(void) const
+ 	{
+ 		return mSorted;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::setSorted`: the same as the library's.
+ 	void ParticleRenderer::setSorted(bool sorted)
+ 	{
+ 		mSorted = sorted;
+@@ -185,6 +209,7 @@ namespace ParticleUniverse
+ 		return mTextureCoordsRows * mTextureCoordsColumns;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::_notifyRescaled`: the same as the library's.
+ 	void ParticleRenderer::_notifyRescaled(const Vector3& scale)
+ 	{
+ 		_mRendererScale = scale;
+@@ -425,6 +450,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleRenderer::copyAttributesTo`: the library's parent copy, in this one function in the binary (the subclasses call it), with the additions in copyParentAttributesTo.
+ 	void ParticleRenderer::copyAttributesTo (ParticleRenderer* renderer)
+ 	{
+ 		copyParentAttributesTo(renderer);
+@@ -434,6 +460,17 @@ namespace ParticleUniverse
+ 	{
+ 		renderer->setRenderQueueGroup(mQueueId);
+ 		renderer->setSorted(mSorted);
++		// Torchlight (`ParticleRenderer::copyAttributesTo`) also copies the dimensions
++		// and the camera and common directions, and leaves the copy uninitialised and without a
++		// parent technique.
++		renderer->mHeight = mHeight;
++		renderer->mWidth = mWidth;
++		renderer->mDepth = mDepth;
++		renderer->mRendererInitialised = false;
++		renderer->mCameraDirection = mCameraDirection;
++		renderer->mCommonDirection = mCommonDirection;
++		renderer->mCommonUp = mCommonUp;
++		renderer->mParentTechnique = 0;
+ 		renderer->mTextureCoordsRows = mTextureCoordsRows;
+ 		renderer->mTextureCoordsColumns = mTextureCoordsColumns;
+ 		renderer->mTextureCoordsRowsAndColumnsSet = mTextureCoordsRowsAndColumnsSet;

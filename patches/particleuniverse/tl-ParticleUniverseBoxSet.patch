@@ -1,0 +1,313 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp
+index f7173b7..b305e2e 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp
+@@ -35,7 +35,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`BoxSet::_GLOBAL__I_BoxSet`) names the
++	// factory type "BoxSet", the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::BoxSet`: the same as the library's (default dimensions 100, auto-extending).
+ 	BoxSet::BoxSet(void) :
+ 		PrimitiveShapeSet(),
+ 		mAutoExtendPool(true),
+@@ -49,6 +52,7 @@ namespace ParticleUniverse
+ 		_initTextCoord();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::BoxSet`: the same as the library's: the pool set before the texture coordinates.
+ 	BoxSet::BoxSet(const String& name, unsigned int poolSize, bool externalData) :
+ 		PrimitiveShapeSet(name, poolSize, externalData),
+ 		mAutoExtendPool(true),
+@@ -63,6 +67,8 @@ namespace ParticleUniverse
+ 		_initTextCoord();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::~BoxSet`,
++	// the library's: the pool's boxes, then the buffers.
+ 	BoxSet::~BoxSet(void)
+ 	{
+ 		// Free pool items
+@@ -76,6 +82,9 @@ namespace ParticleUniverse
+ 		_destroyBuffers();
+ 	}
+     //-----------------------------------------------------------------------
++	// Checked against Torchlight's `BoxSet::createBox`: a free box (the pool doubled when
++	// none is left and it may grow), its own dimensions dropped, and the bounds grown by the largest
++	// default dimension - the library's.
+ 	Box* BoxSet::createBox(const Vector3& position)
+     {
+ 		if(mFreeBoxes.empty())
+@@ -113,21 +122,25 @@ namespace ParticleUniverse
+         return newBox;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::createBox`: the same as the library's.
+ 	Box* BoxSet::createBox(Real x, Real y, Real z)
+ 	{
+ 		return createBox(Vector3( x, y, z ));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getNumBoxes`: the same as the library's.
+ 	unsigned int BoxSet::getNumBoxes(void) const
+ 	{
+ 		return static_cast<int>(mActiveBoxes.size());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::clear`: the same as the library's.
+ 	void BoxSet::clear(void)
+ 	{
+ 		mFreeBoxes.splice(mFreeBoxes.end(), mActiveBoxes);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getBox`: the same as the library's, walked from the nearer end.
+ 	Box* BoxSet::getBox(unsigned int index) const
+ 	{
+ 		assert(index < mActiveBoxes.size() && "Box index out of bounds." );
+@@ -146,6 +159,7 @@ namespace ParticleUniverse
+ 		return *it;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::removeBox`: the same as the library's.
+ 	void BoxSet::removeBox(unsigned int index)
+ 	{
+ 		assert(index < mActiveBoxes.size() && "Box index out of bounds." );
+@@ -164,6 +178,7 @@ namespace ParticleUniverse
+ 		mFreeBoxes.splice(mFreeBoxes.end(), mActiveBoxes, it);
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::removeBox`: the same as the library's.
+ 	void BoxSet::removeBox(Box* box)
+ 	{
+ 		ActiveBoxList::iterator it = std::find(mActiveBoxes.begin(), mActiveBoxes.end(), box);
+@@ -172,6 +187,7 @@ namespace ParticleUniverse
+ 		mFreeBoxes.splice(mFreeBoxes.end(), mActiveBoxes, it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setDefaultDimensions`: the same as the library's.
+ 	void BoxSet::setDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+ 		mDefaultWidth = width;
+@@ -183,6 +199,7 @@ namespace ParticleUniverse
+ 		_genDefaultCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setDefaultWidth`: the same as the library's.
+ 	void BoxSet::setDefaultWidth(Real width)
+ 	{
+ 		mDefaultWidth = width;
+@@ -190,11 +207,13 @@ namespace ParticleUniverse
+ 		_genDefaultCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getDefaultWidth`: the same as the library's.
+ 	Real BoxSet::getDefaultWidth(void) const
+ 	{
+ 		return mDefaultWidth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setDefaultHeight`: the same as the library's.
+ 	void BoxSet::setDefaultHeight(Real height)
+ 	{
+ 		mDefaultHeight = height;
+@@ -202,11 +221,13 @@ namespace ParticleUniverse
+ 		_genDefaultCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getDefaultHeight`: the same as the library's.
+ 	Real BoxSet::getDefaultHeight(void) const
+ 	{
+ 		return mDefaultHeight;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setDefaultDepth`: the same as the library's.
+ 	void BoxSet::setDefaultDepth(Real depth)
+ 	{
+ 		mDefaultDepth = depth;
+@@ -214,11 +235,13 @@ namespace ParticleUniverse
+ 		_genDefaultCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getDefaultDepth`: the same as the library's.
+ 	Real BoxSet::getDefaultDepth(void) const
+ 	{
+ 		return mDefaultDepth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::beginBoxes`, the library's: 0 locks the vertex buffer whole.
+ 	void BoxSet::beginBoxes(size_t numBoxes)
+     {
+ 		// Create vertex / index buffers
+@@ -245,6 +268,8 @@ namespace ParticleUniverse
+ 				mMainBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD) );
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `BoxSet::injectBox`, which has `boxVisible` inlined:
++	// the library's - a full pool or a box culled by its bounding sphere is not drawn.
+ 	void BoxSet::injectBox(Box& box)
+ 	{
+ 		if (mNumVisibleBoxes == mPoolSize) return;
+@@ -257,17 +282,21 @@ namespace ParticleUniverse
+ 		mNumVisibleBoxes++;
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::endBoxes`: the same as the library's.
+ 	void BoxSet::endBoxes(void)
+ 	{
+ 		mMainBuf->unlock();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setBounds`: the same as the library's.
+ 	void BoxSet::setBounds(const AxisAlignedBox& box, Real radius)
+ 	{
+ 		mAABB = box;
+ 		mBoundingRadius = radius;
+ 	}
+     //-----------------------------------------------------------------------
++    // Checked against Torchlight's `BoxSet::_updateBounds`: the library's - the boxes'
++    // positions grown by the larger of the default width and height (not the depth).
+     void BoxSet::_updateBounds(void)
+     {
+         if (mActiveBoxes.empty())
+@@ -308,6 +337,7 @@ namespace ParticleUniverse
+ 
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::_updateRenderQueue`: the same as the library's.
+ 	void BoxSet::_updateRenderQueue(Ogre::RenderQueue* queue)
+     {
+ 		if (!mExternalData)
+@@ -332,6 +362,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getRenderOperation`: the same as the library's: 16 vertices and 36 indices a box.
+ 	void BoxSet::getRenderOperation(Ogre::RenderOperation& op)
+ 	{
+ 		op.vertexData = mVertexData;
+@@ -344,16 +375,19 @@ namespace ParticleUniverse
+ 		op.indexData->indexStart = 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setAutoextend`: the same as the library's.
+ 	void BoxSet::setAutoextend(bool autoextend)
+ 	{
+ 		mAutoExtendPool = autoextend;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::isAutoextend`: the same as the library's.
+ 	bool BoxSet::isAutoextend(void) const
+ 	{
+ 		return mAutoExtendPool;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::setPoolSize`: the same as the library's.
+ 	void BoxSet::setPoolSize(size_t size)
+ 	{
+ 		if (!mExternalData)
+@@ -375,6 +409,8 @@ namespace ParticleUniverse
+ 		_destroyBuffers();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `BoxSet::_createBuffers`: the library's - position,
++	// colour and one uv; 16-bit indices, the same 36 a box.
+ 	void BoxSet::_createBuffers(void)
+ 	{
+ 		// Create vertex buffer
+@@ -479,6 +515,7 @@ namespace ParticleUniverse
+         mBuffersCreated = true;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::_destroyBuffers`: the same as the library's.
+ 	void BoxSet::_destroyBuffers(void)
+ 	{
+ 		if (mVertexData)
+@@ -497,11 +534,13 @@ namespace ParticleUniverse
+ 		mBuffersCreated = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getPoolSize`: the same as the library's.
+ 	unsigned int BoxSet::getPoolSize(void) const
+ 	{
+ 		return static_cast<unsigned int>(mBoxPool.size());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight has this inlined in `injectBox`: the library's.
+ 	bool BoxSet::boxVisible(Camera* cam, const Box& box)
+ 	{
+ 		// If not individually culled it is always visible
+@@ -529,6 +568,7 @@ namespace ParticleUniverse
+ 		return cam->isVisible(sph);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::increasePool`: the same as the library's.
+ 	void BoxSet::increasePool(size_t size)
+ 	{
+ 		size_t oldSize = mBoxPool.size();
+@@ -542,6 +582,7 @@ namespace ParticleUniverse
+ 			mBoxPool[i] = PU_NEW Box();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::_genDefaultCorners`: the same as the library's: the eight corners twice over.
+ 	void BoxSet::_genDefaultCorners(void)
+ 	{
+ 		mDefaultCorners[0].x = - mDefaultHalfWidth;
+@@ -609,10 +650,20 @@ namespace ParticleUniverse
+ 		mDefaultCorners[15].z = mDefaultHalfDepth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `BoxSet::_genVertices`: the library's - the default
++	// corners (turned by the box's orientation unless it is the identity) or the box's own world
++	// corners, each with the colour and its uv.
+ 	void BoxSet::_genVertices(Box& box)
+ 	{
+ 		Ogre::RGBA colour;
++#if OGRE_VERSION < 0xE0000
+ 		Ogre::Root::getSingleton().convertColourValue(box.mColour, &colour);
++#else
++		// OGRE 14: Root::convertColourValue is deprecated and only forwards to ColourValue::getAsBYTE.
++		// Behaviour risk: OGRE 1.x packed the colour in the render system's own VET_COLOUR order (ARGB
++		// on D3D9, ABGR on GL); OGRE 14 always packs RGBA bytes, which is what its VET_COLOUR reads.
++		colour = box.mColour.getAsBYTE();
++#endif
+ 		Ogre::RGBA* pCol;
+ 
+ 		if (!box.mOwnDimensions)
+@@ -675,11 +726,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::getMovableType`: the same as the library's.
+ 	const String& BoxSet::getMovableType(void) const
+ 	{
+ 		return BoxSetFactory::PU_FACTORY_TYPE_NAME;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSet::_initTextCoord`: the same as the library's: 0.33 and 0.66 for the thirds.
+ 	void BoxSet::_initTextCoord(void)
+ 	{
+ 		mTextCoord [0] = Vector2(0.0f, 0.0f);
+@@ -705,11 +758,13 @@ namespace ParticleUniverse
+ 	//-----------------------------------------------------------------------
+ 	String BoxSetFactory::PU_FACTORY_TYPE_NAME = "BoxSet";
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSetFactory::getType`: the same as the library's.
+ 	const String& BoxSetFactory::getType(void) const
+ 	{
+ 		return PU_FACTORY_TYPE_NAME;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSetFactory::createInstanceImpl`: the same as the library's (a pool of 20 unless given).
+ 	Ogre::MovableObject* BoxSetFactory::createInstanceImpl(const String& name, const Ogre::NameValuePairList* params)
+ 	{
+ 		bool externalData = false;
+@@ -739,6 +794,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxSetFactory::destroyInstance`: the same as the library's.
+ 	void BoxSetFactory::destroyInstance(Ogre::MovableObject* obj)
+ 	{
+ 		PU_DELETE obj;

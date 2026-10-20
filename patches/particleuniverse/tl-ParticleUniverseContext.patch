@@ -1,0 +1,17 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseContext.h b/Plugins/ParticleUniverse/include/ParticleUniverseContext.h
+index 358b378..b17debd 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseContext.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseContext.h
+@@ -30,6 +30,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ namespace ParticleUniverse
+ {
+ 	// String representation of the Particle Universe contexts. Numeric values are used to keep the string small.
++	// Torchlight: `ParticleSystem::_GLOBAL__I_ParticleSystem`, the static initialiser of the
++	// system's file: ALIAS "1" to DEPENDENCY "12" (it has no INNER_CONTEXT) and HALFSCALE (0.5, 0.5, 0.5,
++	// ParticleUniverseTechnique.h), the same as the library's. The emitter's file has the same
++	// initialiser (`ParticleEmitter::_GLOBAL__I_ParticleEmitter`), and so has the affector's
++	// (`ParticleAffector::_GLOBAL__I_ParticleAffector`) and the pool's
++	// (`ParticlePool::_GLOBAL__I_freeParticlePool`).
+ 	const static String ALIAS					= "1";
+ 	const static String SYSTEM				= "2";
+ 	const static String TECHNIQUE				= "3";

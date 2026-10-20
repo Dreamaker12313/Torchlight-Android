@@ -1,0 +1,48 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBeamRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBeamRenderer.cpp
+index 41c01a4..8f35d6d 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBeamRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBeamRenderer.cpp
+@@ -54,12 +54,23 @@ namespace ParticleUniverse
+ 		mNumberOfSegments(DEFAULT_NUMBER_OF_SEGMENTS),
+ 		mJump(false),
+ 		mTexCoordDirection(DEFAULT_TEXTURE_DIRECTION)
++#if OGRE_VERSION >= 0xE0000
++		, mPreparedTechnique(0)
++#endif
+ 	{
+ 		autoRotate = true; // Because the nodes inherit the orientation from the parent
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	BeamRenderer::~BeamRenderer(void)
+ 	{
++#if OGRE_VERSION >= 0xE0000
++		// Torchlight's technique clears the parent before destroying its renderer
++		// (`ParticleTechnique::destroyRenderer`); the technique this renderer was prepared
++		// for is the one destroying it, so it is still there to tear down with. The game uses no
++		// beam renderer; this only keeps the library's working with the fork's technique.
++		if (!mParentTechnique)
++			mParentTechnique = mPreparedTechnique;
++#endif
+ 		if (!mParentTechnique)
+ 			return;
+ 		
+@@ -167,6 +178,9 @@ namespace ParticleUniverse
+ 	{
+ 		if (!technique || mRendererInitialised)
+ 			return;
++#if OGRE_VERSION >= 0xE0000
++		mPreparedTechnique = technique;
++#endif
+ 
+ 		// Register itself to the technique
+ 		if (mParentTechnique)
+@@ -187,7 +201,9 @@ namespace ParticleUniverse
+ 			ss << this;
+ 			mBillboardChainName = "Beam" + ss.str();
+ 			mBillboardChain = sceneManager->createBillboardChain(mBillboardChainName);
++#if OGRE_VERSION < 0xE0000
+ 			mBillboardChain->setDynamic(true);
++#endif // OGRE 14 dropped setDynamic: a chain's vertex buffer is always HBU_CPU_TO_GPU
+ 			mBillboardChain->setNumberOfChains(mQuota);
+ 			mBillboardChain->setMaxChainElements(mMaxChainElements);
+ 			mBillboardChain->setMaterialName(technique->getMaterialName());

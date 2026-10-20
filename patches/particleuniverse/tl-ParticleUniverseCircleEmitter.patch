@@ -1,0 +1,423 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
+index b7466a2..ed6c3ca 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
+@@ -30,24 +30,29 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
+-	/** The CircleEmitter is a ParticleEmitter that emits particles on a circle shape. Particle can be emitted
+-		random on the circle, but it can also follow the circles' contours.
+-    */
++	/** Torchlight's CircleEmitter, which replaces the library's: its radius, angle
++		and step are dynamic attributes (a minimum and a maximum radius, the angle and
++		the step), and it releases around the circle at random, or at the angle plus
++		the step - without walking round it, as the library's does. Transcribed from
++		the binary (`CircleEmitter`); the library's scalar setters
++		stay as shims for its script code, which the port does not use.
++	*/
+ 	class _ParticleUniverseExport CircleEmitter : public ParticleEmitter
+ 	{
+ 		protected:
+-			Real mRadius;
+-			Real mCircleAngle;
+-			Real mOriginalCircleAngle;
+-			Real mStep;
+-			Real mX;
+-			Real mZ;
+-			bool mRandom;
+-			Quaternion mOrientation;
+-			Vector3 mNormal;
++			DynamicAttribute* mMinRadius;   // +0x278
++			DynamicAttribute* mMaxRadius;   // +0x280
++			DynamicAttribute* mCircleAngle; // +0x288
++			DynamicAttribute* mStep;        // +0x290
++			Real mX;                        // +0x298, cos of the last angle
++			Real mZ;                        // +0x29c, sin of the last angle
++			bool mRandom;                   // +0x2a0
++			bool mFixedRadius;              // +0x2a1
++			Quaternion mOrientation;        // +0x2a4
++			Vector3 mNormal;                // the library's; Torchlight keeps only the orientation
+ 
+ 		public:
+-			// Constants
++			// Constants (the library script code's defaults)
+ 			static const Real DEFAULT_RADIUS;
+ 			static const Real DEFAULT_STEP;
+ 			static const Real DEFAULT_ANGLE;
+@@ -55,48 +60,48 @@ namespace ParticleUniverse
+ 			static const Vector3 DEFAULT_NORMAL;
+ 
+ 			CircleEmitter(void);
+-	        virtual ~CircleEmitter(void) {};
+-
+-			/** 
+-	        */
++			virtual ~CircleEmitter(void);
++
++			/** Torchlight's attributes (`setMinRadius`, `setMaxRadius`,
++				`setCircleAngle`, `setStep`). Each takes ownership. The getters
++				are plain (`getMinRadius`, `getMaxRadius`, and Torchlight's
++				`getCircleAngle` and `getStep`, named ...Attribute here because
++				the library's scalar getters keep those names).
++			*/
++			DynamicAttribute* getMinRadius(void) const {return mMinRadius;}
++			void setMinRadius(DynamicAttribute* minRadius);
++			DynamicAttribute* getMaxRadius(void) const {return mMaxRadius;}
++			void setMaxRadius(DynamicAttribute* maxRadius);
++			DynamicAttribute* getCircleAngleAttribute(void) const {return mCircleAngle;}
++			void setCircleAngle(DynamicAttribute* circleAngle);
++			DynamicAttribute* getStepAttribute(void) const {return mStep;}
++			void setStep(DynamicAttribute* step);
++
++			/** Only the maximum radius counts (`getFixedRadius`,
++				`setFixedRadius`).
++			*/
++			bool getFixedRadius(void) const {return mFixedRadius;}
++			void setFixedRadius(bool fixedRadius) {mFixedRadius = fixedRadius;}
++
++			/** `isRandom`, `setRandom`. */
++			const bool isRandom(void) const {return mRandom;}
++			void setRandom(const bool random) {mRandom = random;}
++
++			/** `getOrientation`. */
++			const Quaternion& getOrientation(void) const {return mOrientation;}
++			const Vector3& getNormal(void) const {return mNormal;}
++			void setNormal(const Vector3 &normal);
++
++			/** The library's scalar API, for its script code: a fixed radius, angle or step. */
+ 			const Real getRadius(void) const;
+ 			void setRadius(const Real radius);
+-
+-			/** 
+-	        */
+ 			const Real getCircleAngle(void) const;
+ 			void setCircleAngle(const Real circleAngle);
+-
+-			/** 
+-	        */
+ 			const Real getStep(void) const;
+ 			void setStep(const Real step);
+ 
+-			/** 
+-	        */
+-			const bool isRandom(void) const;
+-			void setRandom(const bool random);
+-
+-			/* 
+-			*/ 
+-			const Quaternion& getOrientation(void) const;
+-			const Vector3& getNormal(void) const;
+-			void setNormal(const Vector3 &normal); 
+-
+-			/** See ParticleEmiter
+-	        */
+-			void _notifyStart(void);
+-
+-			/** Determine a particle position on the circle.
+-	        */
+ 			virtual void _initParticlePosition(Particle* particle);
+-
+-			/** Determine the particle direction.
+-	        */
+ 			virtual void _initParticleDirection(Particle* particle);
+-
+-			/** 
+-	        */
+ 			virtual void copyAttributesTo (ParticleEmitter* emitter);
+ 	};
+ 
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
+index 1cc4382..1dbd760 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
+@@ -31,161 +31,202 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
+-	// Constants
++	// Torchlight: this file's static initialiser (`CircleEmitter::_GLOBAL__I_CircleEmitter`)
++	// sets only HALFSCALE, the same as the library's.
++	// Constants (the library script code's defaults)
+ 	const Real CircleEmitter::DEFAULT_RADIUS = 100.0f;
+ 	const Real CircleEmitter::DEFAULT_STEP = 0.1f;
+ 	const Real CircleEmitter::DEFAULT_ANGLE = 0.0f;
+ 	const bool CircleEmitter::DEFAULT_RANDOM = true;
+ 	const Vector3 CircleEmitter::DEFAULT_NORMAL(0, 0, 0);
+ 
++	namespace
++	{
++		DynamicAttribute* fixedAttribute(Real value)
++		{
++			DynamicAttributeFixed* attribute = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
++			attribute->setValue(value);
++			return attribute;
++		}
++
++		void replaceAttribute(DynamicAttribute*& slot, DynamicAttribute* value)
++		{
++			if (slot)
++				PU_DELETE_T(slot, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++			slot = value;
++		}
++	}
++
+ 	//-----------------------------------------------------------------------
+-	CircleEmitter::CircleEmitter(void) : 
++	// Torchlight: `CircleEmitter::CircleEmitter`: radii fixed 5, angle
++	// fixed 0, step fixed 0.1, random and fixed radius on.
++	CircleEmitter::CircleEmitter(void) :
+ 		ParticleEmitter(),
+-		mRadius(DEFAULT_RADIUS),
+-		mCircleAngle(DEFAULT_ANGLE),
+-		mOriginalCircleAngle(DEFAULT_ANGLE),
+-		mStep(DEFAULT_STEP),
+-		mRandom(DEFAULT_RANDOM),
+-		mOrientation(Quaternion::IDENTITY),
+-		mNormal(DEFAULT_NORMAL),
++		mMinRadius(0),
++		mMaxRadius(0),
++		mCircleAngle(0),
++		mStep(0),
+ 		mX(0.0f),
+-		mZ(0.0f)
++		mZ(0.0f),
++		mRandom(true),
++		mFixedRadius(true),
++		mOrientation(Quaternion::IDENTITY),
++		mNormal(DEFAULT_NORMAL)
+ 	{
++		mEmitterType = "Circle";
++		mMaxRadius = fixedAttribute(5.0f);
++		mMinRadius = fixedAttribute(5.0f);
++		mCircleAngle = fixedAttribute(0.0f);
++		mStep = fixedAttribute(0.1f);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	const Real CircleEmitter::getRadius(void) const
++	// Torchlight: `~CircleEmitter`.
++	CircleEmitter::~CircleEmitter(void)
+ 	{
+-		return mRadius;
++		replaceAttribute(mMinRadius, 0);
++		replaceAttribute(mMaxRadius, 0);
++		replaceAttribute(mCircleAngle, 0);
++		replaceAttribute(mStep, 0);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void CircleEmitter::setRadius(const Real radius)
++	void CircleEmitter::setMinRadius(DynamicAttribute* minRadius)
+ 	{
+-		mRadius = radius;
++		replaceAttribute(mMinRadius, minRadius);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	const Real CircleEmitter::getCircleAngle(void) const
++	void CircleEmitter::setMaxRadius(DynamicAttribute* maxRadius)
+ 	{
+-		return mOriginalCircleAngle;
++		replaceAttribute(mMaxRadius, maxRadius);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void CircleEmitter::setCircleAngle(const Real circleAngle)
++	void CircleEmitter::setCircleAngle(DynamicAttribute* circleAngle)
+ 	{
+-		mOriginalCircleAngle = circleAngle;
+-		mCircleAngle = circleAngle;
++		replaceAttribute(mCircleAngle, circleAngle);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	const Real CircleEmitter::getStep(void) const
++	void CircleEmitter::setStep(DynamicAttribute* step)
+ 	{
+-		return mStep;
++		replaceAttribute(mStep, step);
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void CircleEmitter::setStep(const Real step)
++	// Torchlight: `CircleEmitter::setNormal`: the library's rotation from the y axis
++	// (OGRE 1.6's getRotationTo, x as the fallback axis). Torchlight keeps only the orientation;
++	// the port also keeps the normal for the library's script writer.
++	void CircleEmitter::setNormal(const Vector3& normal)
+ 	{
+-		mStep = step;
++		mOrientation = Vector3::UNIT_Y.getRotationTo(normal, Vector3::UNIT_X);
++		mNormal = normal;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	const bool CircleEmitter::isRandom(void) const
++	const Real CircleEmitter::getRadius(void) const
+ 	{
+-		return mRandom;
++		return mMaxRadius ? mMaxRadius->getValue(0.0f) : 0.0f;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void CircleEmitter::setRandom(const bool random)
++	void CircleEmitter::setRadius(const Real radius)
+ 	{
+-		mRandom = random;
++		setMinRadius(fixedAttribute(radius));
++		setMaxRadius(fixedAttribute(radius));
+ 	}
+ 	//-----------------------------------------------------------------------
+-	const Quaternion& CircleEmitter::getOrientation(void) const
++	const Real CircleEmitter::getCircleAngle(void) const
+ 	{
+-		return mOrientation;
++		return mCircleAngle ? mCircleAngle->getValue(0.0f) : 0.0f;
+ 	}
+-	//----------------------------------------------------------------------- 
+-	const Vector3& CircleEmitter::getNormal(void) const
+-	{ 
+-		return mNormal;
+-	} 
+-	//----------------------------------------------------------------------- 
+-	void CircleEmitter::setNormal(const Vector3& normal) 
+-	{ 
+-		mOrientation = Vector3::UNIT_Y.getRotationTo(normal, Vector3::UNIT_X);
+-		mNormal = normal;
++	//-----------------------------------------------------------------------
++	void CircleEmitter::setCircleAngle(const Real circleAngle)
++	{
++		setCircleAngle(fixedAttribute(circleAngle));
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void CircleEmitter::_notifyStart (void)
++	const Real CircleEmitter::getStep(void) const
+ 	{
+-		// Reset the attributes to allow a restart.
+-		ParticleEmitter::_notifyStart();
+-		mCircleAngle = mOriginalCircleAngle;
++		return mStep ? mStep->getValue(0.0f) : 0.0f;
+ 	}
+-	//----------------------------------------------------------------------- 
++	//-----------------------------------------------------------------------
++	void CircleEmitter::setStep(const Real step)
++	{
++		setStep(fixedAttribute(step));
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `CircleEmitter::_initParticlePosition`. The radius is
++	// the maximum, or between the minimum and the maximum without a fixed radius;
++	// the angle random, or the angle plus the step, less a turn past 2 pi. The
++	// original sets the particle's original position here and not its latest.
+ 	void CircleEmitter::_initParticlePosition(Particle* particle)
+ 	{
+-		Real angle = 0;
+-		if (mRandom)
++		Real fraction = _durationFraction();
++		Real radius = mMaxRadius->getValue(particle, fraction);
++		if (!mFixedRadius)
+ 		{
+-			// Choose a random position on the circle.
+-			angle = Math::RangeRandom(0, Math::TWO_PI);
++			Real minimum = mMinRadius->getValue(particle, fraction);
++			radius = Math::RangeRandom(minimum, radius);
++		}
++		Real angle;
++		if (!mRandom)
++		{
++			angle = mCircleAngle->getValue(particle, fraction) + mStep->getValue(particle, fraction);
++			if (angle > Math::TWO_PI)
++				angle = angle - Math::TWO_PI;
+ 		}
+ 		else
+ 		{
+-			// Follow the contour of the circle.
+-			mCircleAngle += mStep;
+-			mCircleAngle = mCircleAngle > Math::TWO_PI ? mCircleAngle - Math::TWO_PI : mCircleAngle;
+-			angle = mCircleAngle;
++			angle = Math::RangeRandom(0.0f, Math::TWO_PI);
+ 		}
+-
+ 		mX = Math::Cos(angle);
+ 		mZ = Math::Sin(angle);
+-		ParticleSystem* sys = mParentTechnique->getParentSystem();
+-		if (sys)
++
++		Vector3 onCircle = mOrientation * Vector3(radius * mX, 0.0f, radius * mZ);
++		if (!isKeepLocal())
+ 		{
+-			// Take both orientation of the node and its own orientation, based on the normal, into account
+-			particle->position = getDerivedPosition() + 
+-				sys->getDerivedOrientation() * mOrientation * (_mEmitterScale * Vector3(mX * mRadius, 0, mZ * mRadius));
++			particle->position = getDerivedPosition() + _mEmitterScale * onCircle;
+ 		}
+ 		else
+ 		{
+-			particle->position = getDerivedPosition() + _mEmitterScale * ( mOrientation * Vector3(mX * mRadius, 0, mZ * mRadius) );
++			particle->position = onCircle * _mEmitterScale + _mEmitterScale * position;
+ 		}
++		particle->torchlightVector28 = Vector3::ZERO;
+ 		particle->originalPosition = particle->position;
+ 	}
+ 	//-----------------------------------------------------------------------
+-    void CircleEmitter::_initParticleDirection(Particle* particle)
+-    {
+-		if (mAutoDirection)
++	// Torchlight: `CircleEmitter::_initParticleDirection`. Without auto
++	// direction, the emitter's own; with it, outward from the centre, scattered by
++	// the release angle. An unscattered one sets only the direction.
++	void CircleEmitter::_initParticleDirection(Particle* particle)
++	{
++		if (!mAutoDirection)
++		{
++			ParticleEmitter::_initParticleDirection(particle);
++			return;
++		}
++		Radian angle;
++		_generateAngle(angle);
++		Vector3 outward = mOrientation * Vector3(mX, 0.0f, mZ);
++		if (angle == Radian(0))
+ 		{
+-			// The value of the direction vector that has been set does not have a meaning for
+-			// the circle emitter.
+-			Radian angle;
+-			_generateAngle(angle);
+-			if (angle != Radian(0))
+-			{
+-				particle->direction = (mOrientation * Vector3(mX, 0, mZ) ).randomDeviant(angle, mUpVector);
+-				particle->originalDirection = particle->direction;
+-			}
+-			else
+-			{
+-				particle->direction = Vector3(mX, 0, mZ);
+-				particle->direction = mOrientation * Vector3(mX, 0, mZ);
+-			}
++			particle->direction = outward;
+ 		}
+ 		else
+ 		{
+-			// Use the standard way
+-			ParticleEmitter::_initParticleDirection(particle);
++			particle->direction = outward.randomDeviant(angle, mUpVector);
++			particle->originalDirection = particle->direction;
+ 		}
+-    }
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `CircleEmitter::copyAttributesTo`: the four attributes,
++	// the two flags and the orientation.
+ 	void CircleEmitter::copyAttributesTo (ParticleEmitter* emitter)
+ 	{
+ 		ParticleEmitter::copyAttributesTo(emitter);
+-
+-		CircleEmitter* circleEmitter = static_cast<CircleEmitter*>(emitter);
+-		circleEmitter->mRadius = mRadius;
+-		circleEmitter->mCircleAngle = mCircleAngle;
+-		circleEmitter->mOriginalCircleAngle = mOriginalCircleAngle;
+-		circleEmitter->mStep = mStep;
++		CircleEmitter* circleEmitter = dynamic_cast<CircleEmitter*>(emitter);
++		if (!circleEmitter)
++			return;
++		circleEmitter->setMinRadius(mDynamicAttributeFactory.cloneDynamicAttribute(mMinRadius));
++		circleEmitter->setMaxRadius(mDynamicAttributeFactory.cloneDynamicAttribute(mMaxRadius));
++		circleEmitter->setCircleAngle(mDynamicAttributeFactory.cloneDynamicAttribute(mCircleAngle));
++		circleEmitter->setStep(mDynamicAttributeFactory.cloneDynamicAttribute(mStep));
++		circleEmitter->mFixedRadius = mFixedRadius;
+ 		circleEmitter->mRandom = mRandom;
+-		circleEmitter->mNormal = mNormal;
+-		circleEmitter->mOrientation = mOrientation; 
++		circleEmitter->mOrientation = mOrientation;
+ 	}
+ }

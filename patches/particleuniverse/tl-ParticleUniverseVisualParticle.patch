@@ -1,0 +1,153 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseVisualParticle.h b/Plugins/ParticleUniverse/include/ParticleUniverseVisualParticle.h
+index 2029280..9412aed 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseVisualParticle.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseVisualParticle.h
+@@ -36,6 +36,7 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			VisualParticle(void);
++			// Torchlight: `VisualParticle::~VisualParticle`: the same as the library's.
+ 			virtual ~VisualParticle(void) {};
+ 
+ 			/** Current and original colour */
+@@ -97,10 +98,30 @@ namespace ParticleUniverse
+ 			uint16 textureCoordsCurrent;
+ 			bool textureAnimationDirectionUp;
+ 
++			/** Torchlight: the particle's sprite-sheet speed, frames a second, and its
++				current frame, fractional (VisualParticle +0x118, +0x11c). Set and
++				advanced by Torchlight's TextureAnimator.
++			*/
++			Real animationSpeed;
++			Real animationFrame;
++
+ 			/** Set own dimensions
+ 			*/
+ 			void setOwnDimensions(Real newWidth, Real newHeight, Real newDepth);
+ 
++			/** Torchlight: the dimensions a particle was launched with, a 0 taken as 1
++				(`VisualParticle::_setInitialDimensions`), and then its own.
++			*/
++			void _setInitialDimensions(Real newWidth, Real newHeight, Real newDepth);
++
++			/** Torchlight: set by _setInitialDimensions (VisualParticle +0x135). */
++			bool initialDimensionsSet;
++
++			/** Torchlight: VisualParticle +0x13c, +0x144, +0x14c. */
++			Real initialWidth;
++			Real initialHeight;
++			Real initialDepth;
++
+ 			/** @see Particle::_initForEmission()
+ 			*/
+ 			virtual void _initForEmission(void);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseVisualParticle.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseVisualParticle.cpp
+index e406b13..e9ac9c9 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseVisualParticle.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseVisualParticle.cpp
+@@ -29,13 +29,24 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`VisualParticle::_GLOBAL__I_VisualParticle`)
++	// sets only HALFSCALE, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::VisualParticle`: the same as the library's for the
++	// fields Torchlight's particle has (no original orientation, rotation axis or texture
++	// animation fields there; the port keeps them for its renderers).
+ 	VisualParticle::VisualParticle(void) : 
+ 		Particle(),
+ 		colour(ColourValue::White),
+ 		originalColour(ColourValue::White),
+ 		zRotation(Radian(0)),
+ 		zRotationSpeed(Radian(0)),
++		animationSpeed(0.0f),
++		animationFrame(0.0f),
++		initialDimensionsSet(false),
++		initialWidth(1.0f),
++		initialHeight(1.0f),
++		initialDepth(1.0f),
+ 		orientation(Quaternion::IDENTITY),
+ 		originalOrientation(Quaternion::IDENTITY),
+ 		rotationSpeed(0.0f),
+@@ -54,28 +65,60 @@ namespace ParticleUniverse
+ 		mMarkedForEmission  = true; // Default is false, but visual particles are always emitted.
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::setOwnDimensions`. A dimension of 0 does not keep
++	// the old one, as the library's does: it becomes 1e-6, so a Scale track that starts at 0
++	// starts the particle unseen.
+ 	void VisualParticle::setOwnDimensions(Real newWidth, Real newHeight, Real newDepth)
+ 	{
+ 		ownDimensions = true;
+-		if (newWidth)
+-			width = newWidth;
+-		if (newHeight)
+-			height = newHeight;
+-		if (newDepth)
+-			depth = newDepth;
++		width = newWidth != 0.0f ? newWidth : 1e-6f;
++		height = newHeight != 0.0f ? newHeight : 1e-6f;
++		depth = newDepth != 0.0f ? newDepth : 1e-6f;
+ 		_calculateBoundingSphereRadius();
+ 		parentEmitter->getParentTechnique()->_notifyParticleResized();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::_setInitialDimensions`.
++	void VisualParticle::_setInitialDimensions(Real newWidth, Real newHeight, Real newDepth)
++	{
++		initialDimensionsSet = true;
++		initialWidth = newWidth != 0.0f ? newWidth : 1.0f;
++		initialHeight = newHeight != 0.0f ? newHeight : 1.0f;
++		initialDepth = newDepth != 0.0f ? newDepth : 1.0f;
++		setOwnDimensions(initialWidth, initialHeight, initialDepth);
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::_initForEmission`: white, unturned,
++	// on frame 0, and 1 x 1 x 1 with no dimensions of its own. The library's
++	// texture-coordinate fields are reset too; its renderers still read them.
+ 	void VisualParticle::_initForEmission(void)
+ 	{
+ 		Particle::_initForEmission();
++		colour = ColourValue::White;
++		originalColour = ColourValue::White;
++		zRotation = Radian(0);
++		zRotationSpeed = Radian(0);
++		animationSpeed = 0.0f;
++		animationFrame = 0.0f;
++		orientation = Quaternion::IDENTITY;
++		rotationSpeed = 0.0f;
++		ownDimensions = false;
++		width = 1.0f;
++		initialWidth = 1.0f;
++		height = 1.0f;
++		initialHeight = 1.0f;
++		depth = 1.0f;
++		initialDepth = 1.0f;
++		radius = 0.87f;
++		initialDimensionsSet = false;
++
+ 		textureAnimationTimeStep = 0.1f;
+ 		textureAnimationTimeStepCount = 0.0f;
+ 		textureCoordsCurrent = 0;
+ 		textureAnimationDirectionUp = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::_initForExpiration`: the same as the library's.
+ 	void VisualParticle::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		Particle::_initForExpiration(technique, timeElapsed);
+@@ -85,10 +128,11 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `VisualParticle::_calculateBoundingSphereRadius`: the exact radius,
++	// half the diagonal, where the library has an approximation (half the largest dimension).
+ 	void VisualParticle::_calculateBoundingSphereRadius(void)
+ 	{
+-		//radius = 0.5 * Math::Sqrt(width*width + height*height + depth*depth);
+-		radius = 0.5f * std::max(depth, std::max(width, height)); // approximation
++		radius = 0.5f * Math::Sqrt(width*width + height*height + depth*depth);
+ 	}
+ 
+ }

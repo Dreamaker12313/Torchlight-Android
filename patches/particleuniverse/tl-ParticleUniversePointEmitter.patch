@@ -1,0 +1,27 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitter.h
+index 4dbbd7a..209b070 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitter.h
+@@ -40,6 +40,7 @@ namespace ParticleUniverse
+ 			PointEmitter(void) : ParticleEmitter()
+ 			{
+ 			};
++	        // Torchlight: `PointEmitter::~PointEmitter`: the same as the library's.
+ 	        virtual ~PointEmitter(void) {};
+ 
+ 			/** 
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniversePointEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniversePointEmitter.cpp
+index 1828ad9..2096d98 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniversePointEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniversePointEmitter.cpp
+@@ -31,7 +31,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`PointEmitter::_GLOBAL__I_copyAttributesTo`)
++	// sets only HALFSCALE, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PointEmitter::copyAttributesTo`: the same as the library's (a jump to the emitter's).
+ 	void PointEmitter::copyAttributesTo (ParticleEmitter* emitter)
+ 	{
+ 		ParticleEmitter::copyAttributesTo(emitter);

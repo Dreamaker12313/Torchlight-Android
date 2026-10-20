@@ -1,0 +1,8 @@
+[submodule "external/ogre"]
+	path = external/ogre
+	url = https://github.com/OGRECave/ogre.git
+	ignore = dirty
+[submodule "external/particleuniverse"]
+	path = external/particleuniverse
+	url = https://github.com/OGRECave/particleuniverse.git
+	ignore = dirty

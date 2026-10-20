@@ -1,0 +1,73 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffector.h
+index 64d78e5..8b83907 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffector.h
+@@ -45,6 +45,7 @@ namespace ParticleUniverse
+ 			static const ForceApplication DEFAULT_FORCE_APPL;
+ 
+ 			BaseForceAffector(void);
++	        // Torchlight: `ForceAffector::~ForceAffector`: the same as the library's.
+ 	        virtual ~BaseForceAffector(void) {};
+ 
+ 			/** @copydoc ParticleAffector::copyAttributesTo */
+@@ -60,6 +61,10 @@ namespace ParticleUniverse
+ 			ForceApplication getForceApplication(void) const;
+ 			void setForceApplication(ForceApplication forceApplication);
+ 
++			/** Torchlight: `ForceAffector::getScaledVector`: the force as last scaled.
++	        */
++			const Vector3& getScaledVector(void) const {return mScaledVector;}
++
+ 		protected:
+ 			Vector3 mForceVector;
+ 			Vector3 mScaledVector;
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
+index 403c1ac..5e225b9 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
+@@ -31,11 +31,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`ForceAffector::_GLOBAL__I_copyAttributesTo`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
+ 	const Vector3 BaseForceAffector::DEFAULT_FORCE_VECTOR(0, 0, 0);
+ 	const BaseForceAffector::ForceApplication BaseForceAffector::DEFAULT_FORCE_APPL = BaseForceAffector::FA_ADD;
+ 
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `ForceAffector` (its name for this base), as the
++	// `LinearForceAffectorFactory::createAffector` builds it: force and scaled force zero,
++	// application `FA_ADD` (1).
+ 	BaseForceAffector::BaseForceAffector(void) : 
+ 		ParticleAffector(),
+ 		mForceVector(DEFAULT_FORCE_VECTOR),
+@@ -44,6 +49,7 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `ForceAffector::copyAttributesTo`: the same.
+ 	void BaseForceAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);
+@@ -53,16 +59,20 @@ namespace ParticleUniverse
+ 		baseForceAffector->mForceApplication = mForceApplication;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ForceAffector::getForceVector`: the same as the library's.
+ 	const Vector3& BaseForceAffector::getForceVector(void) const
+ 	{
+ 		return mForceVector;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `ForceAffector::setForceVector` and
++	// `setForceApplication`: the same.
+ 	void BaseForceAffector::setForceVector(const Vector3& forceVector)
+ 	{
+ 		mForceVector = forceVector;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ForceAffector::getForceApplication`: the same as the library's.
+ 	BaseForceAffector::ForceApplication BaseForceAffector::getForceApplication(void) const
+ 	{
+ 		return mForceApplication;

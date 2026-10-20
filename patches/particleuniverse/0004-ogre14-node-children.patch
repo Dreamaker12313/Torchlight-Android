@@ -1,0 +1,30 @@
+diff --git a/Plugins/ParticleUniverse/src/Externs/ParticleUniverseSceneDecoratorExtern.cpp b/Plugins/ParticleUniverse/src/Externs/ParticleUniverseSceneDecoratorExtern.cpp
+index 9be0495..e2730c4 100644
+--- a/Plugins/ParticleUniverse/src/Externs/ParticleUniverseSceneDecoratorExtern.cpp
++++ b/Plugins/ParticleUniverse/src/Externs/ParticleUniverseSceneDecoratorExtern.cpp
+@@ -117,6 +117,17 @@ namespace ParticleUniverse
+ 		if (mSubnode && mParentTechnique->getParentSystem())
+ 		{
+ 			Ogre::SceneNode* sceneNode = mParentTechnique->getParentSystem()->getParentSceneNode();
++#if OGRE_VERSION >= 0xE0000
++			// OGRE 14: Node::getChildIterator is deprecated and a node's children are a vector, so
++			// removing one while walking them invalidates the walk (OGRE 1.x kept a map, whose
++			// iterator had already moved on). The same removal, without the walk.
++			if (sceneNode && mSubnode->getParentSceneNode() == sceneNode)
++			{
++				mSubnode->detachAllObjects();
++				sceneNode->removeAndDestroyChild(mSubnode);
++				mSubnode = 0;
++			}
++#else
+ 			Ogre::SceneNode::ChildNodeIterator it = sceneNode->getChildIterator();
+ 			unsigned int i = 0;
+ 			while (it.hasMoreElements()) 
+@@ -130,6 +141,7 @@ namespace ParticleUniverse
+ 				}
+ 				++i;
+ 			}
++#endif
+ 
+ 			destroyEntity();
+ 		}

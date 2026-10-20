@@ -1,0 +1,46 @@
+Torchlight: RTSS sphere and reflection environment maps as Runic's RT Shader System
+library computes them (the Xbox build's rtshaderlib/FFPLib_Texturing.hlsl).
+FFP_GenerateTexCoord_EnvMap_Sphere maps the view-space normal itself onto the
+sphere map, (n.x/2 + 0.5, -n.y/2 + 0.5), through the world and view matrices
+and not normalised; OGRE 14 maps a reflection vector. The characters' render-
+behind outline (outlineblue.dds, ENV_CURVED; CGenericModel::reInitialize
+) samples it, and the captured console frame shows the Runic
+form. FFP_GenerateTexCoord_EnvMap_Reflect: Runic does not normalise the
+normal. Not __SWITCH__-guarded (a GLSL library file; both targets need it).
+
+
+diff --git a/Media/RTShaderLib/FFPLib_Texturing.glsl b/Media/RTShaderLib/FFPLib_Texturing.glsl
+index 827307373..c6bce8a6e 100644
+--- a/Media/RTShaderLib/FFPLib_Texturing.glsl
++++ b/Media/RTShaderLib/FFPLib_Texturing.glsl
+@@ -70,12 +70,13 @@ void FFP_GenerateTexCoord_EnvMap_Sphere(in 	mat4 mWorldView,
+ 										in 	vec3 vNormal,
+ 										out vec2 vOut)
+ {
+-	vec3 normal = normalize( mul(mWorldIT, vNormal));
+-	vec3 eyedir =  normalize(mul(mWorldView, vPos)).xyz;
+-	vec3 r = reflect(eyedir, normal);
+-	r.z += 1.0;
+-	float two_p = 2.0 * length(r);
+-	vOut = vec2(0.5 + r.x / two_p, 0.5 - r.y / two_p);
++	// Torchlight port: Runic's RT Shader System library (the Xbox build's
++	// rtshaderlib/FFPLib_Texturing.hlsl, FFP_GenerateTexCoord_EnvMap_Sphere)
++	// maps the view-space normal itself, through the world and view matrices
++	// (not their inverse transpose) and not normalised, onto the sphere map:
++	// the characters' render-behind outline (outlineblue.dds) samples it so.
++	vec3 vViewNormal = mul(mWorldView, vec4(vNormal, 0.0)).xyz;
++	vOut = vec2(vViewNormal.x * 0.5 + 0.5, -vViewNormal.y * 0.5 + 0.5);
+ }
+ 
+ //-----------------------------------------------------------------------------
+@@ -86,7 +87,9 @@ void FFP_GenerateTexCoord_EnvMap_Reflect(in mat4 mWorld,
+ 						   in vec4 vPos,						  
+ 						   out vec3 vOut)
+ {
+-	vec3 vWorldNormal = normalize(mul(mWorldIT, vec4(vNormal, 0.0)).xyz);
++	// Torchlight port: Runic's FFP_GenerateTexCoord_EnvMap_Reflect does not
++	// normalise the normal (rtshaderlib/FFPLib_Texturing.hlsl).
++	vec3 vWorldNormal = mul(mWorldIT, vec4(vNormal, 0.0)).xyz;
+ 	vec3 vWorldPos    = mul(mWorld, vPos).xyz;
+ 	vec3 vEyeDir  = normalize(vWorldPos - vCamPos);
+ 	

@@ -1,0 +1,132 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseFloatConvert.h b/Plugins/ParticleUniverse/include/ParticleUniverseFloatConvert.h
+new file mode 100644
+index 0000000..2ad50c0
+--- /dev/null
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseFloatConvert.h
+@@ -0,0 +1,63 @@
++/*
++-----------------------------------------------------------------------------------------------
++Float to integer as the x86-64 reference build converts it, on every CPU.
++
++Not part of the OGRECave library: added by the Torchlight port (patches/particleuniverse/). A C++
++cast from a float the integer type cannot hold (NaN, an infinity, too large, or anything negative
++for an unsigned type) is undefined, and the two CPUs the port runs on answer differently:
++x86-64's `cvttss2si`/`cvttsd2si` give the type's minimum (the "integer indefinite"), and GCC
++reaches a 32-bit unsigned through the 64-bit signed conversion and keeps the low half, while
++AArch64 (the Switch) saturates, and gives 0 for NaN. `Torchlight.bin.x86_64` is the reference, so
++these give x86-64's answer everywhere; in range they are the plain cast. The same conversions as
++the engine's `src/formats/float_convert.h`, which the library cannot include.
++-----------------------------------------------------------------------------------------------
++*/
++
++#ifndef __PU_FLOAT_CONVERT_H__
++#define __PU_FLOAT_CONVERT_H__
++
++#include <stdint.h>
++#include <limits>
++
++namespace ParticleUniverse
++{
++	/** `cvttss2si` to 32 bits: `(int)float`. */
++	inline int32_t x86FloatToInt32(float v)
++	{
++		if (!(v >= -2147483648.0f && v < 2147483648.0f))
++			return std::numeric_limits<int32_t>::min();
++		return static_cast<int32_t>(v);
++	}
++
++	/** `cvttsd2si` to 32 bits: `(int)double`. */
++	inline int32_t x86DoubleToInt32(double v)
++	{
++		if (!(v > -2147483649.0 && v < 2147483648.0))
++			return std::numeric_limits<int32_t>::min();
++		return static_cast<int32_t>(v);
++	}
++
++	/** `cvttss2si` to 64 bits: `(long)float` on LP64. */
++	inline int64_t x86FloatToInt64(float v)
++	{
++		if (!(v >= -9223372036854775808.0f && v < 9223372036854775808.0f))
++			return std::numeric_limits<int64_t>::min();
++		return static_cast<int64_t>(v);
++	}
++
++	/** `cvttsd2si` to 64 bits: `(long)double` on LP64. */
++	inline int64_t x86DoubleToInt64(double v)
++	{
++		if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0))
++			return std::numeric_limits<int64_t>::min();
++		return static_cast<int64_t>(v);
++	}
++
++	/** GCC's `(unsigned int)float` on x86-64: the 64-bit conversion's low half. */
++	inline uint32_t x86FloatToUint32(float v)
++	{
++		return static_cast<uint32_t>(static_cast<uint64_t>(x86FloatToInt64(v)));
++	}
++}
++
++#endif
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseSpatialHashTable.h b/Plugins/ParticleUniverse/include/ParticleUniverseSpatialHashTable.h
+index 8d696ae..e589ccf 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseSpatialHashTable.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseSpatialHashTable.h
+@@ -25,6 +25,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #define __PU_SPATIAL_HASHTABLE_H__
+ 
+ #include "ParticleUniversePrerequisites.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
+@@ -204,10 +205,20 @@ namespace ParticleUniverse
+ 			*/
+ 			inline unsigned int _calculateIndex(const Vector3& position)
+ 			{
++#if OGRE_VERSION < 0xE0000
+ 				long x = (long)((floor (position.x / mCellDimension)) * 73856093);
+ 				long y = (long)((floor (position.y / mCellDimension)) * 19349663);
+ 				long z = (long)((floor (position.z / mCellDimension)) * 83492791);
+ 				long i = (x ^ y ^ z) % mTableSize;
++#else
++				// Portable (the OGRE 14 port's targets include AArch64 and 32-bit-long Windows):
++				// `long` is 64 bits on the x86-64 reference, and the conversions out of range are
++				// x86's on every CPU. With a 32-bit long the modulo was also unsigned.
++				int64_t x = x86DoubleToInt64((floor (position.x / mCellDimension)) * 73856093);
++				int64_t y = x86DoubleToInt64((floor (position.y / mCellDimension)) * 19349663);
++				int64_t z = x86DoubleToInt64((floor (position.z / mCellDimension)) * 83492791);
++				int64_t i = (x ^ y ^ z) % (int64_t)mTableSize;
++#endif
+ 				i = i < 0 ? mTableSize - 1 : i; // If negative, point to the last cell.
+ 				return static_cast<unsigned int>(i);
+ 			};
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseNoise.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseNoise.cpp
+index 2c3af36..c6b82c6 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseNoise.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseNoise.cpp
+@@ -30,6 +30,7 @@ by Ken Perlin (copyright by Ken Perlin (c) 2002)
+ #endif
+ 
+ #include "ParticleUniverseNoise.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
+@@ -127,9 +128,17 @@ namespace ParticleUniverse
+ 	//-----------------------------------------------------------------------
+ 	double Noise3D::_noise(double x, double y, double z)
+ 	{
++#if OGRE_VERSION < 0xE0000
+ 		int X = (int)floor(x) & 255;
+ 		int Y = (int)floor(y) & 255;
+ 		int Z = (int)floor(z) & 255;
++#else
++		// Portable (the OGRE 14 port's targets include AArch64): out of int's range x86-64 and
++		// AArch64 truncate differently; x86's answer on every CPU.
++		int X = x86DoubleToInt32(floor(x)) & 255;
++		int Y = x86DoubleToInt32(floor(y)) & 255;
++		int Z = x86DoubleToInt32(floor(z)) & 255;
++#endif
+ 		x -= floor(x);
+ 		y -= floor(y);
+ 		z -= floor(z);

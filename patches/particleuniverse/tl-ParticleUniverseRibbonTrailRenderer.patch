@@ -1,0 +1,977 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.h
+index 19c0007..3e81d97 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.h
+@@ -26,29 +26,50 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ #include "ParticleUniversePrerequisites.h"
+ #include "ParticleUniverseRenderer.h"
+-#include "OgreRibbonTrail.h"
++#include "ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h"
+ #include "OgreSceneNode.h"
++#include "OgreSceneManager.h"
+ 
+ namespace ParticleUniverse
+ {
+-	/** Visual data specific for this type of renderer.
+-    */
++	/** Visual data specific for this type of renderer: one tracked node, one chain.
++	*/
+ 	class _ParticleUniverseExport RibbonTrailRendererVisualData : public IVisualData
+ 	{
+ 		public:
+-
+-			//Constructor
+-			RibbonTrailRendererVisualData (Ogre::SceneNode* sceneNode, Ogre::RibbonTrail* ribbonTrail) : 
+-				IVisualData(), 
++			RibbonTrailRendererVisualData (Ogre::SceneManager* manager, Ogre::SceneNode* sceneNode, TorchlightRibbonTrail* ribbonTrail) :
++				IVisualData(),
++				sceneManager(manager),
+ 				node(sceneNode),
+-				trail(ribbonTrail),
+ 				addedToTrail(false),
++				trail(ribbonTrail),
+ 				index(0){};
+ 
+-			Ogre::SceneNode* node;
+-			bool addedToTrail;
+-			Ogre::RibbonTrail* trail;
+-			size_t index;
++			/** Torchlight: `RibbonTrailRendererVisualData::~RibbonTrailRendererVisualData`
++				: the tracked node is taken off its parent and destroyed.
++			*/
++			virtual ~RibbonTrailRendererVisualData(void)
++			{
++				if (node)
++				{
++					if (node->getParentSceneNode())
++					{
++						node->getParentSceneNode()->removeChild(node);
++					}
++					sceneManager->destroySceneNode(node);
++				}
++			}
++
++			Ogre::SceneManager* sceneManager;   // +0x08, the renderer's (+0x80)
++			Ogre::SceneNode* node;              // +0x10
++			bool addedToTrail;                  // +0x18
++			TorchlightRibbonTrail* trail;       // +0x20
++			size_t index;                       // +0x28
++
++			/** Torchlight: `RibbonTrailRendererVisualData::setVisible`. Added to the
++				trail, the node's chain index is read back from it: chains come off the trail's
++				free list, so it is not the index this data was made with.
++			*/
+ 			virtual void setVisible(bool visible)
+ 			{
+ 				if (visible)
+@@ -56,6 +77,7 @@ namespace ParticleUniverse
+ 					if (!addedToTrail)
+ 					{
+ 						trail->addNode(node);
++						index = trail->getChainIndexForNode(node);
+ 						addedToTrail = true;
+ 					}
+ 				}
+@@ -70,26 +92,40 @@ namespace ParticleUniverse
+ 			};
+ 	};
+ 
+-	/** The RibbonTrailRenderer class is responsible to render particles as a RibbonTrail.
+-    */
+-	class _ParticleUniverseExport RibbonTrailRenderer : public ParticleRenderer, public TechniqueListener
++	/** Torchlight's RibbonTrailRenderer: one chain of Runic's ribbon trail
++		(TorchlightRibbonTrail) per visual particle, the particle's node tracked by it. Transcribed
++		from `Torchlight.bin.x86_64` (`ParticleUniverse::RibbonTrailRenderer`), which differs from
++		the library's throughout: its own defaults, the trail under a node of the scene's root, the
++		particle's colour, frame and the trail's start and end colours pushed every frame, a beam
++		when the technique has a Line emitter, and no technique listener.
++	*/
++	class _ParticleUniverseExport RibbonTrailRenderer : public ParticleRenderer
+ 	{
+ 		protected:
+-			vector<RibbonTrailRendererVisualData*> mAllVisualData;
+-			vector<RibbonTrailRendererVisualData*> mVisualData;
+-			size_t mQuota;
+-			Ogre::RibbonTrail* mTrail;
+-			String mRibbonTrailName;
+-			bool mUseVertexColours;
+-			size_t mMaxChainElements;
+-			Real mTrailLength;
+-			Real mTrailWidth;
+-			bool mRandomInitialColour;
+-			bool mSetLength;
+-			bool mSetWidth;
+-			ColourValue mInitialColour;
+-			ColourValue mColourChange;
+-			Ogre::SceneNode* mChildNode;
++			Ogre::SceneManager* mSceneManager;                      // +0x80
++			vector<RibbonTrailRendererVisualData*> mAllVisualData;  // +0x88
++			vector<RibbonTrailRendererVisualData*> mVisualData;     // +0xa0, free
++			size_t mQuota;                                          // +0xb8
++			Ogre::SceneNode* mChildNode;                            // +0xc0
++			TorchlightRibbonTrail* mTrail;                          // +0xc8
++			String mRibbonTrailName;                                // +0xd0
++			bool mUseVertexColours;                                 // +0xd8
++			size_t mMaxChainElements;                               // +0xe0
++			Real mTrailLength;                                      // +0xe8
++			Real mTrailWidth;                                       // +0xec
++			bool mRandomInitialColour;                              // +0xf0
++			bool mSetLength;                                        // +0xf1
++			bool mSetWidth;                                         // +0xf2
++			bool mTrailLocal;                                       // +0xf3
++			ColourValue mInitialColour;                             // +0xf4
++			ColourValue mColourChange;                              // +0x104
++			ColourValue mStartColour;                               // +0x114
++			ColourValue mEndColour;                                 // +0x124
++
++			/** Torchlight: the trail and the node it hangs from, made once
++				(`RibbonTrailRenderer::createTrail`).
++			*/
++			void createTrail(void);
+ 
+ 		public:
+ 			// Constants
+@@ -104,107 +140,54 @@ namespace ParticleUniverse
+ 			RibbonTrailRenderer(void);
+ 	        virtual ~RibbonTrailRenderer(void);
+ 
+-			/** Notify that the Particle System is rescaled.
+-	        */
+-			virtual void _notifyRescaled(const Vector3& scale);
+-
+ 			/** Getters and Setters
+ 			*/
+ 			bool isUseVertexColours(void) const;
+ 			void setUseVertexColours(bool useVertexColours);
+-
+ 			size_t getMaxChainElements(void) const;
+ 			void setMaxChainElements(size_t maxChainElements);
+-
+ 			Real getTrailLength(void) const;
+ 			void setTrailLength(Real trailLength);
+-
+ 			Real getTrailWidth(void) const;
+ 			void setTrailWidth(Real trailWidth);
+-
+ 			bool isRandomInitialColour(void) const;
+ 			void setRandomInitialColour(bool randomInitialColour);
+-
+ 			const ColourValue& getInitialColour(void) const;
+ 			void setInitialColour(const ColourValue& initialColour);
+-
+ 			const ColourValue& getColourChange(void) const;
+ 			void setColourChange(const ColourValue& colourChange);
+ 
+-			/** Deletes all ChildSceneNodes en Entities.
++			/** Torchlight: what the head and the tail of every chain are tinted by. */
++			const ColourValue& getStartColour(void) const;
++			void setStartColour(const ColourValue& startColour);
++			const ColourValue& getEndColour(void) const;
++			void setEndColour(const ColourValue& endColour);
++
++			/** Torchlight: the trail follows the system, its chains in the system's space. */
++			bool getTrailLocal(void) const;
++			void setTrailLocal(bool trailLocal);
++
++			/** Deletes the trail, its node and the visual data.
+ 			*/
+ 			void _destroyAll(void);
+-			
+-			/** Enable the RibbonTrail
+-			*/
+-//			virtual void _notifyStart(void);
+ 
+-			/** Disable the RibbonTrail
+-			*/
+-//			virtual void _notifyStop(void);
+-			
+-			/** Make all objects visible or invisible.
+-			*/
++			virtual void _notifyStart(void);
++			virtual void _notifyStop(void);
+ 			virtual void setVisible(bool visible);
+-
+-			/** @copydoc ParticleRenderer::_prepare */
+ 			virtual void _prepare(ParticleTechnique* technique);
+-
+-			/** @copydoc ParticleRenderer::_unprepare */
+-			virtual void _unprepare(ParticleTechnique* technique);
+-
+-			/** 
+-			*/
+ 			virtual void _updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool);
+-
+-			/** 
+-			*/
++			virtual void _releaseParticles(ParticlePool* pool);
+ 			virtual void _notifyAttached(Ogre::Node* parent, bool isTagPoint = false);
+-
+-			/** @copydoc ParticleRenderer::_setMaterialName */
+ 			virtual void _setMaterialName(const String& materialName);
+-
+-			/** 
+-			*/
+ 			virtual void _notifyCurrentCamera(Camera* cam);
+-	
+-			/** 
+-			*/
+ 			virtual void _notifyParticleQuota(size_t quota);
+-
+-			/** 
+-			*/
+ 			virtual void _notifyDefaultDimensions(Real width, Real height, Real depth);
+-
+-			/** 
+-			*/
+ 			virtual void _notifyParticleResized(void);
+-
+-			/** 
+-			*/
+ 			virtual void _notifyParticleZRotated(void);
+-
+-			/** 
+-			*/
+ 			virtual void setRenderQueueGroup(uint8 queueId);
+-
+-			/** 
+-			*/
+ 			virtual SortMode _getSortMode(void) const;
+-
+-			/** 
+-			*/
+ 			virtual void copyAttributesTo (ParticleRenderer* renderer);
+-
+-			/*  See TechniqueListener.
+-			*/
+-			virtual void particleEmitted(ParticleTechnique* particleTechnique, Particle* particle);
+-
+-			/*  See TechniqueListener.
+-			*/
+-			virtual void particleExpired(ParticleTechnique* particleTechnique, Particle* particle);
+ 	};
+ 
+ }
+ #endif
+-
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.cpp
+index 64c95ec..dddbe62 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseRibbonTrailRenderer.cpp
+@@ -28,286 +28,413 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleRenderers/ParticleUniverseRibbonTrailRenderer.h"
++#include "ParticleEmitters/ParticleUniverseLineEmitter.h"
++#include "ParticleAffectors/ParticleUniverseSineForceAffector.h"
+ #include "OgreSceneManager.h"
++#include "ParticleUniverseFloatConvert.h"
++
++// Torchlight's RibbonTrailRenderer, transcribed method by method from `Torchlight.bin.x86_64`.
++// It draws with Runic's ribbon trail,
++// TorchlightRibbonTrail, whose flipbook, end colours and beam it drives every frame.
+ 
+ namespace ParticleUniverse
+ {
+-	// Constants
++	// Torchlight: this file's static initialiser (`RibbonTrailRenderer::_GLOBAL__I_RibbonTrailRenderer`)
++	// sets only HALFSCALE, the same as the library's.
++	// The constructor's values (`RibbonTrailRenderer::RibbonTrailRenderer`).
+ 	const bool RibbonTrailRenderer::DEFAULT_USE_VERTEX_COLOURS = true;
+ 	const size_t RibbonTrailRenderer::DEFAULT_MAX_ELEMENTS = 10;
+-	const Real RibbonTrailRenderer::DEFAULT_LENGTH = 400;
++	const Real RibbonTrailRenderer::DEFAULT_LENGTH = 10;
+ 	const Real RibbonTrailRenderer::DEFAULT_WIDTH = 5;
+-	const bool RibbonTrailRenderer::DEFAULT_RANDOM_INITIAL_COLOUR = true;
+-	const ColourValue RibbonTrailRenderer::DEFAULT_INITIAL_COLOUR(1, 1, 1);
+-	const ColourValue RibbonTrailRenderer::DEFAULT_COLOUR_CHANGE = ColourValue(0.5, 0.5, 0.5, 0.5);
++	const bool RibbonTrailRenderer::DEFAULT_RANDOM_INITIAL_COLOUR = false;
++	const ColourValue RibbonTrailRenderer::DEFAULT_INITIAL_COLOUR(1, 1, 1, 1);
++	const ColourValue RibbonTrailRenderer::DEFAULT_COLOUR_CHANGE(0, 0, 0, 0);
+ 
+ 	//-----------------------------------------------------------------------
+-	RibbonTrailRenderer::RibbonTrailRenderer(void) : 
++	// Torchlight: `RibbonTrailRenderer::RibbonTrailRenderer`. Length and width count
++	// as set from the start, and the two end colours are white.
++	RibbonTrailRenderer::RibbonTrailRenderer(void) :
+ 		ParticleRenderer(),
++		mSceneManager(0),
+ 		mQuota(0),
++		mChildNode(0),
+ 		mTrail(0),
+ 		mUseVertexColours(DEFAULT_USE_VERTEX_COLOURS),
+ 		mMaxChainElements(DEFAULT_MAX_ELEMENTS),
+-		mSetLength(false),
+ 		mTrailLength(DEFAULT_LENGTH),
+-		mSetWidth(false),
+ 		mTrailWidth(DEFAULT_WIDTH),
+ 		mRandomInitialColour(DEFAULT_RANDOM_INITIAL_COLOUR),
++		mSetLength(true),
++		mSetWidth(true),
++		mTrailLocal(false),
+ 		mInitialColour(DEFAULT_INITIAL_COLOUR),
+ 		mColourChange(DEFAULT_COLOUR_CHANGE),
+-		mChildNode(0)
++		mStartColour(ColourValue::White),
++		mEndColour(ColourValue::White)
+ 	{
+-		std::stringstream ss; 
++		std::stringstream ss;
+ 		ss << this;
+ 		mRibbonTrailName = "RibbonTrail" + ss.str();
+ 		autoRotate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::~RibbonTrailRenderer`.
++	// 
+ 	RibbonTrailRenderer::~RibbonTrailRenderer(void)
+ 	{
+-		if (!mParentTechnique)
++		if (!mSceneManager)
+ 			return;
+-		
++		mRendererInitialised = false;
+ 		_destroyAll();
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void RibbonTrailRenderer::_notifyRescaled(const Vector3& scale)
+-	{
+-		ParticleRenderer::_notifyRescaled(scale);
+-		if (mTrail)
+-		{
+-			// Use the average length (is there a good alternative?
+-			mTrail->setTrailLength(scale.y * mTrailLength);
+-			size_t numberOfChains = mTrail->getNumberOfChains();
+-			for (size_t i = 0; i < numberOfChains; ++i)
+-			{
+-				mTrail->setInitialWidth(i, scale.x * mTrailWidth);
+-			}
+-		}
+-	}
+-	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::isUseVertexColours`: the same as the library's.
+ 	bool RibbonTrailRenderer::isUseVertexColours(void) const
+ 	{
+ 		return mUseVertexColours;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setUseVertexColours`: the same as the library's.
+ 	void RibbonTrailRenderer::setUseVertexColours(bool useVertexColours)
+ 	{
+ 		mUseVertexColours = useVertexColours;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getMaxChainElements`: the same as the library's.
+ 	size_t RibbonTrailRenderer::getMaxChainElements(void) const
+ 	{
+ 		return mMaxChainElements;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setMaxChainElements`.
+ 	void RibbonTrailRenderer::setMaxChainElements(size_t maxChainElements)
+ 	{
+ 		mMaxChainElements = maxChainElements;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getTrailLength`: the same as the library's.
+ 	Real RibbonTrailRenderer::getTrailLength(void) const
+ 	{
+ 		return mTrailLength;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setTrailLength`.
+ 	void RibbonTrailRenderer::setTrailLength(Real trailLength)
+ 	{
+ 		mTrailLength = trailLength;
+ 		mSetLength = true;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getTrailWidth`: the same as the library's.
+ 	Real RibbonTrailRenderer::getTrailWidth(void) const
+ 	{
+ 		return mTrailWidth;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setTrailWidth`: applied to every chain of a
++	// trail that exists already.
+ 	void RibbonTrailRenderer::setTrailWidth(Real trailWidth)
+ 	{
+ 		mTrailWidth = trailWidth;
+ 		mSetWidth = true;
+-	} 
++		if (mTrail)
++		{
++			for (size_t i = 0; i < mQuota; ++i)
++			{
++				mTrail->setInitialWidth(i, mTrailWidth);
++			}
++		}
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::isRandomInitialColour`: the same as the library's.
+ 	bool RibbonTrailRenderer::isRandomInitialColour(void) const
+ 	{
+ 		return mRandomInitialColour;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setRandomInitialColour`: the same as the library's.
+ 	void RibbonTrailRenderer::setRandomInitialColour(bool randomInitialColour)
+ 	{
+ 		mRandomInitialColour = randomInitialColour;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getInitialColour`: the same as the library's.
+ 	const ColourValue& RibbonTrailRenderer::getInitialColour(void) const
+ 	{
+ 		return mInitialColour;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setInitialColour`.
+ 	void RibbonTrailRenderer::setInitialColour(const ColourValue& initialColour)
+ 	{
+ 		mInitialColour = initialColour;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getColourChange`: the same as the library's.
+ 	const ColourValue& RibbonTrailRenderer::getColourChange(void) const
+ 	{
+ 		return mColourChange;
+-	} 
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setColourChange`.
+ 	void RibbonTrailRenderer::setColourChange(const ColourValue& colourChange)
+ 	{
+ 		mColourChange = colourChange;
+-	} 
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getStartColour`: a plain getter.
++	const ColourValue& RibbonTrailRenderer::getStartColour(void) const
++	{
++		return mStartColour;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setStartColour`.
++	void RibbonTrailRenderer::setStartColour(const ColourValue& startColour)
++	{
++		mStartColour = startColour;
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getEndColour`: a plain getter.
++	const ColourValue& RibbonTrailRenderer::getEndColour(void) const
++	{
++		return mEndColour;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setEndColour`.
++	void RibbonTrailRenderer::setEndColour(const ColourValue& endColour)
++	{
++		mEndColour = endColour;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::getTrailLocal`: a plain getter.
++	bool RibbonTrailRenderer::getTrailLocal(void) const
++	{
++		return mTrailLocal;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setTrailLocal`.
++	void RibbonTrailRenderer::setTrailLocal(bool trailLocal)
++	{
++		mTrailLocal = trailLocal;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::createTrail`: once, a node under the scene's
++	// root (not under the system's node, as the library's is) with the trail on it, texture
++	// coordinates on.
++	void RibbonTrailRenderer::createTrail(void)
++	{
++		if (!mParentTechnique || mTrail || mChildNode)
++			return;
++		ParticleSystem* system = mParentTechnique->getParentSystem();
++		// DIVERGENCE: not in the original, which reads both unchecked: a system made by the manager's own
++		// template path (`createParticleSystemTemplate`, used by .pu scripts, never by the game)
++		// has no scene manager, and a technique cloned from it still names it as its parent
++		// (`ParticleTechnique::copyAttributesTo` copies the parent system). The trail is then
++		// made later, by `_prepare`, once the copy is in a scene. The game's templates are in one.
++		if (!system || !system->getSceneManager())
++			return;
++		mSceneManager = system->getSceneManager();
++		mChildNode = mSceneManager->getRootSceneNode()->createChildSceneNode(Vector3::ZERO, Ogre::Quaternion::IDENTITY);
++		if (!mChildNode)
++			return;
++		mTrail = static_cast<TorchlightRibbonTrail*>(mSceneManager->createMovableObject(
++			mRibbonTrailName, TorchlightRibbonTrailFactory::FACTORY_TYPE_NAME));
++		mTrail->setUseTextureCoords(true);
++		mChildNode->attachObject(mTrail);
++		// The original ends with this renderer's `_notifyAttached(system's node, tag point)`,
++		// which does nothing.
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_destroyAll`.
+ 	void RibbonTrailRenderer::_destroyAll(void)
+ 	{
+-		if (!mParentTechnique)
++		if (!mSceneManager)
+ 			return;
+ 
+-		// Remove the listener
+-		mParentTechnique->removeTechniqueListener(this);
+-		
+-		// Detach the Ribbontrail
+-		if (mChildNode && mTrail && mTrail->isAttached())
+-		{
+-			mChildNode->detachObject(mTrail);
+-		}
+-
+-		// Delete the Ribbontrail
+-		Ogre::SceneManager* sceneManager = mParentTechnique->getParentSystem()->getSceneManager();
+-		if (mTrail && sceneManager && sceneManager->hasRibbonTrail(mRibbonTrailName))
++		if (mTrail)
+ 		{
+-			sceneManager->destroyRibbonTrail(mRibbonTrailName);
+-			mTrail = 0;
++			if (mTrail->getParentSceneNode())
++			{
++				mTrail->getParentSceneNode()->detachObject(mTrail);
++			}
++			if (mSceneManager->hasMovableObject(mRibbonTrailName, TorchlightRibbonTrailFactory::FACTORY_TYPE_NAME))
++			{
++				mSceneManager->destroyMovableObject(mRibbonTrailName, TorchlightRibbonTrailFactory::FACTORY_TYPE_NAME);
++				mTrail = 0;
++			}
+ 		}
+ 
+-		// Delete the visual data
+ 		vector<RibbonTrailRendererVisualData*>::const_iterator it;
+ 		vector<RibbonTrailRendererVisualData*>::const_iterator itEnd = mAllVisualData.end();
+ 		for (it = mAllVisualData.begin(); it != itEnd; ++it)
+ 		{
+ 			PU_DELETE_T(*it, RibbonTrailRendererVisualData, MEMCATEGORY_SCENE_OBJECTS);
+ 		}
+-
+ 		mAllVisualData.clear();
+ 		mVisualData.clear();
+ 
+-		// Reset the visual data in the pool
+-		mParentTechnique->initVisualDataInPool();
+-
+-		// Destroy the children of the childnode, but not the childnode itself, because this gives a delete-order problem
++		// Each visual data destroyed above took its tracked node with it; the node
++		// they hung from goes last.
+ 		if (mChildNode)
+ 		{
+-			mChildNode->removeAndDestroyAllChildren();
++			if (mChildNode->getParentSceneNode())
++			{
++				mChildNode->getParentSceneNode()->removeChild(mChildNode);
++			}
++			mSceneManager->destroySceneNode(mChildNode);
++		}
++		mChildNode = 0;
++
++		if (mParentTechnique)
++		{
++			mParentTechnique->initVisualDataInPool();
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyStart`.
++	void RibbonTrailRenderer::_notifyStart(void)
++	{
++		setVisible(true);
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyStop`.
++	void RibbonTrailRenderer::_notifyStop(void)
++	{
++		setVisible(false);
++		mRendererInitialised = false;
++		_destroyAll();
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setVisible`: the node the trail hangs from,
++	// cascading.
+ 	void RibbonTrailRenderer::setVisible(bool visible)
+ 	{
+-		if (mTrail)
++		if (mChildNode)
+ 		{
+-			mTrail->setVisible(visible);
++			mChildNode->setVisible(visible, true);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_prepare`: one chain and one tracked node per
++	// particle of the technique's visual quota, none of it scaled by the renderer's scale.
+ 	void RibbonTrailRenderer::_prepare(ParticleTechnique* technique)
+ 	{
+ 		if (!technique || mRendererInitialised)
+ 			return;
+ 
+-		// Register itself to the technique
+-		if (mParentTechnique)
+-		{
+-			// Although it is safe to assume that technique == mParentTechnique, use the mParentTechnique, because the mParentTechnique is
+-			// also used for unregistering.
+-			mParentTechnique->addTechniqueListener(this);
+-		}
+-
++		mParentTechnique = technique;
+ 		mQuota = technique->getVisualParticleQuota();
+-		if (!mChildNode)
+-		{
+-			// Create a childnode if not created earlier
+-			std::stringstream ss; 
+-			ss << this;
+-			String childNodeNodeName = "ParticleUniverse" + ss.str();
+-			mChildNode = mParentTechnique->getParentSystem()->getParentSceneNode()->createChildSceneNode(childNodeNodeName);
+-			mChildNode->setInheritOrientation(false);
+-		}
+-
+-		if (mChildNode)
++		if (technique->getParentSystem()->getParentSceneNode())
+ 		{
+-			// Create RibbonTrail
+-			Ogre::SceneManager* sceneManager = mParentTechnique->getParentSystem()->getSceneManager();
+-			mTrail = sceneManager->createRibbonTrail(mRibbonTrailName);
++			createTrail();
+ 			mTrail->setNumberOfChains(mQuota);
+ 			mTrail->setMaxChainElements(mMaxChainElements);
+ 			mTrail->setMaterialName(technique->getMaterialName());
+ 			mTrail->setRenderQueueGroup(mQueueId);
+ 			if (mSetLength)
+ 			{
+-				mTrail->setTrailLength(_mRendererScale.y * mTrailLength);
++				mTrail->setTrailLength(mTrailLength);
+ 			}
+ 			else
+ 			{
+-				mTrail->setTrailLength(_mRendererScale.y * technique->getDefaultHeight());
++				mTrail->setTrailLength(technique->getDefaultHeight());
+ 			}
+ 			mTrail->setUseVertexColours(mUseVertexColours);
+ 
+-			// By default, make this transparent to query requests
+-			mTrail->setQueryFlags(0);
+-
+-			// Create number of VisualData objects
+-			String sceneNodeName;
+-			std::stringstream ss; 
+-			ss << this;
+ 			for (size_t i = 0; i < mQuota; i++)
+ 			{
+-				sceneNodeName = "ParticleUniverse" + ss.str() + StringConverter::toString(i);
+-				RibbonTrailRendererVisualData* visualData = 
+-					PU_NEW_T(RibbonTrailRendererVisualData, MEMCATEGORY_SCENE_OBJECTS)(mChildNode->createChildSceneNode(sceneNodeName), mTrail);
+-				visualData->node->setInheritOrientation(false);
++				Ogre::SceneNode* node = mChildNode->createChildSceneNode(Vector3::ZERO, Ogre::Quaternion::IDENTITY);
++				RibbonTrailRendererVisualData* visualData =
++					PU_NEW_T(RibbonTrailRendererVisualData, MEMCATEGORY_SCENE_OBJECTS)(mSceneManager, node, mTrail);
+ 				visualData->index = i;
+-				mAllVisualData.push_back(visualData); // Managed by this renderer
+-				mVisualData.push_back(visualData); // Used to assign to a particle
++				mAllVisualData.push_back(visualData);
++				mVisualData.push_back(visualData);
+ 				if (mRandomInitialColour)
+ 				{
+-					mTrail->setInitialColour(i, Math::UnitRandom(), Math::UnitRandom(), Math::UnitRandom());
++					Real r = Math::UnitRandom();
++					Real g = Math::UnitRandom();
++					Real b = Math::UnitRandom();
++					mTrail->setInitialColour(i, r, g, b);
+ 				}
+ 				else
+ 				{
+ 					mTrail->setInitialColour(i, mInitialColour);
+ 				}
++				mTrail->setStartEndColors(mStartColour, mEndColour);
+ 				mTrail->setColourChange(i, mColourChange);
+ 				if (mSetWidth)
+ 				{
+-					mTrail->setInitialWidth(i, _mRendererScale.x * mTrailWidth);
++					mTrail->setInitialWidth(i, mTrailWidth);
+ 				}
+ 				else
+ 				{
+-					mTrail->setInitialWidth(i, _mRendererScale.x * mParentTechnique->getDefaultWidth());
++					mTrail->setInitialWidth(i, mParentTechnique->getDefaultWidth());
+ 				}
+ 			}
+-			mChildNode->attachObject(mTrail);
+-			mRendererInitialised = true;
+ 		}
++		mRendererInitialised = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void RibbonTrailRenderer::_unprepare(ParticleTechnique* technique)
+-	{
+-		// Todo: The childnodes still exist, but because the parent node can also have other childnodes, they need to be deleted with caution
+-		mRendererInitialised = false; // Retriggers the _prepare function
+-		_destroyAll(); // Delete all nodes, they will be rebuild
+-	}
+-	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_updateRenderQueue`. No base call and no
++	// visibility test. Every particle gets a chain (from the free visual data) and its node is
++	// moved to the particle; then the trail is given the chain's frame, the end colours and the
++	// beam, the node is tracked, and the chain takes the particle's colour.
++	//
++	// A beam is a technique with a `Line` emitter: the chains are laid out from each particle to
++	// the line's end, and a `SineForce` affector (the first) shakes them. Without one the chains
++	// are ordinary trails behind their particles.
+ 	void RibbonTrailRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
+ 	{
+-		// Always perform this one
+-		ParticleRenderer::_updateRenderQueue(queue, pool);
+-
+-		if (!mVisible)
++		if (!mParentTechnique || pool->isEmpty())
+ 			return;
+ 
++		size_t numEmitters = mParentTechnique->getNumEmitters();
++		const int flipbookWidth = mParentTechnique->getFlipbookWidth();
++		const int flipbookHeight = mParentTechnique->getFlipbookHeight();
++		ParticleSystem* system = mParentTechnique->getParentSystem();
++
++		if (mTrailLocal && mChildNode)
++		{
++			Ogre::SceneNode* systemNode = system->getParentSceneNode();
++			mChildNode->setPosition(systemNode->_getDerivedPosition());
++			mChildNode->setOrientation(systemNode->_getDerivedOrientation());
++		}
++
++		// Without a Line emitter the line end and the force are never set: the original passes
++		// whatever its stack held, to a trail that ignores them. Zero here.
++		bool beam = false;
++		Vector3 lineEnd = Vector3::ZERO;
++		Real sineAngle = 0.0f;
++		Vector3 force = Vector3::ZERO;
++		Real frequencyMin = 1.0f;
++		Real frequencyMax = 1.0f;
++		for (size_t e = 0; e < numEmitters; ++e)
++		{
++			ParticleEmitter* emitter = mParentTechnique->getEmitter(e);
++			if (emitter->getEmitterType() != "Line")
++				continue;
++			lineEnd = static_cast<LineEmitter*>(emitter)->getEnd();
++			// The original asks for the emitter's derived position here and drops it.
++			if (!mTrailLocal)
++				emitter->getDerivedPosition();
++			beam = true;
++			size_t numAffectors = mParentTechnique->getNumAffectors();
++			for (size_t a = 0; a < numAffectors; ++a)
++			{
++				ParticleAffector* affector = mParentTechnique->getAffector(a);
++				if (affector->getAffectorType() != "SineForce")
++					continue;
++				SineForceAffector* sine = static_cast<SineForceAffector*>(affector);
++				sineAngle = sinf(sine->getAngle());
++				force = sine->getForceVector();
++				frequencyMin = sine->getFrequencyMin();
++				frequencyMax = sine->getFrequencyMax();
++				break;
++			}
++			break;
++		}
++
+ 		Particle* particle = static_cast<Particle*>(pool->getFirst());
+-		RibbonTrailRendererVisualData* visualData = 0;
+ 		while (!pool->end())
+ 		{
+ 			if (particle)
+@@ -316,106 +443,133 @@ namespace ParticleUniverse
+ 				{
+ 					particle->visualData = mVisualData.back();
+ 					mVisualData.pop_back();
+-					visualData = static_cast<RibbonTrailRendererVisualData*>(particle->visualData);
+ 				}
+-				visualData = static_cast<RibbonTrailRendererVisualData*>(particle->visualData);
++				RibbonTrailRendererVisualData* visualData = static_cast<RibbonTrailRendererVisualData*>(particle->visualData);
+ 				if (visualData)
+ 				{
+ 					Ogre::SceneNode* node = visualData->node;
+-					node->_setDerivedPosition(particle->position);
+-
+-					// Set the width of the trail if required
+-					if (particle->particleType == Particle::PT_VISUAL)
++					Vector3 position = particle->position + particle->torchlightVector28;
++					Vector3 end = lineEnd;
++					if (mParentTechnique->isKeepLocal())
+ 					{
+-						VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-						if (visualParticle->ownDimensions)
++						if (beam)
+ 						{
+-							mTrail->setInitialWidth(visualData->index, visualParticle->width);
++							if (!mTrailLocal)
++							{
++								position += system->getDerivedPosition();
++								end = system->getDerivedOrientation() * lineEnd;
++							}
++						}
++						else if (!mTrailLocal)
++						{
++							position = system->getDerivedOrientation() * position + system->getDerivedPosition();
+ 						}
+ 					}
++					else if (beam)
++					{
++						position = system->getDerivedPosition();
++					}
++					node->setPosition(position);
++					VisualParticle* visual = static_cast<VisualParticle*>(particle);
++					mTrail->setFrame((unsigned int)visualData->index, flipbookWidth, flipbookHeight,
++						x86FloatToInt32(visual->animationFrame)); // portable: x86's answer on every CPU
++					mTrail->setStartEndColors(mStartColour, mEndColour);
++					mTrail->updateTrailBeam(beam, end + position, sineAngle, force, frequencyMin, frequencyMax);
+ 					visualData->setVisible(true);
++					mTrail->setInitialColour(visualData->index, visual->colour);
+ 				}
+ 			}
+ 			particle = static_cast<Particle*>(pool->getNext());
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_releaseParticles`: every particle's chain is
++	// let go and its visual data goes back to the free list.
++	void RibbonTrailRenderer::_releaseParticles(ParticlePool* pool)
++	{
++		if (pool->isEmpty() || !mRendererInitialised)
++			return;
++		Particle* particle = static_cast<Particle*>(pool->getFirst());
++		while (!pool->end())
++		{
++			if (particle && particle->visualData)
++			{
++				RibbonTrailRendererVisualData* visualData = static_cast<RibbonTrailRendererVisualData*>(particle->visualData);
++				if (mTrail)
++					visualData->setVisible(false);
++				mVisualData.push_back(visualData);
++				particle->visualData = 0;
++			}
++			particle = static_cast<Particle*>(pool->getNext());
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyAttached` does nothing.
+ 	void RibbonTrailRenderer::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+-		// No implementation here
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_setMaterialName`.
+ 	void RibbonTrailRenderer::_setMaterialName(const String& materialName)
+ 	{
++		createTrail();
+ 		if (mTrail)
+-		{
+ 			mTrail->setMaterialName(materialName);
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::notifyCurrentCamera`. (OGRE notifies the
++	// trail itself too, as the movable it is; a null camera is not passed on.)
+ 	void RibbonTrailRenderer::_notifyCurrentCamera(Camera* cam)
+ 	{
+-		if (mTrail)
+-		{
++		createTrail();
++		if (mTrail && cam)
+ 			mTrail->_notifyCurrentCamera(cam);
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyParticleQuota`: everything is made
++	// again at the next prepare.
+ 	void RibbonTrailRenderer::_notifyParticleQuota(size_t quota)
+ 	{
+-		mRendererInitialised = false; // Retriggers the _prepare function
+-		_destroyAll(); // Delete all nodes, they will be rebuild
++		mRendererInitialised = false;
++		_destroyAll();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyDefaultDimensions` does nothing.
+ 	void RibbonTrailRenderer::_notifyDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+-		// No implementation
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyParticleResized` does nothing.
+ 	void RibbonTrailRenderer::_notifyParticleResized(void)
+ 	{
+-		// No implementation
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_notifyParticleZRotated` does nothing.
+ 	void RibbonTrailRenderer::_notifyParticleZRotated(void)
+ 	{
+-		// No implementation
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::setRenderQueueGroup`.
+ 	void RibbonTrailRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
++		createTrail();
+ 		mQueueId = queueId;
+ 		if (mTrail)
+-		{
+ 			mTrail->setRenderQueueGroup(queueId);
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::_getSortMode`.
+ 	SortMode RibbonTrailRenderer::_getSortMode(void) const
+ 	{
+-		return SM_DISTANCE; // In fact there is no sorting
+-	}
+-	//-----------------------------------------------------------------------
+-	void RibbonTrailRenderer::particleEmitted(ParticleTechnique* particleTechnique, Particle* particle)
+-	{
+-		// Assigning visual data already done in _updateRenderQueue()
+-	}
+-	//-----------------------------------------------------------------------
+-	void RibbonTrailRenderer::particleExpired(ParticleTechnique* particleTechnique, Particle* particle)
+-	{
+-		if (particle->visualData)
+-		{
+-			RibbonTrailRendererVisualData* ribbonTrailRendererVisualData = static_cast<RibbonTrailRendererVisualData*>(particle->visualData);
+-			ribbonTrailRendererVisualData->setVisible(false);
+-		}
++		return SM_DISTANCE;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `RibbonTrailRenderer::copyAttributesTo`.
+ 	void RibbonTrailRenderer::copyAttributesTo (ParticleRenderer* renderer)
+ 	{
+-		// First copy parent attributes
+ 		ParticleRenderer::copyAttributesTo(renderer);
+-
+-		// First cast to RibbonTrailRenderer
++		if (!renderer || renderer->getRendererType() != getRendererType())
++			return;
+ 		RibbonTrailRenderer* ribbonTrailRenderer = static_cast<RibbonTrailRenderer*>(renderer);
+ 		ribbonTrailRenderer->mUseVertexColours = mUseVertexColours;
+ 		ribbonTrailRenderer->mMaxChainElements = mMaxChainElements;
+@@ -426,6 +580,8 @@ namespace ParticleUniverse
+ 		ribbonTrailRenderer->mRandomInitialColour = mRandomInitialColour;
+ 		ribbonTrailRenderer->mInitialColour = mInitialColour;
+ 		ribbonTrailRenderer->mColourChange = mColourChange;
++		ribbonTrailRenderer->mStartColour = mStartColour;
++		ribbonTrailRenderer->mEndColour = mEndColour;
++		ribbonTrailRenderer->mTrailLocal = mTrailLocal;
+ 	}
+-
+ }

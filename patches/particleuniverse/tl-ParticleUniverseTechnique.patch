@@ -1,0 +1,2189 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h b/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
+index f145b52..c472924 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
+@@ -659,6 +659,12 @@ namespace ParticleUniverse
+ 			*/
+ 			CameraDependency* getDepthCameraDependency(void) const;
+ 
++			/** Torchlight: `ParticleTechnique::getParticlesCreated`, not in the library: how
++				many visual particles the technique holds from the manager's store (its pool's list).
++				Nothing in the game calls it.
++			*/
++			size_t getParticlesCreated(void) {return mPool._getNumberOfVisualParticlesTaken();}
++
+ 			/** 
+ 			*/
+ 			size_t getNumberOfEmittedParticles(void);
+@@ -797,7 +803,49 @@ namespace ParticleUniverse
+ 	        */
+ 			void pushEvent(ParticleUniverseEvent& particleUniverseEvent);
+ 
++			/** Torchlight: the sprite sheet's cells across and down, handed to the renderer.
++			*/
++			void setFlipbookWidthHeight(int width, int height);
++			int getFlipbookWidth(void) const {return mFlipbookWidth;};
++			int getFlipbookHeight(void) const {return mFlipbookHeight;};
++
++			/** Torchlight: remember the camera the technique is culled against, then do
++				what _notifyCurrentCamera does.
++			*/
++			void notifyCurrentCamera(Camera* camera);
++
++			/** Torchlight: the number of visual particles alive.
++			*/
++			size_t getParticlesUpdating(void);
++
++			/** Torchlight: an emitter never expires or loops.
++			*/
++			bool isLooping(void);
++
++			/** Torchlight: return every visual particle to the manager's store.
++			*/
++			void clearAllParticles(void);
++
++			/** Torchlight's `WORLD ORIENTATION` (technique +0x5b0): a particle's direction is
++				turned by the system's orientation when it is emitted (unless keep local).
++			*/
++			bool isWorldOrientation(void) const {return mWorldOrientation;};
++			void setWorldOrientation(bool worldOrientation) {mWorldOrientation = worldOrientation;};
++
++			/** Torchlight's `NO CULLING` (technique +0x5b1): neither the camera nor the
++				distance falloff stops this technique.
++			*/
++			bool isNoCull(void) const {return mNoCull;};
++			void setNoCull(bool noCull) {mNoCull = noCull;};
++
+ 		protected:
++			// Torchlight's fields (`ParticleTechnique::ParticleTechnique`).
++			int mFlipbookWidth;
++			int mFlipbookHeight;
++			Camera* mCurrentCamera;
++			bool mWorldOrientation;
++			bool mNoCull;
++
+ 
+ 			/** Convenient function to push an event.
+ 			*/
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
+index c27675d..68ced5c 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
+@@ -109,7 +109,12 @@ namespace ParticleUniverse
+ 		mMaxNumEmitterParticles(0),
+ 		mMaxNumTechniqueParticles(0),
+ 		mMaxNumAffectorParticles(0),
+-		mMaxNumSystemParticles(0)
++		mMaxNumSystemParticles(0),
++		mFlipbookWidth(1),
++		mFlipbookHeight(1),
++		mCurrentCamera(0),
++		mWorldOrientation(false),
++		mNoCull(false)
+ 	{
+ 		particleType = PT_TECHNIQUE;
+ 		mAliasType = AT_TECHNIQUE;
+@@ -117,11 +122,13 @@ namespace ParticleUniverse
+ 		mPool.setParentTechnique(this);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::~ParticleTechnique`:
++	// no `_unprepare` first (the library's "Bugfix V1.5";
++	// Torchlight's copy has no `_unprepare` at all), then the library's order. It also counts the
++	// manager's techniques down (+0x4fc), a statistic nothing reads, left out. The visual particles
++	// go back to the store from the pool's destructor (`ParticlePool::~ParticlePool`).
+ 	ParticleTechnique::~ParticleTechnique(void)
+ 	{
+-		// Bugfix V1.5: Cleanup
+-		_unprepare();
+-
+ 		// Destroy the spatial hashing tables.
+ 		if (mSpatialHashTableA)
+ 		{
+@@ -150,6 +157,7 @@ namespace ParticleUniverse
+ 			mCameraDependencyFactory.destroy(mDepthCameraDependency);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_initParticleForEmission`: the same as the library's.
+ 	void ParticleTechnique::_initParticleForEmission(Particle* particle)
+ 	{
+ 		if (!mTechniqueListenerList.empty())
+@@ -164,6 +172,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_initForEmission`: the same as the library's.
+ 	void ParticleTechnique::_initForEmission(void)
+ 	{
+ 		// The technique itself is emitted.
+@@ -178,6 +187,7 @@ namespace ParticleUniverse
+ 		mPool.lockAllParticles();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_initForExpiration`: the same as the library's.
+ 	void ParticleTechnique::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// The technique itself is expired.
+@@ -187,6 +197,7 @@ namespace ParticleUniverse
+ 		_notifyStop();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_markForEmission`: the same as the library's.
+ 	void ParticleTechnique::_markForEmission(void)
+ 	{
+ 		// Set all indications to false.
+@@ -202,6 +213,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_markForEmission`: the same as the library's (Torchlight's has no `mark` argument and always marks; nothing passes false).
+ 	void ParticleTechnique::_markForEmission(ParticleEmitter* emitter, bool mark)
+ 	{
+ 		// Determine the type of particle the emitter emits
+@@ -239,6 +251,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_resetMarkForEmission`: the same as the library's.
+ 	void ParticleTechnique::_resetMarkForEmission(void)
+ 	{
+ 		// Run through all emitters and set MarkedForEmission to false.
+@@ -258,6 +271,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyUpdateBounds`: the same as the library's (its reset is `_resetBounds`, to the origin).
+ 	void ParticleTechnique::_notifyUpdateBounds()
+ 	{
+ 		if (mPool.isEmpty())
+@@ -272,15 +286,19 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_resetBounds`: the extents go to the origin
++	// (`Vector3::ZERO`), not to the technique's derived position as the library's do.
+ 	void ParticleTechnique::_resetBounds()
+ 	{
+ 		mWorldAABB.setNull();
+-		Vector3 position = getDerivedPosition();
+-		mMinWorldExtend = position;
+-		mMaxWorldExtend = position;
++		mMinWorldExtend = Vector3::ZERO;
++		mMaxWorldExtend = Vector3::ZERO;
+ 		mHasExtents = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyRescaled`: emitters, affectors, renderer,
++	// observers, behaviours, externs, as the library's, but not the emitted techniques in the pool
++	// (the library's "Addition to V1.3.1").
+ 	void ParticleTechnique::_notifyRescaled(const Vector3& scale)
+ 	{
+ 		_mParticleSystemScale = scale;
+@@ -330,99 +348,87 @@ namespace ParticleUniverse
+ 		{
+ 			(*itExtern)->_notifyRescaled(scale);
+ 		}
+-
+-		// Take the emitted techniques into account
+-		// Addition to V1.3.1
+-		ParticleTechnique* technique = static_cast<ParticleTechnique*>(mPool.getFirst(Particle::PT_TECHNIQUE));
+-		while (!mPool.end(Particle::PT_TECHNIQUE))
+-		{
+-			if (technique)
+-			{
+-				technique->_notifyRescaled(scale);
+-			}
+-			
+-			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyVelocityRescaled`: stored, and nothing else
++	// (the library also tells the emitted techniques in the pool).
+ 	void ParticleTechnique::_notifyVelocityRescaled(const Real& scaleVelocity)
+ 	{
+ 		_mParticleSystemScaleVelocity = scaleVelocity;
+-
+-		// Take the emitted techniques into account
+-		// Addition to V1.3.1
+-		ParticleTechnique* technique = static_cast<ParticleTechnique*>(mPool.getFirst(Particle::PT_TECHNIQUE));
+-		while (!mPool.end(Particle::PT_TECHNIQUE))
+-		{
+-			if (technique)
+-			{
+-				technique->_notifyVelocityRescaled(scaleVelocity);
+-			}
+-			
+-			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getVisualParticleQuota`: the same as the library's.
+ 	size_t ParticleTechnique::getVisualParticleQuota(void) const 
+ 	{
+ 		return mVisualParticleQuota;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setVisualParticleQuota`: the same as the library's.
+ 	void ParticleTechnique::setVisualParticleQuota(size_t quota) 
+ 	{
+ 		mVisualParticleQuota = quota;
+ 		mVisualParticlePoolIncreased = false; // Triggers function to increase the number of visual particles
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmittedEmitterQuota`: the same as the library's.
+ 	size_t ParticleTechnique::getEmittedEmitterQuota(void) const
+ 	{
+ 		return mEmittedEmitterQuota;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setEmittedEmitterQuota`: the same as the library's.
+ 	void ParticleTechnique::setEmittedEmitterQuota(size_t quota)
+ 	{
+ 		mEmittedEmitterQuota = quota;
+ 		mParticleEmitterPoolIncreased = false; // Triggers function to increase the number of emitter particles
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmittedTechniqueQuota`: the same as the library's.
+ 	size_t ParticleTechnique::getEmittedTechniqueQuota(void) const
+ 	{
+ 		return mEmittedTechniqueQuota;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setEmittedTechniqueQuota`: the same as the library's.
+ 	void ParticleTechnique::setEmittedTechniqueQuota(size_t quota)
+ 	{
+ 		mEmittedTechniqueQuota = quota;
+ 		mParticleTechniquePoolIncreased = false; // Triggers function to increase the number of technique particles
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmittedAffectorQuota`: the same as the library's.
+ 	size_t ParticleTechnique::getEmittedAffectorQuota(void) const
+ 	{
+ 		return mEmittedAffectorQuota;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setEmittedAffectorQuota`: the same as the library's.
+ 	void ParticleTechnique::setEmittedAffectorQuota(size_t quota)
+ 	{
+ 		mEmittedAffectorQuota = quota;
+ 		mParticleAffectorPoolIncreased = false; // Triggers function to increase the number of affector particles
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmittedSystemQuota`: the same as the library's.
+ 	size_t ParticleTechnique::getEmittedSystemQuota(void) const
+ 	{
+ 		return mEmittedSystemQuota;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setEmittedSystemQuota`: the same as the library's.
+ 	void ParticleTechnique::setEmittedSystemQuota(size_t quota)
+ 	{
+ 		mEmittedSystemQuota = quota;
+ 		mParticleSystemPoolIncreased = false; // Triggers function to increase the number of particle system particles
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getDefaultWidth`: the same as the library's.
+ 	const Real ParticleTechnique::getDefaultWidth(void) const
+ 	{
+ 		return mDefaultWidth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setDefaultWidth`: the same as the library's.
+ 	void ParticleTechnique::setDefaultWidth(const Real width)
+ 	{
+ 		mDefaultWidth = width;
+@@ -434,11 +440,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getDefaultHeight`: the same as the library's.
+ 	const Real ParticleTechnique::getDefaultHeight(void) const
+ 	{
+ 		return mDefaultHeight;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setDefaultHeight`: the same as the library's.
+ 	void ParticleTechnique::setDefaultHeight(const Real height)
+ 	{
+ 		mDefaultHeight = height;
+@@ -450,11 +458,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getDefaultDepth`: the same as the library's.
+ 	const Real ParticleTechnique::getDefaultDepth(void) const
+ 	{
+ 		return mDefaultDepth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setDefaultDepth`: the same as the library's.
+ 	void ParticleTechnique::setDefaultDepth(const Real depth)
+ 	{
+ 		mDefaultDepth = depth;
+@@ -466,11 +476,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::suppressNotifyEmissionChange`: the same as the library's.
+ 	void ParticleTechnique::suppressNotifyEmissionChange(bool suppress)
+ 	{
+ 		mSuppressNotifyEmissionChange = suppress;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getMaterialName`: the same as the library's.
+ 	const String& ParticleTechnique::getMaterialName(void) const
+ 	{
+ 		return mMaterialName;
+@@ -483,26 +495,30 @@ namespace ParticleUniverse
+                     Ogre::MaterialManager::getSingleton().load(mMaterialName, resourceGroupName));
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setMaterialName`: with a renderer, the material is
++	// loaded (from the system's resource group, or the default one) and handed to it, always - the
++	// library does both only when the manager auto-loads materials (true by default).
+ 	void ParticleTechnique::setMaterialName(const String& materialName)
+ 	{
+ 		mMaterialName = materialName;
+ 		if (mRenderer)
+ 		{
+-			if (ParticleSystemManager::getSingletonPtr()->isAutoLoadMaterials())
+-			{
+-				String resourceGroupName = mParentSystem ? mParentSystem->getResourceGroupName() : Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+-				Ogre::MaterialPtr mat = Ogre::static_pointer_cast<Ogre::Material>(
+-				        Ogre::MaterialManager::getSingleton().load(mMaterialName, resourceGroupName));
+-				mRenderer->_setMaterialName(mMaterialName); // V1.5: If materials not auto loaded, then DIY
+-			}
++			String resourceGroupName = mParentSystem ? mParentSystem->getResourceGroupName() : Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
++			Ogre::MaterialPtr mat = Ogre::static_pointer_cast<Ogre::Material>(
++			        Ogre::MaterialManager::getSingleton().load(mMaterialName, resourceGroupName));
++			mRenderer->_setMaterialName(mMaterialName);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::createEmitter`: the technique then takes the new
++	// emitter's keep-local flag as its own (the library leaves the technique's alone) - a second
++	// time, `addEmitter` having done it already.
+ 	ParticleEmitter* ParticleTechnique::createEmitter(const String& emitterType)
+ 	{
+ 		assert(emitterType != BLANK_STRING && "emitterType is empty!");
+ 		ParticleEmitter* emitter = ParticleSystemManager::getSingletonPtr()->createEmitter(emitterType);
+ 		addEmitter(emitter);
++		mKeepLocal = emitter->isKeepLocal();
+ 		return emitter;
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -511,11 +527,19 @@ namespace ParticleUniverse
+ 		assert(emitter && "Emitter is null!");
+ 		mEmitters.push_back(emitter);
+ 		emitter->setParentTechnique(this);
+-		//emitter->_notifyRescaled(_mParticleSystemScale);
++		// Torchlight: `ParticleTechnique::addEmitter`: an emitter
++		// added after the system was scaled takes the scale at once. The library leaves this
++		// call out, and Torchlight's glue sets `VISUAL SCALE` before it adds a single emitter.
++		emitter->_notifyRescaled(_mParticleSystemScale);
+ 		mPrepareEmitter = true;
++		// ... and the technique takes the emitter's keep-local flag (`+0x535`; X360 `+0x2e9`
++		// from the emitter's `+0x181`), so the last emitter added decides it. The glue adds
++		// each emitter wrapper's emitter this way (`CParticleTechWrapper::addEmitter`).
++		mKeepLocal = emitter->isKeepLocal();
+ 		_notifyEmissionChange();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::removeEmitter`: the same as the library's (the parent cleared first, found or not).
+ 	void ParticleTechnique::removeEmitter(ParticleEmitter* emitter)
+ 	{
+ 		assert(emitter && "Emitter is null!");
+@@ -543,12 +567,14 @@ namespace ParticleUniverse
+ 			_notifyEmissionChange();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmitter`: the same as the library's.
+ 	ParticleEmitter* ParticleTechnique::getEmitter (size_t index) const
+ 	{
+ 		assert(index < mEmitters.size() && "Emitter index out of bounds!");
+ 		return mEmitters[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getEmitter`: the same as the library's.
+ 	ParticleEmitter* ParticleTechnique::getEmitter (const String& emitterName) const
+ 	{
+ 		if (emitterName == BLANK_STRING)
+@@ -567,11 +593,13 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumEmitters`: the same as the library's.
+ 	size_t ParticleTechnique::getNumEmitters (void) const
+ 	{
+ 		return mEmitters.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumEmittedEmitters`: the same as the library's.
+ 	size_t ParticleTechnique::getNumEmittedEmitters (void) const
+ 	{
+ 		ParticleEmitterIterator it;
+@@ -588,36 +616,23 @@ namespace ParticleUniverse
+ 		return count;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyEmitter`: `removeEmitter` (which notifies the
++	// emission change first, while the emitter still exists), then the manager destroys it - found in
++	// the technique or not.
+ 	void ParticleTechnique::destroyEmitter(ParticleEmitter* emitter)
+ 	{
+ 		assert(emitter && "Emitter is null!");
+-		ParticleEmitterList::iterator it;
+-		ParticleEmitterList::iterator itEnd = mEmitters.end();
+-		bool notify = false;
+-		for (it = mEmitters.begin(); it != itEnd; ++it)
+-		{
+-			if (*it == emitter)
+-			{
+-				// Must be notified in case the emitter emits non-visual particles
+-				notify = emitter->getEmitsName() != BLANK_STRING;
+-
+-				// Detroy it
+-				ParticleSystemManager::getSingletonPtr()->destroyEmitter(*it);
+-				mEmitters.erase(it);
+-				break;
+-			}
+-		}
+-
+-		// Notify, because an emitter that emitted non-visual objects was deleted
+-		if (notify)
+-			_notifyEmissionChange();
++		removeEmitter(emitter);
++		ParticleSystemManager::getSingletonPtr()->destroyEmitter(emitter);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyEmitter`: the same as the library's.
+ 	void ParticleTechnique::destroyEmitter (size_t index)
+ 	{
+ 		destroyEmitter(getEmitter(index));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAllEmitters`: the same as the library's (gated by an ownership bit, +0x5a8 & 2, that the constructor sets and nothing clears).
+ 	void ParticleTechnique::destroyAllEmitters(void)
+ 	{
+ 		ParticleEmitterList::iterator it;
+@@ -630,6 +645,7 @@ namespace ParticleUniverse
+ 	}
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::createAffector`: the same as the library's.
+ 	ParticleAffector* ParticleTechnique::createAffector(const String& affectorType)
+ 	{
+ 		assert(affectorType != BLANK_STRING && "affectorType is empty!");
+@@ -643,9 +659,12 @@ namespace ParticleUniverse
+ 		assert(affector && "Affector is null!");
+ 		mAffectors.push_back(affector);
+ 		affector->setParentTechnique(this);
++		// Torchlight: `ParticleTechnique::addAffector`: likewise for an affector.
++		affector->_notifyRescaled(_mParticleSystemScale);
+ 		mPrepareAffector = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::removeAffector`: the same as the library's (the parent cleared first, found or not).
+ 	void ParticleTechnique::removeAffector (ParticleAffector* affector)
+ 	{
+ 		assert(affector && "Affector is null!");
+@@ -665,12 +684,14 @@ namespace ParticleUniverse
+ 		affector->setParentTechnique(0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getAffector`: the same as the library's.
+ 	ParticleAffector* ParticleTechnique::getAffector (size_t index) const
+ 	{
+ 		assert(index < mAffectors.size() && "Affector index out of bounds!");
+ 		return mAffectors[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getAffector`: the same as the library's.
+ 	ParticleAffector* ParticleTechnique::getAffector (const String& affectorName) const
+ 	{
+ 		if (affectorName == BLANK_STRING)
+@@ -689,11 +710,13 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumAffectors`: the same as the library's.
+ 	size_t ParticleTechnique::getNumAffectors (void) const
+ 	{
+ 		return mAffectors.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumEmittedAffectors`: the same as the library's.
+ 	size_t ParticleTechnique::getNumEmittedAffectors (void) const
+ 	{
+ 		ParticleAffectorIterator it;
+@@ -710,28 +733,24 @@ namespace ParticleUniverse
+ 		return count;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAffector`: `removeAffector`, then the manager
++	// destroys it - found in the technique or not.
+ 	void ParticleTechnique::destroyAffector(ParticleAffector* affector)
+ 	{
+ 		assert(affector && "Affector is null!");
+-		ParticleAffectorList::iterator it;
+-		ParticleAffectorIterator itEnd = mAffectors.end();
+-		for (it = mAffectors.begin(); it != itEnd; ++it)
+-		{
+-			if (*it == affector)
+-			{
+-				// Destroy it
+-				ParticleSystemManager::getSingletonPtr()->destroyAffector(*it);
+-				mAffectors.erase(it);
+-				break;
+-			}
+-		}
++		removeAffector(affector);
++		ParticleSystemManager::getSingletonPtr()->destroyAffector(affector);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAffector`: the same as the library's.
+ 	void ParticleTechnique::destroyAffector (size_t index)
+ 	{
+ 		destroyAffector(getAffector(index));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAllAffectors`: the same as the library's (gated by an ownership bit, +0x5a8 & 1, that the constructor sets and nothing clears).
++	// The affector destructor's self-removal cannot touch the list walked here: the
++	// manager's `destroyAffector` clears the parent technique first.
+ 	void ParticleTechnique::destroyAllAffectors(void)
+ 	{
+ 		ParticleAffectorIterator it;
+@@ -744,6 +763,7 @@ namespace ParticleUniverse
+ 	}
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::createObserver`: the same as the library's.
+ 	ParticleObserver* ParticleTechnique::createObserver(const String& observerType)
+ 	{
+ 		assert(observerType != BLANK_STRING && "observerType is empty!");
+@@ -752,12 +772,14 @@ namespace ParticleUniverse
+ 		return observer;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::addObserver`: also tells the observer the system's scale (the
++	// library comments that call out).
+ 	void ParticleTechnique::addObserver (ParticleObserver* observer)
+ 	{
+ 		assert(observer && "Observer is null!");
+ 		mObservers.push_back(observer);
+ 		observer->setParentTechnique(this);
+-		//observer->_notifyRescaled(_mParticleSystemScale);
++		observer->_notifyRescaled(_mParticleSystemScale);
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleTechnique::removeObserver(ParticleObserver* observer)
+@@ -779,12 +801,14 @@ namespace ParticleUniverse
+ 		observer->setParentTechnique(0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getObserver`: the same as the library's.
+ 	ParticleObserver* ParticleTechnique::getObserver (size_t index) const
+ 	{
+ 		assert(index < mObservers.size() && "Observer index out of bounds!");
+ 		return mObservers[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getObserver`: the same as the library's.
+ 	ParticleObserver* ParticleTechnique::getObserver (const String& observerName) const
+ 	{
+ 		if (observerName == BLANK_STRING)
+@@ -803,11 +827,13 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumObservers`: the same as the library's.
+ 	size_t ParticleTechnique::getNumObservers (void) const
+ 	{
+ 		return mObservers.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyObserver`: the same as the library's.
+ 	void ParticleTechnique::destroyObserver(ParticleObserver* observer)
+ 	{
+ 		assert(observer && "Observer is null!");
+@@ -825,11 +851,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyObserver`: the same as the library's.
+ 	void ParticleTechnique::destroyObserver (size_t index)
+ 	{
+ 		destroyObserver(getObserver(index));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAllObservers`: the same as the library's.
+ 	void ParticleTechnique::destroyAllObservers(void)
+ 	{
+ 		ParticleObserverIterator it;
+@@ -841,15 +869,21 @@ namespace ParticleUniverse
+ 		mObservers.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getRenderer`: the same as the library's.
+ 	ParticleRenderer* ParticleTechnique::getRenderer(void) const
+ 	{
+ 		return mRenderer;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setRenderer`: an old renderer is first emptied of the
++	// technique's particles (`clearAllParticles`), hidden and let go of, then destroyed.
+ 	void ParticleTechnique::setRenderer(const String& rendererType)
+ 	{
+ 		if (mRenderer)
+ 		{
++			clearAllParticles();
++			mRenderer->setVisible(false);
++			mRenderer->setParentTechnique(0);
+ 			destroyRenderer();
+ 		}
+ 
+@@ -861,6 +895,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setRenderer`: the same for a renderer made elsewhere.
+ 	void ParticleTechnique::setRenderer(ParticleRenderer* renderer)
+ 	{
+ 		if (!renderer)
+@@ -868,6 +903,9 @@ namespace ParticleUniverse
+ 
+ 		if (mRenderer)
+ 		{
++			clearAllParticles();
++			mRenderer->setVisible(false);
++			mRenderer->setParentTechnique(0);
+ 			destroyRenderer();
+ 		}
+ 
+@@ -884,21 +922,27 @@ namespace ParticleUniverse
+ 		renderer->setParentTechnique(0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyRenderer`: the renderer loses its technique
++	// before it is destroyed (so its `_destroyAll` does not reach back into the technique). The
++	// destruction is gated by an ownership bit (+0x5a8 & 8) the constructor sets and nothing clears.
+ 	void ParticleTechnique::destroyRenderer(void)
+ 	{
+ 		if (mRenderer)
+ 		{
++			mRenderer->setParentTechnique(0);
+ 			ParticleSystemManager::getSingletonPtr()->destroyRenderer(mRenderer);
+ 			mRenderer = 0;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_addBehaviourTemplate`: also tells the behaviour the system's scale (the
++	// library comments that call out).
+ 	void ParticleTechnique::_addBehaviourTemplate(ParticleBehaviour* behaviourTemplate)
+ 	{
+ 		assert(behaviourTemplate && "Behaviour is null!");
+ 		mBehaviourTemplates.push_back(behaviourTemplate);
+ 		behaviourTemplate->setParentTechnique(this);
+-		//behaviourTemplate->_notifyRescaled(_mParticleSystemScale);
++		behaviourTemplate->_notifyRescaled(_mParticleSystemScale);
+ 		mPrepareBehaviour = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -921,12 +965,14 @@ namespace ParticleUniverse
+ 		behaviourTemplate->setParentTechnique(0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_getBehaviourTemplate`: the same as the library's.
+ 	ParticleBehaviour* ParticleTechnique::_getBehaviourTemplate (size_t index) const
+ 	{
+ 		assert(index < mBehaviourTemplates.size() && "Behaviour index out of bounds!");
+ 		return mBehaviourTemplates[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_getBehaviourTemplate`: the same as the library's.
+ 	ParticleBehaviour* ParticleTechnique::_getBehaviourTemplate (const String& behaviourType) const
+ 	{
+ 		if (behaviourType == BLANK_STRING)
+@@ -945,11 +991,13 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_getNumBehaviourTemplate`: the same as the library's `_getNumBehaviourTemplates`.
+ 	size_t ParticleTechnique::_getNumBehaviourTemplates (void) const
+ 	{
+ 		return mBehaviourTemplates.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_destroyBehaviourTemplate`: the same as the library's.
+ 	void ParticleTechnique::_destroyBehaviourTemplate(ParticleBehaviour* behaviourTemplate)
+ 	{
+ 		assert(behaviourTemplate && "Behaviour is null!");
+@@ -967,6 +1015,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_destroyAllBehaviourTemplates`: the same as the library's (gated by an ownership bit, +0x5a8 & 4, that the constructor sets and nothing clears).
+ 	void ParticleTechnique::_destroyAllBehaviourTemplates (void)
+ 	{
+ 		ParticleBehaviourIterator it;
+@@ -978,6 +1027,7 @@ namespace ParticleUniverse
+ 		mBehaviourTemplates.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::createExtern`: the same as the library's.
+ 	Extern* ParticleTechnique::createExtern (const String& externType)
+ 	{
+ 		assert(externType != BLANK_STRING && "externType is empty!");
+@@ -986,12 +1036,14 @@ namespace ParticleUniverse
+ 		return externObject;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::addExtern`: also tells the extern the system's scale (the
++	// library comments that call out).
+ 	void ParticleTechnique::addExtern (Extern* externObject)
+ 	{
+ 		assert(externObject && "Extern is null!");
+ 		mExterns.push_back(externObject);
+ 		externObject->setParentTechnique(this);
+-		//externObject->_notifyRescaled(_mParticleSystemScale);
++		externObject->_notifyRescaled(_mParticleSystemScale);
+ 		mPrepareExtern = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -1014,12 +1066,14 @@ namespace ParticleUniverse
+ 		externObject->setParentTechnique(0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getExtern`: the same as the library's.
+ 	Extern* ParticleTechnique::getExtern (size_t index) const
+ 	{
+ 		assert(index < mExterns.size() && "Extern index out of bounds!");
+ 		return mExterns[index];
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getExtern`: the same as the library's.
+ 	Extern* ParticleTechnique::getExtern (const String& externName) const
+ 	{
+ 		if (externName == BLANK_STRING)
+@@ -1038,6 +1092,7 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getExternType`: the same as the library's.
+ 	Extern* ParticleTechnique::getExternType (const String& externType) const
+ 	{
+ 		if (externType == BLANK_STRING)
+@@ -1056,16 +1111,19 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumExterns`: the same as the library's.
+ 	size_t ParticleTechnique::getNumExterns (void) const
+ 	{
+ 		return mExterns.size();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyExtern`: the same as the library's.
+ 	void ParticleTechnique::destroyExtern (size_t index)
+ 	{
+ 		destroyExtern(getExtern(index));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyExtern`: the same as the library's.
+ 	void ParticleTechnique::destroyExtern (Extern* externObject)
+ 	{
+ 		assert(externObject && "ExternObject is null!");
+@@ -1083,6 +1141,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::destroyAllExterns`: the same as the library's.
+ 	void ParticleTechnique::destroyAllExterns (void)
+ 	{
+ 		ExternIterator it;
+@@ -1094,6 +1153,8 @@ namespace ParticleUniverse
+ 		mExterns.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_updateRenderQueue`: an empty visual pool clears the
++	// technique (below); otherwise the library's.
+ 	void ParticleTechnique::_updateRenderQueue(Ogre::RenderQueue* queue)
+ 	{
+ 		if (mRenderer && mRenderer->isRendererInitialised())
+@@ -1102,7 +1163,15 @@ namespace ParticleUniverse
+ 			{
+ 				// Update the techniques' own renderqueue or proceed if smooth Lod has been set, 
+ 				// to be able to render the existing particles.
+-				mRenderer->_updateRenderQueue(queue, &mPool);
++				// Torchlight: with no visual particle left, the technique is cleared instead.
++				if (!mPool.isEmpty(Particle::PT_VISUAL))
++				{
++					mRenderer->_updateRenderQueue(queue, &mPool);
++				}
++				else
++				{
++					clearAllParticles();
++				}
+ 
+ 				/** Update the renderqueue of the pooled techniques (if available)
+ 					Note, that the _updateRenderQueue() of pooled (emitted) particle systems is NOT
+@@ -1114,6 +1183,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_updateRenderQueuePooledTechniques`: the same as the library's.
+ 	void ParticleTechnique::_updateRenderQueuePooledTechniques(Ogre::RenderQueue* queue)
+ 	{
+ 		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
+@@ -1151,47 +1221,64 @@ namespace ParticleUniverse
+ 		_unprepareExterns();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_prepare`. The visual particles are not
++	// created here: the pool grows as particles are emitted (_executeEmitParticles). Affectors
++	// are prepared before emitters, then the emitted-object pools, then spatial hashing; there is
++	// no rescale notification.
+ 	void ParticleTechnique::_prepare(void)
+ 	{
+-		/** Prepare all externs.
+-		*/
+ 		_prepareExterns();
+-
+-		/** Prepare the renderer.
+-		*/
+ 		_prepareRenderer();
+-
+-		/** Prepare all behaviour templates.
+-		*/
+ 		_prepareBehaviours();
+ 
+-		/** Prepare all emitters.
+-		*/
+-		_prepareEmitters();
+-
+-		/** Prepare all affectors.
+-		*/
+-		_prepareAffectors();
+-
+-		/** Prepare the technique itself.
+-		*/
+-		_prepareTechnique();
+-
+-		/** Prepare the system.
+-		@remarks
+-			This only means intialisations within this technique that concer the particle system (i.e. emitted system pool). This doesn't mean
+-			that the particle system itself is initialised.
+-		*/
+-		_prepareSystem();
+-
+-		/** Create new visual particles if needed.
+-		*/
+-		_prepareVisualParticles();
++		if (mPrepareAffector && !mAffectors.empty())
++		{
++			Hook<ParticleAffector>::_prepare(&mAffectors, this);
++			mPrepareAffector = false;
++		}
++		if (mPrepareEmitter && !mEmitters.empty())
++		{
++			Hook<ParticleEmitter>::_prepare(&mEmitters, this);
++			mPrepareEmitter = false;
++		}
++		if (!mParticleEmitterPoolIncreased)
++		{
++			mPool.increasePool(Particle::PT_EMITTER, mEmittedEmitterQuota, mBehaviourTemplates, this);
++			mParticleEmitterPoolIncreased = true;
++		}
++		if (!mParticleTechniquePoolIncreased)
++		{
++			mPool.increasePool(Particle::PT_TECHNIQUE, mEmittedTechniqueQuota, mBehaviourTemplates, this);
++			mParticleTechniquePoolIncreased = true;
++		}
++		if (!mParticleAffectorPoolIncreased)
++		{
++			mPool.increasePool(Particle::PT_AFFECTOR, mEmittedAffectorQuota, mBehaviourTemplates, this);
++			mParticleAffectorPoolIncreased = true;
++		}
++		if (!mParticleSystemPoolIncreased)
++		{
++			mPool.increasePool(Particle::PT_SYSTEM, mEmittedSystemQuota, mBehaviourTemplates, this);
++			mParticleSystemPoolIncreased = true;
++		}
+ 
+-		// Notify rescaling here, so emitted techniques are also taken into account
+-		// Change in V1.3.1
+-		_notifyRescaled(_mParticleSystemScale);
+-		_notifyVelocityRescaled(_mParticleSystemScaleVelocity);
++		if (mIsSpatialHashingUsed && !mIsSpatialHashingInitialised)
++		{
++			if (mSpatialHashTableA)
++			{
++				PU_DELETE_T(mSpatialHashTableA, SpatialHashTable<Particle*>, MEMCATEGORY_SCENE_OBJECTS);
++			}
++			mSpatialHashTableA = PU_NEW_T(SpatialHashTable<Particle*>, MEMCATEGORY_SCENE_OBJECTS)(mSpatialHashTableSize,
++				mSpatialHashingCellDimension, mSpatialHashingCellOverlap);
++			if (mSpatialHashTableB)
++			{
++				PU_DELETE_T(mSpatialHashTableB, SpatialHashTable<Particle*>, MEMCATEGORY_SCENE_OBJECTS);
++			}
++			mSpatialHashTableB = PU_NEW_T(SpatialHashTable<Particle*>, MEMCATEGORY_SCENE_OBJECTS)(mSpatialHashTableSize,
++				mSpatialHashingCellDimension, mSpatialHashingCellOverlap);
++			mCurrentSpatialHashTable = mSpatialHashTableB;
++			mIsSpatialHashingInitialised = true;
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleTechnique::_prepareSystem(void)
+@@ -1407,49 +1494,102 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_update`. Unlike the library it culls: a
++	// technique outside the current camera (its world box when it has one, else a sphere of
++	// radius 2 around it - 5 for the light queues, 95 and up) has its particles cleared and its
++	// renderer hidden, and while nothing has been drawn yet (the visual pool not grown) its
++	// non-expiring emitters are forced to release their whole rate at once. Emission follows the
++	// pre-process step, and there is no tight bounding box reset.
+ 	void ParticleTechnique::_update(Real timeElapsed)
+ 	{
++		if (!mRenderer)
++			return;
++
+ 		if (!mEnabled)
+ 		{
+-			// It is not enabled, but if smoothLod has been set, the already emitted particles are allowed to be processed.
+ 			if (!mParentSystem->isSmoothLod())
+ 			{
+-				// Technique is disabled and smoothLod isn't set, so don't continue.
++				latestPosition = getDerivedPosition();
+ 				return;
+ 			}
+-			else if (mPool.isEmpty())
++			if (mPool.isEmpty())
+ 			{
+-				// Technique is disabled and smoothLod is set, but there are no particles yet/anymore.
++				latestPosition = getDerivedPosition();
++				mRenderer->setVisible(false);
+ 				return;
+ 			}
+ 		}
+ 
+-		/*  Perform some initialisation type of activities (if needed). This must be done within the update-loop,
+-			because settings could be changed (i.e. changing quota), which must trigger a re-initialisation.
+-		*/
+-		_prepare();
++		Real radius = 2.0f;
++		if (mRenderer->getTorchlightRenderQueueGroup() >= 0x5f)
++		{
++			radius = 5.0f;
++		}
+ 
+-		if (mParentSystem && mParentSystem->hasTightBoundingBox())
++		bool visible = false;
++		if (mCurrentCamera)
+ 		{
+-			// Rebuild the bounding box every update
+-			_resetBounds();
++			if (mNoCull)
++			{
++				visible = true;
++			}
++			else if (!mWorldAABB.isNull() && mCurrentCamera->isVisible(mWorldAABB))
++			{
++				visible = true;
++			}
++			else
++			{
++				visible = mCurrentCamera->isVisible(Ogre::Sphere(mDerivedPosition, radius));
++			}
+ 		}
+ 
+-		// Process the emitters
+-		_emitParticles(timeElapsed);
++		if (visible)
++		{
++			// The original also counts visible techniques in the manager (+0x4f0), a statistic
++			// nothing reads.
++			_preProcessParticles(timeElapsed);
++			mRenderer->setVisible(true);
+ 
+-		// Perform some actions before processing each individual particle
+-		_preProcessParticles(timeElapsed);
++			bool nonExpiring = false;
++			ParticleEmitterIterator emitterIt;
++			ParticleEmitterIterator emitterItEnd = mEmitters.end();
++			for (emitterIt = mEmitters.begin(); emitterIt != emitterItEnd; ++emitterIt)
++			{
++				if ((*emitterIt)->isNonExpiring())
++				{
++					nonExpiring = true;
++					break;
++				}
++			}
+ 
+-		// Process all particles
+-		_processParticles(timeElapsed);
++			_prepare();
+ 
+-		// Perform some actions after processing each individual particle
+-		_postProcessParticles(timeElapsed);
++			if (!mVisualParticlePoolIncreased && nonExpiring)
++			{
++				for (emitterIt = mEmitters.begin(); emitterIt != emitterItEnd; ++emitterIt)
++				{
++					if ((*emitterIt)->isNonExpiring())
++					{
++						(*emitterIt)->setForceEmission(true);
++						(*emitterIt)->setEnabled(true);
++					}
++				}
++			}
++
++			_emitParticles(timeElapsed);
++			_processParticles(timeElapsed);
++		}
++		else
++		{
++			clearAllParticles();
++			mRenderer->setVisible(false);
++		}
+ 
++		_postProcessParticles(timeElapsed);
+ 		latestPosition = getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyEmissionChange`: the same as the library's.
+ 	void ParticleTechnique::_notifyEmissionChange(void)
+ 	{
+ 		if (mSuppressNotifyEmissionChange)
+@@ -1467,17 +1607,15 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyAttached`: the renderer, when initialised; then
++	// the latest position is the derived one. The pooled techniques are not told.
+ 	void ParticleTechnique::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+ 		if (mRenderer && mRenderer->isRendererInitialised())
+ 		{
+ 			mRenderer->_notifyAttached(parent, isTagPoint);
+ 		}
+-
+-		/** Do the same for the the pooled techniques. Pooled Particle Systems are not taken into account, because they are attached
+-			to their own SceneNode (you really should emit Particle Systems and detach / attach all the time).
+-		*/
+-		_notifyAttachedPooledTechniques(parent, isTagPoint);
++		latestPosition = getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleTechnique::_notifyAttachedPooledTechniques(Ogre::Node* parent, bool isTagPoint)
+@@ -1497,6 +1635,8 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against `ParticleTechnique::notifyCurrentCamera`, whose body after
++	// storing the camera is this one.
+ 	void ParticleTechnique::_notifyCurrentCamera(Camera* camera)
+ 	{
+ 		if (mRenderer && mRenderer->isRendererInitialised())
+@@ -1515,6 +1655,63 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::notifyCurrentCamera`.
++	void ParticleTechnique::notifyCurrentCamera(Camera* camera)
++	{
++		mCurrentCamera = camera;
++		_notifyCurrentCamera(camera);
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setFlipbookWidthHeight`.
++	void ParticleTechnique::setFlipbookWidthHeight(int width, int height)
++	{
++		mFlipbookWidth = width;
++		mFlipbookHeight = height;
++		if (mRenderer)
++		{
++			mRenderer->_notifyFlipbookWidthHeight(width, height);
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getParticlesUpdating`.
++	size_t ParticleTechnique::getParticlesUpdating(void)
++	{
++		return mPool.getSize(Particle::PT_VISUAL);
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::isLooping`.
++	bool ParticleTechnique::isLooping(void)
++	{
++		ParticleEmitterIterator emitterIt;
++		ParticleEmitterIterator emitterItEnd = mEmitters.end();
++		for (emitterIt = mEmitters.begin(); emitterIt != emitterItEnd; ++emitterIt)
++		{
++			if ((*emitterIt)->isNonExpiring() || (*emitterIt)->getNumberOfLoops() != 0)
++				return true;
++		}
++		return false;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::clearAllParticles`. Only once the pool has
++	// grown: hide the renderer, let it release its particles, give the visual particles back to
++	// the manager's store and lock the rest.
++	void ParticleTechnique::clearAllParticles(void)
++	{
++		if (!mVisualParticlePoolIncreased)
++			return;
++
++		if (mRenderer)
++		{
++			mRenderer->setVisible(false);
++			mRenderer->_releaseParticles(&mPool);
++		}
++		mPool.freeParticlePool();
++		mPool.lockAllParticles();
++		mVisualParticlePoolIncreased = false;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyCurrentCameraPooledTechniques`: the
++	// pooled techniques get `notifyCurrentCamera`, so they store the camera they cull against.
+ 	void ParticleTechnique::_notifyCurrentCameraPooledTechniques(Camera* camera)
+ 	{
+ 		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
+@@ -1525,9 +1722,8 @@ namespace ParticleUniverse
+ 		{
+ 			if (technique)
+ 			{
+-				technique->_notifyCurrentCamera(camera);
++				technique->notifyCurrentCamera(camera);
+ 			}
+-			
+ 			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
+ 		}
+ 	}
+@@ -1550,6 +1746,7 @@ namespace ParticleUniverse
+ 		return - (sortPosition - p->position).squaredLength();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_sortVisualParticles`: the same as the library's (its static radix sorter is constructed by `_GLOBAL__I_mRadixSorter`).
+ 	void ParticleTechnique::_sortVisualParticles(Camera* camera)
+ 	{
+ 		if (mRenderer)
+@@ -1571,6 +1768,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyParticleResized`: the same as the library's.
+ 	void ParticleTechnique::_notifyParticleResized(void)
+ 	{
+ 		if (mRenderer)
+@@ -1579,6 +1777,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyStart`: the same as the library's (the original calls the renderer unchecked).
+ 	void ParticleTechnique::_notifyStart (void)
+ 	{
+ #ifdef PU_LOG_DEBUG
+@@ -1645,6 +1844,7 @@ namespace ParticleUniverse
+ 		setEnabled(mOriginalEnabled);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyStartPooledComponents`: the same as the library's.
+ 	void ParticleTechnique::_notifyStartPooledComponents(void)
+ 	{
+ 		if (mPool.isEmpty())
+@@ -1685,6 +1885,9 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyStop`: the renderer (called unchecked in the
++	// original), externs, observers, the affectors and emitters not emitted themselves and the pooled
++	// components, as the library's; then `clearAllParticles` where the library expires every particle.
+ 	void ParticleTechnique::_notifyStop (void)
+ 	{
+ 		// Notify the registered objects that the ParticleSystem/ParticleTechnique stops.
+@@ -1737,10 +1940,9 @@ namespace ParticleUniverse
+ 		// Notify the components in the pool.
+ 		_notifyStopPooledComponents();
+ 
+-		// Expire all particles at once.
+-		_initAllParticlesForExpiration();
+-
+-		// Reset the bounding box of this technique.
++		// Torchlight: the particles are not expired but cleared - given back to the store - and
++		// the bounds reset (to the origin, `_resetBounds`).
++		clearAllParticles();
+ 		_resetBounds();
+ 
+ #ifdef PU_LOG_DEBUG
+@@ -1748,6 +1950,7 @@ namespace ParticleUniverse
+ #endif // PU_LOG_DEBUG
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyStopPooledComponents`: the same as the library's.
+ 	void ParticleTechnique::_notifyStopPooledComponents(void)
+ 	{
+ 		if (mPool.isEmpty())
+@@ -1788,6 +1991,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyPause`: the same as the library's.
+ 	void ParticleTechnique::_notifyPause (void)
+ 	{
+ 		/** The renderer, Externs and Observers aren't notified. There is no specific reasons for that.
+@@ -1822,6 +2026,7 @@ namespace ParticleUniverse
+ 		_notifyPausePooledComponents();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyPausePooledComponents`: the same as the library's.
+ 	void ParticleTechnique::_notifyPausePooledComponents(void)
+ 	{
+ 		if (mPool.isEmpty())
+@@ -1862,6 +2067,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyResume`: the same as the library's.
+ 	void ParticleTechnique::_notifyResume (void)
+ 	{
+ 		/** The renderer, Externs and Observers aren't notified. There is no specific reasons for that.
+@@ -1896,6 +2102,7 @@ namespace ParticleUniverse
+ 		_notifyResumePooledComponents();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_notifyResumePooledComponents`: the same as the library's.
+ 	void ParticleTechnique::_notifyResumePooledComponents(void)
+ 	{
+ 		if (mPool.isEmpty())
+@@ -1945,12 +2152,15 @@ namespace ParticleUniverse
+ 		return false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processParticles`. No renderer step; the
++	// observers run before the motion, and every particle moves, expired or not. A particle
++	// from a non-expiring emitter never runs out: its time to live wraps round by its total
++	// time to live.
+ 	void ParticleTechnique::_processParticles(Real timeElapsed)
+ 	{
+ 		if (mPool.isEmpty())
+ 			return;
+ 
+-		// Loop through all particles
+ 		Particle* particle = mPool.getFirst();
+ 		ParticleEmitter* emitter = 0;
+ 		ParticleTechnique* technique = 0;
+@@ -1960,47 +2170,29 @@ namespace ParticleUniverse
+ 		{
+ 			if (particle)
+ 			{
++				bool motionFirst;
+ 				if (!_isExpired(particle, timeElapsed))
+ 				{
+-					// Particle performs actions itself
+ 					_processParticleSelf(particle, timeElapsed, firstActiveParticle);
+-
+-					// Apply spatial hashing (if needed)
+ 					_processSpatialHashing(particle, timeElapsed);
+-
+-					// Apply affectors (both the techniques' own affectors and the pooled affectors)
+ 					_processAffectors(particle, timeElapsed, firstActiveParticle);
+-
+-					// Process individual particle by the externals
+ 					_processExternals(particle, timeElapsed, firstActiveParticle);
+ 
+-					// Process individual particle by the renderer
+-					_processRenderer(particle, timeElapsed, firstActiveParticle);
+-
+-					// Some particles need special treatment, but only if this technique is enabled.
+-					// If the technique is disabled, only the last visual particles are handled (part of smooth LOD).
+ 					if (mEnabled)
+ 					{
+ 						if (particle->particleType == Particle::PT_EMITTER)
+ 						{
+-							// Trigger emitters that are emitted themselves.
+ 							emitter = static_cast<ParticleEmitter*>(particle);
+ 							_executeEmitParticles(emitter, emitter->_calculateRequestedParticles(timeElapsed), timeElapsed);
+ 						}
+ 						else if (particle->particleType == Particle::PT_TECHNIQUE)
+ 						{
+ 							technique = static_cast<ParticleTechnique*>(particle);
+-
+-							// Notify the pooled technique to calculate the world AABB in the _update() function
+ 							if (mUpdateWorldAABB)
+ 							{
+ 								technique->_notifyUpdateBounds();
+ 							}
+-
+-							// Update the pooled techniques
+ 							technique->_update(timeElapsed);
+-
+-							// Update the world AABB if needed
+ 							if (mUpdateWorldAABB)
+ 							{
+ 								mWorldAABB.merge(technique->getWorldBoundingBox());
+@@ -2009,39 +2201,40 @@ namespace ParticleUniverse
+ 					}
+ 
+ 					firstActiveParticle = false;
+-
+-					// Keep latest position
++					motionFirst = false;
+ 					particle->latestPosition = particle->position;
+-
+-					// Apply motion
+-					_processMotion(particle, timeElapsed, firstActiveParticle);
+ 				}
+ 				else
+ 				{
+-					// Perform some activities on the Particle if it is expired.
++					motionFirst = firstActiveParticle;
+ 					_initParticleForExpiration(particle, timeElapsed);
+-
+-					// Lock the expired particle!
+ 					mPool.lockLatestParticle();
+ 				}
+ 
+-				// Observe the particle (even if it is already expired and locked)
+ 				_processObservers(particle, timeElapsed, firstParticle);
++				_processMotion(particle, timeElapsed, motionFirst);
+ 
+-				// All just emitted particles are processed by now, so the flag can be reset unless it is expired.
+-				// Expired particles are locked.
+-				if (particle->hasEventFlags(PEF_EXPIRED))
++				if (particle->hasEventFlags(Particle::PEF_EXPIRED))
+ 				{
+ 					particle->setEventFlags(0);
+-					particle->addEventFlags(PEF_EXPIRED);
++					particle->addEventFlags(Particle::PEF_EXPIRED);
+ 				}
+ 				else
+ 				{
+ 					particle->setEventFlags(0);
+ 				}
+ 
+-				// Decrement time to live
+ 				particle->timeToLive -= timeElapsed;
++				if (particle->parentEmitter && particle->parentEmitter->isNonExpiring())
++				{
++					if (particle->timeToLive <= 0.0f)
++					{
++						do
++						{
++							particle->timeToLive += particle->totalTimeToLive;
++						} while (particle->timeToLive <= 0.0f);
++					}
++				}
+ 			}
+ 
+ 			firstParticle = false;
+@@ -2049,6 +2242,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processDependencies`: the same as the library's.
+ 	void ParticleTechnique::_processDependencies(void)
+ 	{
+ 		// Fast rejection
+@@ -2083,6 +2277,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_extractPooledAffectors`: the same as the library's.
+ 	void ParticleTechnique::_extractPooledAffectors(void)
+ 	{
+ 		// Copy all pooled affectors to separate list.
+@@ -2102,30 +2297,26 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processSpatialHashing`: with an interval set, its
++	// remainder (+0x574) runs down by the frame's time for every particle, and only a particle that
++	// takes it below zero (not NaN) is hashed, winding it up again by the interval - a quirk kept:
++	// per particle, not per frame. Without one, every particle is hashed.
+ 	void ParticleTechnique::_processSpatialHashing(Particle* particle, Real timeElapsed)
+ 	{
+-		/** If set, then add the particle to mSpatialHashTableA.
+-		@remarks
+-			Always use the same hashtable (mSpatialHashTableA); in the _postProcessSpatialHashing() 
+-			the tables are cycled. 
+-			Optional: Use an interval to prevent updating every frame.
+-		*/
+-		if (mIsSpatialHashingUsed && mSpatialHashTableA)
++		if (!mIsSpatialHashingUsed || !mSpatialHashTableA)
++			return;
++
++		if (mSpatialHashingIntervalSet)
+ 		{
+-			if (mSpatialHashingIntervalSet)
+-			{
+-				if (mSpatialHashingIntervalActivate)
+-				{
+-					mSpatialHashTableA->put(particle->position, particle);
+-				}
+-			}
+-			else
+-			{
+-				mSpatialHashTableA->put(particle->position, particle);
+-			}
++			mSpatialHashingIntervalRemainder -= timeElapsed;
++			if (!(mSpatialHashingIntervalRemainder < 0.0f))
++				return;
++			mSpatialHashingIntervalRemainder += mSpatialHashingInterval;
+ 		}
++		mSpatialHashTableA->put(particle->position, particle);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processAffectors`: the same as the library's; it also counts the affectors run in the manager (+0x4f8), a statistic nothing reads, left out.
+ 	void ParticleTechnique::_processAffectors(Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
+ 		// Iterate through all affector objects that are registered at this technique and which are not emitted
+@@ -2161,6 +2352,8 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_preProcessParticles`: the library's, less its
++	// spatial-hashing interval, which Torchlight counts per particle (`_processSpatialHashing`).
+ 	void ParticleTechnique::_preProcessParticles(Real timeElapsed)
+ 	{
+ 		// Note, the particle pool may be empty, but the preprocessing must still be executed, because
+@@ -2220,20 +2413,10 @@ namespace ParticleUniverse
+ 		{
+ 			Hook<ParticleObserver>::_preProcessParticles(&mObservers, this, timeElapsed);
+ 		}
+-
+-		// Update Spatial Hashing interval
+-		if (mSpatialHashingIntervalSet)
+-		{
+-			mSpatialHashingIntervalActivate = false;
+-			mSpatialHashingIntervalRemainder -= timeElapsed;
+-			if (mSpatialHashingIntervalRemainder < 0)
+-			{
+-				mSpatialHashingIntervalActivate = true;
+-				mSpatialHashingIntervalRemainder += mSpatialHashingInterval;
+-			}
+-		}
+ 	}	
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_postProcessParticles`: the library's, but for the
++	// extents put in order and every emitter's latest position (below); no debug statistics.
+ 	void ParticleTechnique::_postProcessParticles(Real timeElapsed)
+ 	{
+ 		// Note, the particle pool may be empty, but the postprocessing must still be executed, because
+@@ -2246,6 +2429,10 @@ namespace ParticleUniverse
+ 		mUpdateWorldAABB = false;
+ 		if (mHasExtents)
+ 		{
++			// Torchlight: each axis of the extents is put in order, and kept so, before the box
++			// takes them (min = min(min, max), max = max(max, min), stored back).
++			mMinWorldExtend.makeFloor(mMaxWorldExtend);
++			mMaxWorldExtend.makeCeil(mMinWorldExtend);
+ 			mWorldAABB.setExtents(mMinWorldExtend, mMaxWorldExtend);
+ 		}
+ 
+@@ -2267,6 +2454,9 @@ namespace ParticleUniverse
+ 				{
+ 					(*emitterIt)->_postProcessParticles(this, timeElapsed);
+ 				}
++				// Torchlight: every emitter, emitted or not, keeps its derived position as its
++				// latest position.
++				(*emitterIt)->latestPosition = (*emitterIt)->getDerivedPosition();
+ 			}
+ 		}
+ 
+@@ -2307,6 +2497,7 @@ namespace ParticleUniverse
+ #endif // PU_LOG_DEBUG
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_postProcessSpatialHashing`: the same as the library's (the table cleared inline).
+ 	void ParticleTechnique::_postProcessSpatialHashing(void)
+ 	{
+ 		/** Cycle tables.
+@@ -2320,6 +2511,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processExternals`: the same as the library's.
+ 	void ParticleTechnique::_processExternals(Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
+ 		if (mExterns.empty())
+@@ -2336,17 +2528,16 @@ namespace ParticleUniverse
+ 		mRenderer->_processParticle(this, particle, timeElapsed, firstParticle);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processParticleSelf`. A keep-local
++	// particle's position is relative to the technique, so its extent is offset by the
++	// technique's derived position.
+ 	void ParticleTechnique::_processParticleSelf(Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
+-		// Perform 'self' processing
+ 		particle->_process(this, timeElapsed);
+-
+-		// Determine contribution of particle to mWorldAABB
+ 		if (mUpdateWorldAABB && particle->particleType == Particle::PT_VISUAL)
+ 		{
+ 			VisualParticle* p = static_cast<VisualParticle*>(particle);
+ 			Real maxDim = 0;
+-			Vector3 padding = Vector3::ZERO;
+ 			if (p->ownDimensions)
+ 			{
+ 				maxDim = std::max(p->width, p->height);
+@@ -2357,22 +2548,28 @@ namespace ParticleUniverse
+ 				maxDim = std::max(mDefaultWidth, mDefaultHeight);
+ 				maxDim = std::max(maxDim, mDefaultDepth);
+ 			}
+-
+-			padding = HALFSCALE * maxDim;
++			Vector3 padding = HALFSCALE * maxDim;
++			Vector3 position = p->position;
++			if (mKeepLocal)
++			{
++				position += mDerivedPosition;
++			}
+ 			if (mHasExtents)
+ 			{
+-				mMinWorldExtend.makeFloor(p->position - padding);
+-				mMaxWorldExtend.makeCeil(p->position + padding);
++				mMinWorldExtend.makeFloor(position - padding);
++				mMaxWorldExtend.makeCeil(position + padding);
+ 			}
+ 			else
+ 			{
+-				mMinWorldExtend = p->position - padding;
+-				mMaxWorldExtend = p->position + padding;
++				mMinWorldExtend = position - padding;
++				mMaxWorldExtend = position + padding;
+ 				mHasExtents = true;
+ 			}
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_initParticleForExpiration`: the particle, then the
++	// listeners; the externs are not told (the library's later addition).
+ 	void ParticleTechnique::_initParticleForExpiration(Particle* particle, Real timeElapsed)
+ 	{
+ 		particle->_initForExpiration(this, timeElapsed);
+@@ -2387,21 +2584,9 @@ namespace ParticleUniverse
+ 				(*it)->particleExpired(this, particle);
+ 			}
+ 		}
+-
+-		/** Externs are also called to perform expiration activities. If needed, affectors and emitters may be added, but at the moment
+-			there is no reason for (and we don�t want to waste cpu resources).
+-		*/
+-		if (!mExterns.empty())
+-		{
+-			ExternIterator itExtern;
+-			ExternIterator itExternEnd = mExterns.end();
+-			for (itExtern = mExterns.begin(); itExtern != itExternEnd; ++itExtern)
+-			{
+-				(*itExtern)->_initParticleForExpiration(particle);
+-			}
+-		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processObservers`: the same as the library's.
+ 	void ParticleTechnique::_processObservers(Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
+ 		if (mObservers.empty())
+@@ -2410,8 +2595,13 @@ namespace ParticleUniverse
+ 		Hook<ParticleObserver>::_processParticle(&mObservers, this, particle, timeElapsed, firstParticle);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_isExpired`: a particle from a non-expiring
++	// emitter never expires.
+ 	bool ParticleTechnique::_isExpired(Particle* particle, Real timeElapsed)
+ 	{
++		if (particle->parentEmitter && particle->parentEmitter->isNonExpiring())
++			return false;
++
+ 		bool expired = particle->timeToLive < timeElapsed;
+ 		if (expired)
+ 		{
+@@ -2422,6 +2612,7 @@ namespace ParticleUniverse
+ 		return expired;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_emitParticles`: the same as the library's.
+ 	void ParticleTechnique::_emitParticles(Real timeElapsed)
+ 	{
+ 		// Don't emit if the technique is not enabled
+@@ -2452,6 +2643,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::forceEmission`: the same as the library's.
+ 	void ParticleTechnique::forceEmission(ParticleEmitter* emitter, unsigned requested)
+ 	{
+ 		// Fast rejection: Don't emit if the technique is not enabled
+@@ -2461,6 +2653,7 @@ namespace ParticleUniverse
+ 		_executeEmitParticles(emitter, requested, 0);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::forceEmission`: the same as the library's.
+ 	void ParticleTechnique::forceEmission(const Particle::ParticleType particleType, unsigned requested)
+ 	{
+ 		// Fast rejection: Don't emit if the technique is not enabled
+@@ -2483,75 +2676,59 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_executeEmitParticles`. The emitter's own
++	// enabled flag is not checked (its requested count already says so). When the pool is empty
++	// it is grown by the particles still wanted - from the manager's store, so the only cap is
++	// the store - and the technique counts as drawn. The direction is turned by the system's
++	// orientation only with WORLD ORIENTATION and without keep local, and the original direction
++	// never. Each enabled affector initialises the new particle and processes it once at time 0.
++	// Externs are not initialised. The partial-frame advance ignores the velocity scale.
+ 	void ParticleTechnique::_executeEmitParticles(ParticleEmitter* emitter, unsigned requested, Real timeElapsed)
+ 	{
+-		// Only proceed if the emitter and technique are enabled
+-		if (!(mEnabled && emitter->isEnabled()))
++		if (!mEnabled)
+ 			return;
+ 
+ 		Real timePoint = 0.0f;
+-		Real timeInc = timeElapsed / requested;
++		Real timeInc = timeElapsed / (Real)requested;
+ 		for (unsigned int j = 0; j < requested; ++j)
+ 		{
+-			// Create a new particle & init using emitter
+ 			Particle* particle = mPool.releaseParticle(emitter->getEmitsType(), emitter->getEmitsName());
+-
+-			// Return if there is no particle left anymore, or the name cannot be found
+ 			if (!particle)
+-				return;
++			{
++				mPool.increasePool(Particle::PT_VISUAL, requested - j, mBehaviourTemplates, this);
++				particle = mPool.releaseParticle(emitter->getEmitsType(), emitter->getEmitsName());
++				mVisualParticlePoolIncreased = true;
++				if (!particle)
++					return;
++			}
+ 
+-			// Initialise the particle for emission
+ 			particle->_initForEmission();
+-
+-			// Initialise the particle with data from the emitter.
+ 			emitter->_initParticleForEmission(particle);
+ 
+-			/** Apply initial orientation to the direction. This cannot be done with the position. 
+-			    Applying orientation to the position is already taken care of by the emitters.
+-			*/
+-			particle->direction = (getParentSystem()->getDerivedOrientation() * particle->direction);
+-			particle->originalDirection = (getParentSystem()->getDerivedOrientation() * particle->originalDirection);
+-
+-			// Apply particle initialization by the affectors (if the affector is enabled)
+-			if (!mAffectors.empty())
++			if (!mKeepLocal && mWorldOrientation)
+ 			{
+-				ParticleAffectorIterator affectorIt;
+-				ParticleAffectorIterator affectorItEnd = mAffectors.end();
+-				for (affectorIt = mAffectors.begin(); affectorIt != affectorItEnd; ++affectorIt)
+-				{
+-					if ((*affectorIt)->isEnabled())
+-					{
+-						(*affectorIt)->_initParticleForEmission(particle);
+-					}
+-				}
++				particle->direction = getParentSystem()->getDerivedOrientation() * particle->direction;
+ 			}
+ 
+-			// Apply initialization by the externs
+-			if (!mExterns.empty())
++			ParticleAffectorIterator affectorIt;
++			ParticleAffectorIterator affectorItEnd = mAffectors.end();
++			for (affectorIt = mAffectors.begin(); affectorIt != affectorItEnd; ++affectorIt)
+ 			{
+-				ExternIterator itExtern;
+-				ExternIterator itExternEnd = mExterns.end();
+-				for (itExtern = mExterns.begin(); itExtern != itExternEnd; ++itExtern)
++				if ((*affectorIt)->isEnabled())
+ 				{
+-					(*itExtern)->_initParticleForEmission(particle);
++					(*affectorIt)->_initParticleForEmission(particle);
++					(*affectorIt)->_processParticle(this, particle, 0.0f, j == 0);
+ 				}
+ 			}
+ 
+-			/** Initialise the particle from the technique, which could override existing settings.
+-			@remarks
+-				Do this after the other initialisation calls and transformation of the direction, because
+-				the _initParticleForEmission could overwrite the values if needed.
+-			*/
+ 			_initParticleForEmission(particle);
+ 
+-			// Apply partial frame motion to this particle
+-			particle->position += (particle->direction * _mParticleSystemScaleVelocity * timePoint);
+-
+-			// Increment time fragment
++			particle->position += particle->direction * timePoint;
+ 			timePoint += timeInc;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getDerivedPosition`: the same as the library's, read literally but for z: the binary appears to add the scaled y to the system's z (unconfirmed) - objdump check wanted.
+ 	const Vector3& ParticleTechnique::getDerivedPosition(void)
+ 	{
+ 		if (mMarkedForEmission)
+@@ -2571,57 +2748,24 @@ namespace ParticleUniverse
+ 		return mDerivedPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::_processMotion`. There is no keep-local
++	// offsetting here (Torchlight keeps local particles in the technique's own space and the
++	// renderer draws them there), no rotation offset and no skip for newly emitted particles:
++	// clamp to the maximum velocity, then move.
+ 	void ParticleTechnique::_processMotion(Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
+ 		if (particle->isFreezed())
+ 			return;
+ 
+-
+-		/** Because everything is calculated in worldspace we recalculate it back to the techniques' origin (the result is still 
+-			worldspace) just by adding a relative offset of the particle system, technique, emitter or visual particle.
+-			Change in V1.4:
+-			The additional PEF_EMITTED check fixes the problem with scenenodese moving forward at extremely fast speeds 
+-			The bug is due to how PU code processes keep_local, and the calculation shouldn't be applied to newly emitted particles.
+-		*/
+-		if (!particle->hasEventFlags(Particle::PEF_EMITTED))
+-		{
+-			if (!particle->parentEmitter->makeParticleLocal(particle))
+-			{
+-				if (!makeParticleLocal(particle))
+-				{
+-					getParentSystem()->makeParticleLocal(particle);
+-				}
+-			}
+-		}
+-
+-		/** Adjust position of the particle if the parent has rotated (only in case of particle system with 'keep local').
+-			PU 1.4: Added check that technique may not be local, otherwise particles are rotated twice as fast.
+-		*/
+-		if (getParentSystem()->isKeepLocal() && !mKeepLocal)
+-		{
+-			/** Ignore some rendersystems, because they are rotated by Ogre itself.
+-				Entities for example are always rotated (even if not local), based on the node orientation. A Billboard not.
+-			*/
+-			if (mRenderer && !mRenderer->autoRotate)
+-			{
+-				getParentSystem()->rotationOffset(particle->position);
+-			}
+-		}
+-
+-		// Added for 1.3
+-		if (particle->hasEventFlags(Particle::PEF_EMITTED))
+-			return;
+-
+-		// Adjust the velocity to the allowed maximum.
+ 		if (mMaxVelocitySet && particle->calculateVelocity() > mMaxVelocity)
+ 		{
+ 			particle->direction *= (mMaxVelocity / particle->direction.length());
+ 		}
+ 
+-		// Update the position with the direction.
+ 		particle->position += (particle->direction * _mParticleSystemScaleVelocity * timeElapsed);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setWidthCameraDependency`: the same as the library's.
+ 	void ParticleTechnique::setWidthCameraDependency(CameraDependency* cameraDependency)
+ 	{
+ 		if (mWidthCameraDependency)
+@@ -2630,6 +2774,7 @@ namespace ParticleUniverse
+ 		mWidthCameraDependency = cameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setWidthCameraDependency`: the same as the library's (the dependency made with `new`, not the factory).
+ 	void ParticleTechnique::setWidthCameraDependency(Real squareDistance, bool inc)
+ 	{
+ 		if (!mWidthCameraDependency)
+@@ -2643,11 +2788,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getWidthCameraDependency`: the same as the library's.
+ 	CameraDependency* ParticleTechnique::getWidthCameraDependency(void) const
+ 	{
+ 		return mWidthCameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setHeightCameraDependency`: the same as the library's.
+ 	void ParticleTechnique::setHeightCameraDependency(CameraDependency* cameraDependency)
+ 	{
+ 		if (mHeightCameraDependency)
+@@ -2656,6 +2803,7 @@ namespace ParticleUniverse
+ 		mHeightCameraDependency = cameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setHeightCameraDependency`: the same as the library's (the dependency made with `new`, not the factory).
+ 	void ParticleTechnique::setHeightCameraDependency(Real squareDistance, bool inc)
+ 	{
+ 		if (!mHeightCameraDependency)
+@@ -2669,11 +2817,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getHeightCameraDependency`: the same as the library's.
+ 	CameraDependency* ParticleTechnique::getHeightCameraDependency(void) const
+ 	{
+ 		return mHeightCameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setDepthCameraDependency`: the same as the library's.
+ 	void ParticleTechnique::setDepthCameraDependency(CameraDependency* cameraDependency)
+ 	{
+ 		if (mDepthCameraDependency)
+@@ -2682,6 +2832,7 @@ namespace ParticleUniverse
+ 		mDepthCameraDependency = cameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setDepthCameraDependency`: the same as the library's (the dependency made with `new`, not the factory).
+ 	void ParticleTechnique::setDepthCameraDependency(Real squareDistance, bool inc)
+ 	{
+ 		if (!mDepthCameraDependency)
+@@ -2695,59 +2846,24 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getDepthCameraDependency`: the same as the library's.
+ 	CameraDependency* ParticleTechnique::getDepthCameraDependency(void) const
+ 	{
+ 		return mDepthCameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumberOfEmittedParticles`: the pool's size, without
++	// the library's recursion into emitted techniques.
+ 	size_t ParticleTechnique::getNumberOfEmittedParticles(void)
+ 	{
+-		// Get number from the pool
+-		size_t total = mPool.getSize();
+-
+-		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
+-		{
+-			return total;
+-		}
+-
+-		// Take the emitted techniques into account
+-		ParticleTechnique* technique = static_cast<ParticleTechnique*>(mPool.getFirst(Particle::PT_TECHNIQUE));
+-		while (!mPool.end(Particle::PT_TECHNIQUE))
+-		{
+-			if (technique)
+-			{
+-				total += technique->getNumberOfEmittedParticles();
+-			}
+-			
+-			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
+-		}
+-
+-		return total;
++		return mPool.getSize();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getNumberOfEmittedParticles`: the pool's size of that type, without
++	// the library's recursion into emitted techniques.
+ 	size_t ParticleTechnique::getNumberOfEmittedParticles(Particle::ParticleType particleType)
+ 	{
+-		// Get number from the pool
+-		size_t total = mPool.getSize(particleType);
+-
+-		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
+-		{
+-			return total;
+-		}
+-
+-		// Take the emitted techniques into account
+-		ParticleTechnique* technique = static_cast<ParticleTechnique*>(mPool.getFirst(Particle::PT_TECHNIQUE));
+-		while (!mPool.end(Particle::PT_TECHNIQUE))
+-		{
+-			if (technique)
+-			{
+-				total += technique->getNumberOfEmittedParticles(particleType);
+-			}
+-			
+-			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
+-		}
+-
+-		return total;
++		return mPool.getSize(particleType);
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleTechnique::_initAllParticlesForExpiration(void)
+@@ -2774,19 +2890,24 @@ namespace ParticleUniverse
+ 		mPool.lockAllParticles();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::initVisualDataInPool`: the same body as
++	// `clearAllParticles` - once the pool has grown, the renderer hidden and told to
++	// release its particles, the visual particles given back to the manager's store, the rest
++	// locked. The library's only forgets every particle's visual data. The renderers call it from
++	// their `_destroyAll`, so a renderer torn down also empties its technique.
+ 	void ParticleTechnique::initVisualDataInPool(void)
+ 	{
+-		mPool.releaseAllParticles();
+-		Particle* particle = static_cast<Particle*>(mPool.getFirst());
+-		while (!mPool.end())
++		if (!mVisualParticlePoolIncreased)
++			return;
++
++		if (mRenderer)
+ 		{
+-			if (particle)
+-			{
+-				particle->visualData = 0;
+-			}
+-			particle = static_cast<Particle*>(mPool.getNext());
++			mRenderer->setVisible(false);
++			mRenderer->_releaseParticles(&mPool);
+ 		}
++		mPool.freeParticlePool();
+ 		mPool.lockAllParticles();
++		mVisualParticlePoolIncreased = false;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	ParticlePool* ParticleTechnique::_getParticlePool(void)
+@@ -2794,16 +2915,19 @@ namespace ParticleUniverse
+ 		return &mPool;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::isKeepLocal`: the same as the library's.
+ 	bool ParticleTechnique::isKeepLocal(void) const
+ 	{
+ 		return mKeepLocal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setKeepLocal`: the same as the library's.
+ 	void ParticleTechnique::setKeepLocal(bool keepLocal)
+ 	{
+ 		mKeepLocal = keepLocal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::makeParticleLocal`: the same as the library's.
+ 	bool ParticleTechnique::makeParticleLocal(Particle* particle)
+ 	{
+ 		if (!particle)
+@@ -2817,6 +2941,7 @@ namespace ParticleUniverse
+ 		return true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getSpatialHashTable`: the same as the library's.
+ 	SpatialHashTable<Particle*>* ParticleTechnique::getSpatialHashTable(void) const
+ 	{
+ 		return mCurrentSpatialHashTable;
+@@ -2827,68 +2952,82 @@ namespace ParticleUniverse
+ 		return mIsSpatialHashingUsed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setSpatialHashing`: the same as the library's `setSpatialHashingUsed`.
+ 	void ParticleTechnique::setSpatialHashingUsed(bool spatialHashingUsed)
+ 	{
+ 		mIsSpatialHashingUsed = spatialHashingUsed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getSpatialHashingCellDimension`: the same as the library's.
+ 	unsigned short ParticleTechnique::getSpatialHashingCellDimension(void) const
+ 	{
+ 		return mSpatialHashingCellDimension;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setSpatialHashingCellDimension`: the same as the library's.
+ 	void ParticleTechnique::setSpatialHashingCellDimension(unsigned short spatialHashingCellDimension)
+ 	{
+ 		mSpatialHashingCellDimension = spatialHashingCellDimension;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getSpatialHashingCellOverlap`: the same as the library's.
+ 	unsigned short ParticleTechnique::getSpatialHashingCellOverlap(void) const
+ 	{
+ 		return mSpatialHashingCellOverlap;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setSpatialHashingCellOverlap`: the same as the library's.
+ 	void ParticleTechnique::setSpatialHashingCellOverlap(unsigned short spatialHashingCellOverlap)
+ 	{
+ 		mSpatialHashingCellOverlap = spatialHashingCellOverlap;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getSpatialHashTableSize`: the same as the library's.
+ 	unsigned int ParticleTechnique::getSpatialHashTableSize(void) const
+ 	{
+ 		return mSpatialHashTableSize;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setSpatialHashTableSize`: the same as the library's.
+ 	void ParticleTechnique::setSpatialHashTableSize(unsigned int spatialHashTableSize)
+ 	{
+ 		mSpatialHashTableSize = spatialHashTableSize;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getSpatialHashingInterval`: the same as the library's.
+ 	Real ParticleTechnique::getSpatialHashingInterval(void) const
+ 	{
+ 		return mSpatialHashingInterval;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setSpatialHashingInterval`: the same as the library's.
+ 	void ParticleTechnique::setSpatialHashingInterval(Real spatialHashingInterval)
+ 	{
+ 		mSpatialHashingInterval = spatialHashingInterval;
+ 		mSpatialHashingIntervalSet = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::getMaxVelocity`: the same as the library's.
+ 	Real ParticleTechnique::getMaxVelocity(void) const
+ 	{
+ 		return mMaxVelocity;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::setMaxVelocity`: set only when positive (the
++	// library's is set by any value), as `copyAttributesTo` sets it.
+ 	void ParticleTechnique::setMaxVelocity(Real maxVelocity)
+ 	{
+ 		mMaxVelocity = maxVelocity;
+-		mMaxVelocitySet = true;
++		mMaxVelocitySet = (0.0f < maxVelocity);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::addTechniqueListener`: the same as the library's.
+ 	void ParticleTechnique::addTechniqueListener (TechniqueListener* techniqueListener)
+ 	{
+ 		mTechniqueListenerList.push_back(techniqueListener);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::removeTechniqueListener`: the same as the library's.
+ 	void ParticleTechnique::removeTechniqueListener (TechniqueListener* techniqueListener)
+ 	{
+ 		assert(techniqueListener && "TechniqueListener is null!");
+@@ -2975,18 +3114,30 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::copyAttributesTo`. Against the library: the
++	// renderer is cloned first; the velocity scale, the sprite sheet, WORLD ORIENTATION and NO
++	// CULLING are copied; defaults and the material go through their setters; the system pool is
++	// re-grown too; the maximum velocity counts as set whenever it is positive. Quirk kept: each
++	// cloned emitter's keep local is written back to *this* technique, not the copy. The
++	// original also copies a field at +0x5ac that nothing in this library has.
+ 	void ParticleTechnique::copyAttributesTo (ParticleTechnique* technique)
+ 	{
+-		// Destroy the emitters, affectors, etc.
+ 		technique->destroyAllEmitters();
+ 		technique->destroyAllAffectors();
+ 		technique->destroyAllObservers();
+ 		technique->destroyAllExterns();
+ 		technique->destroyRenderer();
+ 
+-		// Copy Parent attributes
+ 		Particle::copyAttributesTo(technique);
+ 
++		ParticleRenderer* clonedRenderer = ParticleSystemManager::getSingletonPtr()->cloneRenderer(mRenderer);
++		technique->setRenderer(clonedRenderer);
++		if (clonedRenderer)
++		{
++			clonedRenderer->setParentTechnique(technique);
++		}
++
++		technique->_mParticleSystemScale = _mParticleSystemScale;
+ 		technique->mName = mName;
+ 		technique->mVisualParticlePoolIncreased = false;
+ 		technique->mParticleEmitterPoolIncreased = false;
+@@ -2996,14 +3147,19 @@ namespace ParticleUniverse
+ 		technique->mEmittedEmitterQuota = mEmittedEmitterQuota;
+ 		technique->mEmittedTechniqueQuota = mEmittedTechniqueQuota;
+ 		technique->mEmittedAffectorQuota = mEmittedAffectorQuota;
++		technique->mParticleSystemPoolIncreased = false;
+ 		technique->mEmittedSystemQuota = mEmittedSystemQuota;
+-		technique->mMaterialName = mMaterialName;
+-		technique->mDefaultWidth = mDefaultWidth;
+-		technique->mDefaultHeight = mDefaultHeight;
+-		technique->mDefaultDepth = mDefaultDepth;
++		technique->setDefaultWidth(mDefaultWidth);
++		technique->setDefaultHeight(mDefaultHeight);
++		technique->setDefaultDepth(mDefaultDepth);
++		technique->setFlipbookWidthHeight(mFlipbookWidth, mFlipbookHeight);
+ 		technique->mParentSystem = mParentSystem;
+ 		technique->mLodIndex = mLodIndex;
+ 		technique->mKeepLocal = mKeepLocal;
++		technique->mWorldOrientation = mWorldOrientation;
++		technique->mNoCull = mNoCull;
++		technique->_mParticleSystemScale = _mParticleSystemScale;
++		technique->_mParticleSystemScaleVelocity = _mParticleSystemScaleVelocity;
+ 		technique->mIsSpatialHashingUsed = mIsSpatialHashingUsed;
+ 		technique->mSpatialHashingCellDimension = mSpatialHashingCellDimension;
+ 		technique->mSpatialHashingCellOverlap = mSpatialHashingCellOverlap;
+@@ -3012,65 +3168,49 @@ namespace ParticleUniverse
+ 		technique->mSpatialHashingIntervalRemainder = mSpatialHashingIntervalRemainder;
+ 		technique->mSpatialHashingIntervalSet = mSpatialHashingIntervalSet;
+ 		technique->mMaxVelocity = mMaxVelocity;
+-		technique->mMaxVelocitySet = mMaxVelocitySet;
+-		technique->_mParticleSystemScale = _mParticleSystemScale;
++		technique->mMaxVelocitySet = (0.0f < mMaxVelocity);
+ 		technique->setWidthCameraDependency (mCameraDependencyFactory.clone(getWidthCameraDependency()));
+ 		technique->setHeightCameraDependency (mCameraDependencyFactory.clone(getHeightCameraDependency()));
+ 		technique->setDepthCameraDependency (mCameraDependencyFactory.clone(getDepthCameraDependency()));
+ 
+-		// Copy the renderer
+-		ParticleRenderer* clonedRenderer = ParticleSystemManager::getSingletonPtr()->cloneRenderer(mRenderer);
+-		technique->setRenderer(clonedRenderer);
+-
+-		// Copy all emitters
+-		ParticleEmitter* clonedEmitter = 0;
+ 		ParticleEmitterIterator itEmitter;
+ 		ParticleEmitterIterator itEmitterEnd = mEmitters.end();
+ 		for (itEmitter = mEmitters.begin(); itEmitter != itEmitterEnd; ++itEmitter)
+ 		{
+-			clonedEmitter = ParticleSystemManager::getSingletonPtr()->cloneEmitter(*itEmitter);
++			ParticleEmitter* clonedEmitter = ParticleSystemManager::getSingletonPtr()->cloneEmitter(*itEmitter);
+ 			technique->addEmitter(clonedEmitter);
++			mKeepLocal = clonedEmitter->isKeepLocal();
+ 		}
+ 
+-		// Copy all affectors
+-		ParticleAffector* clonedAffector = 0;
+ 		ParticleAffectorIterator itAffector;
+ 		ParticleAffectorIterator itAffectorEnd = mAffectors.end();
+ 		for (itAffector = mAffectors.begin(); itAffector != itAffectorEnd; ++itAffector)
+ 		{
+-			clonedAffector = ParticleSystemManager::getSingletonPtr()->cloneAffector(*itAffector);
+-			technique->addAffector(clonedAffector);
++			technique->addAffector(ParticleSystemManager::getSingletonPtr()->cloneAffector(*itAffector));
+ 		}
+ 
+-		// Copy all observers
+-		ParticleObserver* clonedObserver = 0;
+ 		ParticleObserverIterator itObserver;
+ 		ParticleObserverIterator itObserverEnd = mObservers.end();
+ 		for (itObserver = mObservers.begin(); itObserver != itObserverEnd; ++itObserver)
+ 		{
+-			clonedObserver = ParticleSystemManager::getSingletonPtr()->cloneObserver(*itObserver);
+-			technique->addObserver(clonedObserver);
++			technique->addObserver(ParticleSystemManager::getSingletonPtr()->cloneObserver(*itObserver));
+ 		}
+ 
+-		// Copy all behaviour templates
+-		ParticleBehaviour* clonedBehaviour = 0;
+ 		ParticleBehaviourIterator itBehaviour;
+ 		ParticleBehaviourIterator itBehaviourEnd = mBehaviourTemplates.end();
+ 		for (itBehaviour = mBehaviourTemplates.begin(); itBehaviour != itBehaviourEnd; ++itBehaviour)
+ 		{
+-			clonedBehaviour = ParticleSystemManager::getSingletonPtr()->cloneBehaviour(*itBehaviour);
+-			technique->_addBehaviourTemplate(clonedBehaviour);
++			technique->_addBehaviourTemplate(ParticleSystemManager::getSingletonPtr()->cloneBehaviour(*itBehaviour));
+ 		}
+ 
+-		// Copy all externs
+-		Extern* clonedExtern = 0;
+ 		ExternIterator itExtern;
+ 		ExternIterator itExternEnd = mExterns.end();
+ 		for (itExtern = mExterns.begin(); itExtern != itExternEnd; ++itExtern)
+ 		{
+-			clonedExtern = ParticleSystemManager::getSingletonPtr()->cloneExtern(*itExtern);
+-			technique->addExtern(clonedExtern);
++			technique->addExtern(ParticleSystemManager::getSingletonPtr()->cloneExtern(*itExtern));
+ 		}
++
++		technique->setMaterialName(mMaterialName);
+ 	}
+ 
+ }

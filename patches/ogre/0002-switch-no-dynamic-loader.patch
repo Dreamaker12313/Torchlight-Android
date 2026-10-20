@@ -1,0 +1,38 @@
+diff --git a/OgreMain/src/OgreDynLib.cpp b/OgreMain/src/OgreDynLib.cpp
+index 02f2dbd..f7ec042 100644
+--- a/OgreMain/src/OgreDynLib.cpp
++++ b/OgreMain/src/OgreDynLib.cpp
+@@ -29,7 +29,14 @@ THE SOFTWARE.
+ 
+ #include "OgreDynLib.h"
+ 
+-#if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
++// Nintendo Switch homebrew has no dynamic loader: there is no dlopen and no
++// dlfcn.h. Plugins are registered statically via Root::installPlugin(), so
++// these stubs only need to link and fail cleanly if anything tries a load.
++#if defined(__SWITCH__)
++#    define DYNLIB_LOAD( a ) (NULL)
++#    define DYNLIB_GETSYM( a, b ) (NULL)
++#    define DYNLIB_UNLOAD( a ) (0)
++#elif OGRE_PLATFORM == OGRE_PLATFORM_WIN32
+ #    define DYNLIB_LOAD( a ) LoadLibraryEx( a, NULL, 0 ) // we can not use LOAD_WITH_ALTERED_SEARCH_PATH with relative paths
+ #    define DYNLIB_GETSYM( a, b ) GetProcAddress( a, b )
+ #    define DYNLIB_UNLOAD( a ) !FreeLibrary( a )
+@@ -54,7 +61,7 @@ THE SOFTWARE.
+ #   define NOMINMAX // required to stop windows.h messing up std::min
+ #  endif
+ #  include <windows.h>
+-#else
++#elif !defined(__SWITCH__)
+ extern "C" {
+ #   include <dlfcn.h>
+ }
+@@ -210,7 +217,7 @@ namespace Ogre {
+         String ret = narrowMsgBuf;
+ 
+         return ret;
+-#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX || OGRE_PLATFORM == OGRE_PLATFORM_APPLE
++#elif (OGRE_PLATFORM == OGRE_PLATFORM_LINUX || OGRE_PLATFORM == OGRE_PLATFORM_APPLE) && !defined(__SWITCH__)
+         return String(dlerror());
+ #else
+         return String("");

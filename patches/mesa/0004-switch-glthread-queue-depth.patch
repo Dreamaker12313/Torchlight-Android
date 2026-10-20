@@ -1,0 +1,19 @@
+diff --git a/src/mesa/main/glthread.h b/src/mesa/main/glthread.h
+--- a/src/mesa/main/glthread.h
++++ b/src/mesa/main/glthread.h
+@@ -41,7 +41,15 @@
+  * waiting batches. There must be at least 1 slot for a waiting batch,
+  * so the minimum number of batches is 3.
+  */
++#ifdef __SWITCH__
++/* The console's game thread records a frame of a few hundred draws, each with
++ * its uniforms, in well over 8 batches; with 8 slots it waited for a free one
++ * 1.5-4 ms a frame while the worker's core sat two-thirds idle (the worker
++ * catches up between bursts). 32 slots, 256 KiB of commands in flight. */
++#define MARSHAL_MAX_BATCHES 32
++#else
+ #define MARSHAL_MAX_BATCHES 8
++#endif
+ 
+ #include <inttypes.h>
+ #include <stdbool.h>

@@ -1,0 +1,125 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBox.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBox.cpp
+index 90dd482..d3bf286 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBox.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBox.cpp
+@@ -32,7 +32,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`Box::_GLOBAL__I_Box`) sets up only the
++	// stream library, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::Box`: the same as the library's (10 x 10 x 10, white, at the origin).
+ 	Box::Box(void):
+         mOwnDimensions(false),
+ 		mPosition(Vector3::ZERO),
+@@ -51,6 +54,7 @@ namespace ParticleUniverse
+ 		_calculateCorners();
+ 	}
+     //-----------------------------------------------------------------------
++    // Torchlight: `Box::Box`: the same as the library's: the position and owner are not kept.
+     Box::Box(const Vector3& position, BoxSet* owner) :
+         mOwnDimensions(false),
+ 		mPosition(Vector3::ZERO),
+@@ -69,10 +73,12 @@ namespace ParticleUniverse
+ 		_calculateCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::~Box`: the same as the library's.
+ 	Box::~Box(void)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::_calculateCorners`: the same as the library's.
+ 	void Box::_calculateCorners(void)
+ 	{
+ 		if (mDimensionsChanged)
+@@ -116,6 +122,7 @@ namespace ParticleUniverse
+ 		mCorners[7].z = mHalfDepth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getCorner`: the same as the library's.
+ 	const Vector3& Box::getCorner(size_t index)
+ 	{
+ 		assert(index < 8 && "Corner index out of bounds." );
+@@ -130,6 +137,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getWorldspaceCorner`: the same as the library's.
+ 	const Vector3& Box::getWorldspaceCorner(size_t index)
+ 	{
+ 		assert(index < 8 && "Corner index out of bounds." );
+@@ -145,12 +153,14 @@ namespace ParticleUniverse
+ 		return mTempCorner;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::setPosition`: the same as the library's.
+ 	void Box::setPosition(const Vector3& position)
+ 	{
+ 		mPosition = position;
+ 		_calculateCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::setPosition`: the same as the library's.
+ 	void Box::setPosition(Real x, Real y, Real z)
+ 	{
+ 		mPosition.x = x;
+@@ -159,11 +169,13 @@ namespace ParticleUniverse
+ 		_calculateCorners();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getPosition`: the same as the library's.
+ 	const Vector3& Box::getPosition(void) const
+ 	{
+ 		return mPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::setDimensions`: the same as the library's.
+ 	void Box::setDimensions(Real width, Real height, Real depth)
+ 	{
+ 		mOwnDimensions = true;
+@@ -176,36 +188,43 @@ namespace ParticleUniverse
+ 		_calculateCorners();
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::hasOwnDimensions`: the same as the library's.
+ 	bool Box::hasOwnDimensions(void) const
+ 	{
+ 		return mOwnDimensions;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::_notifyOwner`: the same as the library's.
+ 	void Box::_notifyOwner(BoxSet* owner)
+ 	{
+ 		mParentSet = owner;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::setColour`: the same as the library's.
+ 	void Box::setColour(const ColourValue& colour)
+ 	{
+ 		mColour = colour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getColour`: the same as the library's.
+ 	const ColourValue& Box::getColour(void) const
+ 	{
+ 		return mColour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getOwnWidth`: the same as the library's.
+ 	Real Box::getOwnWidth(void) const
+ 	{
+ 		return mWidth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getOwnHeight`: the same as the library's.
+ 	Real Box::getOwnHeight(void) const
+ 	{
+ 		return mHeight;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Box::getOwnDepth`: the same as the library's.
+ 	Real Box::getOwnDepth(void) const
+ 	{
+ 		return mDepth;

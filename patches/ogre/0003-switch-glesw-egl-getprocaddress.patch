@@ -1,0 +1,16 @@
+diff --git a/RenderSystems/GLES2/src/glesw.c b/RenderSystems/GLES2/src/glesw.c
+index 205f1e7..136328e 100644
+--- a/RenderSystems/GLES2/src/glesw.c
++++ b/RenderSystems/GLES2/src/glesw.c
+@@ -89,7 +89,10 @@ static GLESWglProc get_proc(const char *proc)
+     CFRelease(procname);
+     return res;
+ }
+-#elif defined(__EMSCRIPTEN__)
++// Nintendo Switch links GLES2 statically (switch-mesa) and has no dynamic
++// loader, so resolve entry points through EGL exactly as Emscripten does
++// rather than dlopen()ing libGLESv2.so.
++#elif defined(__EMSCRIPTEN__) || defined(__SWITCH__)
+ #include <EGL/egl.h>
+ static void open_libgl() {}
+ static void close_libgl() {}

@@ -1,0 +1,422 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h b/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
+index e44dab5..748804f 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
+@@ -39,6 +39,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #include "ParticleUniverseExternFactory.h"
+ #include "ParticleUniverseBehaviourFactory.h"
+ #include "ParticleUniverseIAlias.h"
++#include "ParticleUniversePool.h"
++#include "ParticleUniverseParticle.h"
+ #include "ParticleUniverseCameraDependency.h"
+ #include "ParticleUniverseSystemTokens.h"
+ #include "ParticleUniverseTechniqueTokens.h"
+@@ -179,6 +181,10 @@ namespace ParticleUniverse
+ 			// Factory used to create SphereSets
+ 			SphereSetFactory* mSphereSetFactory;
+ 
++			// Torchlight: the factory of Runic's ribbon trail (TorchlightRibbonTrail), which
++			// Torchlight's RibbonTrailRenderer draws with.
++			Ogre::MovableObjectFactory* mTorchlightRibbonTrailFactory;
++
+ 			// Parse functions on ParticleSystemManager level
+ 			ParticleSystemManagerWriter mParticleSystemManagerWriter;
+ 
+@@ -584,6 +590,16 @@ namespace ParticleUniverse
+ 			/** Override standard Singleton retrieval.
+ 	        */
+ 			static ParticleSystemManager& getSingleton (void);
++
++			/** Torchlight: the share, 0 to 1, of its particles that an emitter which
++				loops for ever releases, and the factor on their life
++				(`getEmitterLoopingReleasePCT`, `setEmitterLoopingReleasePCT`
++				the global `m_gReleasePCT`, 1 at start). `CGame::setup`
++				sets it to the `PARTICLE_PCT` setting over 100, clamped to
++				0..100.
++			*/
++			static Real getEmitterLoopingReleasePCT (void);
++			static void setEmitterLoopingReleasePCT (Real releasePCT);
+ 			
+ 			/** Override standard Singleton retrieval.
+ 			*/
+@@ -673,6 +689,71 @@ namespace ParticleUniverse
+ 				This function gives more control over loading the materials.
+ 	        */
+ 			void setAutoLoadMaterials(bool autoLoadMaterials);
++
++			/** Torchlight: every technique's visual particles come from one store the
++				manager owns. `setMaxNumberOfParticles` grows it with new particles
++				or deletes from it; the plugin starts it at 1000 and `CGame::setup`
++				sets 20000.
++			*/
++			void setMaxNumberOfParticles(unsigned int maxNumberOfParticles);
++			unsigned int getMaxNumberOfParticles(void) const {return mMaxNumberOfParticles;};
++
++			/** Torchlight (`_FillPoolOfParticles`): move up to `count` particles from
++				the store into a technique's pool, while the store has any.
++			*/
++			void _FillPoolOfParticles(vector<VisualParticle*>& particles, Pool<VisualParticle>& pool,
++				Particle::ParticleBehaviourList& behaviours, unsigned int count);
++
++			/** Torchlight (`_FreePoolOfParticles`): give a technique's particles back.
++			*/
++			void _FreePoolOfParticles(vector<VisualParticle*>& particles);
++
++			/** Torchlight: the distance falloff (manager +0x4d8). A particle system farther
++				than this from the falloff position, in x and z, is left idle for a while
++				(`ParticleSystem::_update`). The plugin passes 50; `CGame::setup` sets
++				the `PARTICLE_FALLOFF` setting (default 130).
++			*/
++			Real getParticleFalloff(void) const {return mParticleFalloff;};
++			void setParticleFalloff(Real falloff) {mParticleFalloff = falloff;};
++
++			/** Torchlight: where the falloff is measured from (manager +0x4e0), the player's
++				position, written every frame by `CGameClient::updateIngame`.
++			*/
++			const Vector3& getFalloffPosition(void) const {return mFalloffPosition;};
++			void setFalloffPosition(const Vector3& position) {mFalloffPosition = position;};
++
++			/** Torchlight: the game speed (manager +0x4dc, 1 from the constructor), which every
++				system's time is multiplied by (`ParticleSystemUpdateValue::setValue`).
++				`CGameClient::updateIngame` writes `CGameSpeed::getGameSpeed()` times
++				the client's speed multiplier every frame.
++			*/
++			Real getGameSpeed(void) const {return mGameSpeed;};
++			void setGameSpeed(Real gameSpeed) {mGameSpeed = gameSpeed;};
++
++			/** Torchlight: the game is paused (manager +0x540): systems are not stepped, only
++				refreshed against their camera. `CGameClient::updateIngame`
++				writes `getIsPaused()` every frame, or false while the player's target is an
++				interactive character.
++			*/
++			bool isGamePaused(void) const {return mGamePaused;};
++			void setGamePaused(bool paused) {mGamePaused = paused;};
++
++			/** Torchlight: how many steps a second systems are updated in (`getParticleFPS`
++				`setParticleFPS`, the global `m_gMaxFPS`, 40 in the image).
++				`CGame::setup` sets the `PARTICLEFPS` setting, whose default is 40
++				(`CSettings::CSettings`); the settings menu's particle detail picks 20,
++				30 or 40 (`KParticleFPSDetail`, `CSettingsMenu::update`).
++			*/
++			static Real getParticleFPS(void);
++			static void setParticleFPS(Real fps);
++
++		protected:
++			vector<VisualParticle*> mVisualParticleStore;
++			unsigned int mMaxNumberOfParticles;
++			Real mParticleFalloff;
++			Vector3 mFalloffPosition;
++			Real mGameSpeed;
++			bool mGamePaused;
+ 	};
+ 
+ 	//-----------------------------------------------------------------------
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
+index cb1eae3..ae64ee0 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
+@@ -29,6 +29,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ #include "ParticleUniverseScriptCompiler.h"
+ #include "OgreRoot.h"
++#include "ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h"
+ #include "OgreHighLevelGpuProgramManager.h"
+ #include "OgreHighLevelGpuProgram.h"
+ #include "OgreMaterialManager.h"
+@@ -42,6 +43,108 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ template<> ParticleUniverse::ParticleSystemManager* Ogre::Singleton<ParticleUniverse::ParticleSystemManager>::msSingleton = 0;
+ namespace ParticleUniverse
+ {
++	// Torchlight: `ParticleUniverse::m_gReleasePCT`, 1.0 in the image.
++	static Real m_gReleasePCT = 1.0f;
++	// Torchlight: `ParticleUniverse::m_gMaxFPS`, 40.0 in the image.
++	static Real m_gMaxFPS = 40.0f;
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::getParticleFPS`.
++	Real ParticleSystemManager::getParticleFPS (void)
++	{
++		return m_gMaxFPS;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::setParticleFPS`.
++	void ParticleSystemManager::setParticleFPS (Real fps)
++	{
++		m_gMaxFPS = fps;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::getEmitterLoopingReleasePCT`.
++	Real ParticleSystemManager::getEmitterLoopingReleasePCT (void)
++	{
++		return m_gReleasePCT;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::setEmitterLoopingReleasePCT`.
++	void ParticleSystemManager::setEmitterLoopingReleasePCT (Real releasePCT)
++	{
++		m_gReleasePCT = releasePCT;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::setMaxNumberOfParticles`. Only the
++	// difference is created or deleted, and deleting takes only what the store still holds.
++	void ParticleSystemManager::setMaxNumberOfParticles(unsigned int maxNumberOfParticles)
++	{
++		if (mMaxNumberOfParticles == maxNumberOfParticles)
++			return;
++
++		int difference = (int)maxNumberOfParticles - (int)mMaxNumberOfParticles;
++		mMaxNumberOfParticles = maxNumberOfParticles;
++		if (difference > 0)
++		{
++			for (int i = 0; i < difference; ++i)
++			{
++				mVisualParticleStore.push_back(PU_NEW_T(VisualParticle, MEMCATEGORY_SCENE_OBJECTS)());
++			}
++		}
++		else
++		{
++			for (int i = 0; i < -difference; ++i)
++			{
++				if (mVisualParticleStore.empty())
++					continue;
++				VisualParticle* particle = mVisualParticleStore.back();
++				mVisualParticleStore.pop_back();
++				if (particle)
++				{
++					PU_DELETE_T(particle, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
++				}
++			}
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::_FillPoolOfParticles`. Taken from the
++	// back of the store.
++	void ParticleSystemManager::_FillPoolOfParticles(vector<VisualParticle*>& particles, Pool<VisualParticle>& pool,
++		Particle::ParticleBehaviourList& behaviours, unsigned int count)
++	{
++		while (count != 0 && !mVisualParticleStore.empty())
++		{
++			VisualParticle* particle = mVisualParticleStore.back();
++			mVisualParticleStore.pop_back();
++			particle->copyBehaviours(behaviours);
++			pool.addElement(particle);
++			particles.push_back(particle);
++			--count;
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::_FreePoolOfParticles`. Each particle's
++	// visual data is dropped as it goes back.
++	void ParticleSystemManager::_FreePoolOfParticles(vector<VisualParticle*>& particles)
++	{
++		for (size_t i = 0; i < particles.size(); ++i)
++		{
++			particles[i]->visualData = 0;
++			mVisualParticleStore.push_back(particles[i]);
++		}
++		particles.clear();
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::ParticleSystemManager`,
++	// `(float falloff, unsigned int particles)`, set against this one: the script tokens (+0x30..
++	// +0x268, +0x438..+0x4c8) and the "*.pua" / "*.pu" patterns serve the script parser, which
++	// Torchlight's data never reaches (no .pu script ships). What is left is the same: the camera
++	// dependency at threshold 1000, not increasing (+0x4c8..+0x4d4, as `createCameraDependency`),
++	// the falloff from the argument (+0x4d8, 50 from `ParticleUniversePlugin::install`),
++	// a game speed of 1 (+0x4dc), the falloff position and the statistics counters zero
++	// (+0x4e0..+0x508), no particles (+0x50c) and an empty store (+0x510); the factories of
++	// `ParticleSystem`, `BoxSet` and `SphereSet` handed
++	// to `Root::addMovableObjectFactory` in that order (+0x420..+0x430); then
++	// `setMaxNumberOfParticles` with the second argument (1000). The depth-map and
++	// material-loading fields are the library's newer additions, and the ribbon-trail factory is
++	// the port's own (Runic's ribbon trail lives in its modified OGRE, not here).
+ 	ParticleSystemManager::ParticleSystemManager (void) :
+ 		mDepthTextureName(BLANK_STRING),
+ 		mDepthMaterialName(BLANK_STRING),
+@@ -53,7 +156,12 @@ namespace ParticleUniverse
+ 		mDepthPass(0),
+ 		mDepthMapExtern(false),
+ 		mAutoLoadMaterials(true),
+-		mDepthScale(1.0f)
++		mDepthScale(1.0f),
++		mMaxNumberOfParticles(0),
++		mParticleFalloff(50.0f),
++		mFalloffPosition(Vector3::ZERO),
++		mGameSpeed(1.0f),
++		mGamePaused(false)
+ 	{
+ 		// Initialise script deserialisation
+ 		ScriptCompilerManager::getSingleton().addScriptPattern("*.pua");
+@@ -73,6 +181,13 @@ namespace ParticleUniverse
+ 
+ 		mSphereSetFactory = PU_NEW SphereSetFactory();
+ 		Ogre::Root::getSingleton().addMovableObjectFactory(mSphereSetFactory);
++
++		mTorchlightRibbonTrailFactory = PU_NEW TorchlightRibbonTrailFactory();
++		Ogre::Root::getSingleton().addMovableObjectFactory(mTorchlightRibbonTrailFactory);
++
++		// Torchlight: `ParticleUniversePlugin::install` constructs the manager
++		// with a falloff of 50 and 1000 particles.
++		setMaxNumberOfParticles(1000);
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	ParticleSystemManager::~ParticleSystemManager (void)
+@@ -80,6 +195,13 @@ namespace ParticleUniverse
+ 		// Remove all template + aliasses
+ 		destroyAllParticleSystemTemplates();
+ 
++		vector<VisualParticle*>::iterator itStore;
++		for (itStore = mVisualParticleStore.begin(); itStore != mVisualParticleStore.end(); ++itStore)
++		{
++			PU_DELETE_T(*itStore, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
++		}
++		mVisualParticleStore.clear();
++
+ 		/** Clear the aliasmap and destroy the objects in it 
+ 		*/ 
+ 		destroyAllAliasses(); 
+@@ -118,6 +240,13 @@ namespace ParticleUniverse
+ 			PU_DELETE mSphereSetFactory;
+ 			mSphereSetFactory = 0;
+ 		}
++
++		if (mTorchlightRibbonTrailFactory)
++		{
++			Ogre::Root::getSingleton().removeMovableObjectFactory(mTorchlightRibbonTrailFactory);
++			PU_DELETE mTorchlightRibbonTrailFactory;
++			mTorchlightRibbonTrailFactory = 0;
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleSystemManager::removeAndDestroyDanglingSceneNodes(Ogre::SceneNode* sceneNode)
+@@ -125,6 +254,23 @@ namespace ParticleUniverse
+ 		// Only destroy the SceneNodes that start with "ParticleUniverse"
+ 		if (sceneNode)
+ 		{
++#if OGRE_VERSION >= 0xE0000
++			// OGRE 14: Node::getChildIterator is deprecated and a node's children are a vector, so
++			// removing one while walking them invalidates the walk (OGRE 1.x kept a map, whose
++			// iterator had already moved on). The names are taken first, then removed.
++			std::vector<String> names;
++			for (Ogre::Node* child : sceneNode->getChildren())
++			{
++				if(child->getName().compare(0, 16, "ParticleUniverse") == 0)
++				{
++					names.push_back(child->getName());
++				}
++			}
++			for (const String& name : names)
++			{
++				sceneNode->removeAndDestroyChild(name);
++			}
++#else
+ 			Ogre::SceneNode::ChildNodeIterator iterator = sceneNode->getChildIterator();
+ 			while(iterator.hasMoreElements())
+ 			{
+@@ -135,6 +281,7 @@ namespace ParticleUniverse
+ 					sceneNode->removeAndDestroyChild(name);
+ 				}
+ 			}
++#endif
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -250,6 +397,8 @@ namespace ParticleUniverse
+ 		return it->second->createEmitter();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneEmitter` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleEmitter* ParticleSystemManager::cloneEmitter(ParticleEmitter* emitter)
+ 	{
+ 		if (!emitter)
+@@ -281,6 +430,8 @@ namespace ParticleUniverse
+ 		return technique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneTechnique` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleTechnique* ParticleSystemManager::cloneTechnique(ParticleTechnique* technique)
+ 	{
+ 		if (!technique)
+@@ -353,6 +504,8 @@ namespace ParticleUniverse
+ 		return it->second->createAffector();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneAffector` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleAffector* ParticleSystemManager::cloneAffector(ParticleAffector* affector)
+ 	{
+ 		if (!affector)
+@@ -363,6 +516,11 @@ namespace ParticleUniverse
+ 		return clonedAffector;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyAffector`: the factory is looked up as in
++	// the library's, then the affector's parent technique is cleared before it is deleted, so
++	// Torchlight's destructor does not take it out of a technique's list. The binary
++	// deletes through the affector's own virtual destructor; the factory's `destroyAffector` does the
++	// same (PU_DELETE).
+ 	void ParticleSystemManager::destroyAffector(ParticleAffector* affector)
+ 	{
+ 		// Locate affector type
+@@ -370,10 +528,11 @@ namespace ParticleUniverse
+ 
+ 		if (it == mAffectorFactories.end())
+ 		{
+-			EXCEPT(Exception::ERR_INVALIDPARAMS, "PU: Cannot find requested affector type.", 
++			EXCEPT(Exception::ERR_INVALIDPARAMS, "PU: Cannot find requested affector type.",
+ 				"ParticleSystemManager::destroyAffector");
+ 		}
+ 
++		affector->setParentTechnique(0);
+ 		it->second->destroyAffector(affector);
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -433,6 +592,8 @@ namespace ParticleUniverse
+ 		return it->second->createObserver();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneObserver` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleObserver* ParticleSystemManager::cloneObserver(ParticleObserver* observer)
+ 	{
+ 		if (!observer)
+@@ -514,6 +675,8 @@ namespace ParticleUniverse
+ 		return it->second->createEventHandler();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneEventHandler` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleEventHandler* ParticleSystemManager::cloneEventHandler(ParticleEventHandler* eventHandler)
+ 	{
+ 		if (!eventHandler)
+@@ -602,6 +765,11 @@ namespace ParticleUniverse
+ 
+ 		ParticleRenderer* clonedRenderer = createRenderer(renderer->getRendererType());
+ 		renderer->copyAttributesTo(clonedRenderer);
++		// Torchlight: `ParticleSystemManager::cloneRenderer` then clears the parent
++		// technique of the renderer it copied (`setParentTechnique(0)` on the source);
++		// only a technique's `copyAttributesTo` clones a renderer, for a system copied from a
++		// template.
++		renderer->setParentTechnique(0);
+ 		return clonedRenderer;
+ 	}
+ 	//-----------------------------------------------------------------------
+@@ -675,6 +843,8 @@ namespace ParticleUniverse
+ 		return it->second->createExtern();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneExtern` is the library's: one of the same
++	// type, with the attributes copied.
+ 	Extern* ParticleSystemManager::cloneExtern(Extern* externObject)
+ 	{
+ 		if (!externObject)
+@@ -755,6 +925,8 @@ namespace ParticleUniverse
+ 		return it->second->createBehaviour();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::cloneBehaviour` is the library's: one of the same
++	// type, with the attributes copied.
+ 	ParticleBehaviour* ParticleSystemManager::cloneBehaviour(ParticleBehaviour* behaviour)
+ 	{
+ 		if (!behaviour)

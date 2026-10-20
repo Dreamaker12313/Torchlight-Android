@@ -1,0 +1,34 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseMeshSurfaceEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseMeshSurfaceEmitter.cpp
+index 8b98304..52a8e15 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseMeshSurfaceEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseMeshSurfaceEmitter.cpp
+@@ -215,7 +215,14 @@ namespace ParticleUniverse
+ 		} while (w >= 1.0f);
+ 	
+ 		w = sqrt((-2.0f * log(w)) / w);
++#if OGRE_VERSION < 0xE0000
+ 		y1 = abs(x1 * w);
++#else
++		// A library bug, fixed for the OGRE 14 port's probe: GCC (and so devkitA64) resolves this
++		// `abs` to C's `int abs(int)`, truncating the draw to a whole number; MSVC takes the float
++		// overload. The float's absolute value, as the Gaussian draw means.
++		y1 = Math::Abs(x1 * w);
++#endif
+ 		y1 = y1 > cutoff ? cutoff : y1;
+ 		y1 *= high / cutoff;
+ 		return y1;
+@@ -365,7 +372,14 @@ namespace ParticleUniverse
+ 			{
+ 				for ( size_t k = 0; k < numTrisMultThree; ++k)
+ 				{
++#if OGRE_VERSION < 0xE0000
+ 					indices[index_offset++] = pLong[k] + static_cast<unsigned long>(offset);
++#else
++					// Portable (the OGRE 14 port's targets are LP64: Linux and the Switch): a 32-bit
++					// index buffer was read through `unsigned long`, 8 bytes there, so every second
++					// index was skipped and the read ran past the buffer. 4 bytes, as the buffer holds.
++					indices[index_offset++] = reinterpret_cast<const uint32_t*>(pLong)[k] + static_cast<unsigned long>(offset);
++#endif
+ 				}
+ 			}
+ 			else

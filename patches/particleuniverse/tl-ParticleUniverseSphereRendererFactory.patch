@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRendererFactory.h
+index a218415..67584ae 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereRendererFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			SphereRendererFactory(void) {};
++	        // Torchlight: `SphereRendererFactory::~SphereRendererFactory`: the same as the library's. Torchlight's `setupTokenDefinitions` is the older token parser's hook, empty here.
+ 	        virtual ~SphereRendererFactory(void) {};
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `SphereRendererFactory::getRendererType`: the same as the library's.
+ 			String getRendererType(void) const
+ 			{
+ 				return "Sphere";
+ 			}
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `SphereRendererFactory::createRenderer`: the same as the library's.
+ 			ParticleRenderer* createRenderer(void)
+ 			{
+ 				return _createRenderer<SphereRenderer>();

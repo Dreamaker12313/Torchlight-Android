@@ -1,0 +1,1163 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseEmitter.h b/Plugins/ParticleUniverse/include/ParticleUniverseEmitter.h
+index 2a276d3..bf48147 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseEmitter.h
+@@ -152,6 +152,56 @@ namespace ParticleUniverse
+ 			void setDynParticleDepth(DynamicAttribute* dynParticleDepth);
+ 			void setDynParticleDepthSet(bool particleDepthSet);
+ 
++			/** Torchlight: the chance, in percent, that a frame's particles are released
++				at all (`setDynChanceToEmit`). Fixed 100 by default. Not copied
++				by `copyAttributesTo`, so a clone of a template always has 100.
++			*/
++			inline DynamicAttribute* getDynChanceToEmit(void) const {return mDynChanceToEmit;};
++			void setDynChanceToEmit(DynamicAttribute* dynChanceToEmit);
++
++			/** Torchlight: a factor on a particle's own dimensions at launch, 1 where it
++				is not above 0 (`setDynScaleOnLaunch`).
++			*/
++			inline DynamicAttribute* getDynScaleOnLaunch(void) const {return mDynScaleOnLaunch;};
++			void setDynScaleOnLaunch(DynamicAttribute* dynScaleOnLaunch);
++
++			/** Torchlight: one dimension for all three (the Emitter node's `FIXED`,
++				emitter +0x1a1, written directly by the descriptor).
++			*/
++			inline bool isUnifiedScale(void) const {return mUnifiedScale;};
++			inline void setUnifiedScale(bool unifiedScale) {mUnifiedScale = unifiedScale;};
++
++			/** Torchlight: -1 loops forever, 0 once, n that many more
++				(`setNumberOfLoops`).
++			*/
++			inline int getNumberOfLoops(void) const {return mNumberOfLoops;};
++			void setNumberOfLoops(int numberOfLoops);
++
++			/** Torchlight: the repeat delay comes before the first emission (emitter
++				+0x20d, written directly by the descriptor).
++			*/
++			inline bool isDelayFirst(void) const {return mDelayFirst;};
++			inline void setDelayFirst(bool delayFirst) {mDelayFirst = delayFirst;};
++
++			/** Torchlight: particles that do not expire (`setNonExpiring`,
++				`isNonExpiring`).
++			*/
++			bool isNonExpiring(void) const;
++			void setNonExpiring(bool nonExpiring);
++
++			/** Torchlight: release nothing more (emitter +0x25b). `CParticle::Start`
++				clears it, `CParticle::Stop` sets it, and
++				`CParticleEmitterWrapper::setEnabled` sets it to !enabled.
++			*/
++			inline bool isEmissionStopped(void) const {return mEmissionStopped;};
++			inline void setEmissionStopped(bool stopped) {mEmissionStopped = stopped;};
++
++			/** Torchlight: release by distance travelled rather than by time (emitter
++				+0x25c, written directly by the descriptor).
++			*/
++			inline bool isEmitOverDistance(void) const {return mEmitOverDistance;};
++			inline void setEmitOverDistance(bool emitOverDistance) {mEmitOverDistance = emitOverDistance;};
++
+ 			/** Todo
+ 	        */
+ 			inline ParticleType getEmitsType(void) const {return mEmitsType;};
+@@ -240,6 +290,7 @@ namespace ParticleUniverse
+ 
+ 			/** Perform initialisation actions.
+ 	        */
++			// Torchlight: `ParticleEmitter::_prepare`: the same as the library's (empty).
+ 			inline virtual void _prepare(ParticleTechnique* particleTechnique){/* Do nothing */};
+ 
+ 			/** Reverse initialisation actions.
+@@ -337,10 +388,12 @@ namespace ParticleUniverse
+ 
+ 			/** Perform activities when a ParticleEmitter is paused.
+ 			*/
++			// Torchlight: `ParticleEmitter::_notifyPause`: the same as the library's (empty).
+ 			virtual void _notifyPause (void){/* Do nothing */};
+ 
+ 			/** Perform activities when a ParticleEmitter is resumed.
+ 			*/
++			// Torchlight: `ParticleEmitter::_notifyResume`: the same as the library's (empty).
+ 			virtual void _notifyResume (void){/* Do nothing */};
+ 
+ 			/** Notify that the Particle System is rescaled.
+@@ -631,6 +684,44 @@ namespace ParticleUniverse
+ 	        */
+ 			bool mKeepLocal;
+ 
++			/* Torchlight's own emitter fields. The offsets are Torchlight's
++			   ParticleEmitter layout, for checking against the binary. */
++			DynamicAttribute* mDynChanceToEmit;     // +0x158
++			DynamicAttribute* mDynScaleOnLaunch;    // +0x198
++			bool mDynScaleOnLaunchSet;              // +0x1a0
++			bool mUnifiedScale;                     // +0x1a1
++			Real mDurationTotal;                    // +0x1f8, the duration drawn at the last _initTimeBased
++			int mRemainingLoops;                    // +0x1fc
++			int mNumberOfLoops;                     // +0x200
++			bool mLoops;                            // +0x204, loops left to run
++			bool mDelayFirst;                       // +0x20d
++			bool mNonExpiring;                      // +0x25a
++			bool mEmissionStopped;                  // +0x25b
++			bool mEmitOverDistance;                 // +0x25c
++			Real mDistanceTravelled;                // +0x260
++			Real mRequestedThisFrame;               // +0x264
++			Vector3 mPreviousDerivedPosition;       // +0x268
++			unsigned int mEmittedThisFrame;         // +0x274
++
++			/* Torchlight: where in its emit duration the emitter is, 0 to 1 - the x
++			   every dynamic attribute of an emitter is read at. 1 when there is no
++			   duration left to run. Inlined at each use in the original. */
++			inline Real _durationFraction(void) const
++			{
++				if (mDurationRemain > 0.0f || mDurationRemain != mDurationRemain)
++				{
++					Real fraction = 0.0f;
++					if (mDurationTotal > 0.0f)
++					{
++						fraction = mDurationRemain / mDurationTotal;
++						if (fraction >= 1.0f)
++							fraction = 1.0f;
++					}
++					return fraction;
++				}
++				return 1.0f;
++			}
++
+ 			/** Texture coords that is assigned to an emitted particle (only works if the renderer uses it)
+ 			*/
+ 			uint16 mParticleTextureCoords;
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
+index 318686d..9a03aed 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
+@@ -28,6 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleUniverseEmitter.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
+@@ -49,12 +50,14 @@ namespace ParticleUniverse
+ 	const bool ParticleEmitter::DEFAULT_AUTO_DIRECTION = false;
+ 	const bool ParticleEmitter::DEFAULT_FORCE_EMISSION = false;
+ 	const Real ParticleEmitter::DEFAULT_EMISSION_RATE = 10.0f;
+-	const Real ParticleEmitter::DEFAULT_TIME_TO_LIVE = 3.0f;
++	// Torchlight's defaults (`ParticleEmitter::ParticleEmitter`): time to
++	// live, velocity and angle differ from the library's 3, 100 and 20.
++	const Real ParticleEmitter::DEFAULT_TIME_TO_LIVE = 1.0f;
+ 	const Real ParticleEmitter::DEFAULT_MASS = 1.0f;
+-	const Real ParticleEmitter::DEFAULT_VELOCITY = 100.0f;
++	const Real ParticleEmitter::DEFAULT_VELOCITY = 1.0f;
+ 	const Real ParticleEmitter::DEFAULT_DURATION = 0.0f;
+ 	const Real ParticleEmitter::DEFAULT_REPEAT_DELAY = 0.0f;
+-	const Real ParticleEmitter::DEFAULT_ANGLE = 20.0f;
++	const Real ParticleEmitter::DEFAULT_ANGLE = 0.0f;
+ 	const Real ParticleEmitter::DEFAULT_DIMENSIONS = 0.0f;
+ 	const Real ParticleEmitter::DEFAULT_WIDTH = 0.0f;
+ 	const Real ParticleEmitter::DEFAULT_HEIGHT = 0.0f;
+@@ -73,8 +76,13 @@ namespace ParticleUniverse
+ 		mRepeatDelayRemain(0),
+ 		mDynDurationSet(false),
+ 		mDynRepeatDelaySet(false),
+-		mParticleDirection(DEFAULT_DIRECTION),
+-		mOriginalParticleDirection(DEFAULT_DIRECTION),
++		// Torchlight: `ParticleEmitter::ParticleEmitter` starts both
++		// directions at `Vector3::ZERO` (`+0x138`, `+0x1d4`; X360 `+0x98`, zero in
++		// the image), not the library's +Y; its emitter wrapper sets (0, 1, 0) at once. Its other
++		// defaults are the library's: emission rate 10, time to live 1, mass 1, velocity 1, angle
++		// 0, sizes 0, loops -1, colour white in a black-to-white range, keep local off.
++		mParticleDirection(Vector3::ZERO),
++		mOriginalParticleDirection(Vector3::ZERO),
+ 		mParticleOrientation(Quaternion::IDENTITY),
+ 		mParticleOrientationRangeStart(Quaternion::IDENTITY),
+ 		mParticleOrientationRangeEnd(Quaternion::IDENTITY),
+@@ -100,7 +108,23 @@ namespace ParticleUniverse
+ 		mParticleTextureCoords(DEFAULT_TEXTURE_COORDS),
+ 		mParticleTextureCoordsRangeStart(DEFAULT_START_TEXTURE_COORDS),
+ 		mParticleTextureCoordsRangeEnd(DEFAULT_END_TEXTURE_COORDS),
+-		mParticleTextureCoordsRangeSet(false)
++		mParticleTextureCoordsRangeSet(false),
++		mDynChanceToEmit(0),
++		mDynScaleOnLaunch(0),
++		mDynScaleOnLaunchSet(false),
++		mUnifiedScale(false),
++		mDurationTotal(0),
++		mRemainingLoops(-1),
++		mNumberOfLoops(-1),
++		mLoops(true),
++		mDelayFirst(false),
++		mNonExpiring(false),
++		mEmissionStopped(false),
++		mEmitOverDistance(false),
++		mDistanceTravelled(0),
++		mRequestedThisFrame(0),
++		mPreviousDerivedPosition(Vector3::ZERO),
++		mEmittedThisFrame(0)
+ 	{
+ 		particleType = PT_EMITTER;
+ 		mAliasType = AT_EMITTER;
+@@ -128,8 +152,15 @@ namespace ParticleUniverse
+ 		(static_cast<DynamicAttributeFixed*>(mDynParticleHeight))->setValue(DEFAULT_HEIGHT);
+ 		mDynParticleDepth = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
+ 		(static_cast<DynamicAttributeFixed*>(mDynParticleDepth))->setValue(DEFAULT_DEPTH);
++
++		// Torchlight: chance to emit fixed 100, scale on launch fixed 0.
++		mDynChanceToEmit = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
++		(static_cast<DynamicAttributeFixed*>(mDynChanceToEmit))->setValue(100.0f);
++		mDynScaleOnLaunch = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
++		(static_cast<DynamicAttributeFixed*>(mDynScaleOnLaunch))->setValue(0.0f);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::~ParticleEmitter`: the same as the library's; the chance-to-emit and scale-on-launch attributes it also deletes are the library's later additions.
+ 	ParticleEmitter::~ParticleEmitter(void)
+ 	{
+ 		if (mDynEmissionRate)
+@@ -167,18 +198,31 @@ namespace ParticleUniverse
+ 
+ 		if (mDynAngle)
+ 			PU_DELETE_T(mDynAngle, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++
++		if (mDynChanceToEmit)
++			PU_DELETE_T(mDynChanceToEmit, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++
++		if (mDynScaleOnLaunch)
++			PU_DELETE_T(mDynScaleOnLaunch, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::isKeepLocal`: the same as the library's.
+ 	bool ParticleEmitter::isKeepLocal(void) const
+ 	{
+ 		return mKeepLocal;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setKeepLocal`: the parent technique takes the flag too.
+ 	void ParticleEmitter::setKeepLocal(bool keepLocal)
+ 	{
+ 		mKeepLocal = keepLocal;
++		if (mParentTechnique)
++		{
++			mParentTechnique->setKeepLocal(keepLocal);
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::makeParticleLocal`: the same as the library's.
+ 	bool ParticleEmitter::makeParticleLocal(Particle* particle)
+ 	{
+ 		if (!particle)
+@@ -213,31 +257,69 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_notifyStart`. Resets the run and,
++	// the part that makes the data's one-shots work: an emitter whose duration is
++	// 0 at both ends is a force emission - its whole rate at once - repeated after
++	// each repeat delay when it has one, and run no more loops when it has not.
+ 	void ParticleEmitter::_notifyStart (void)
+ 	{
+-		latestPosition = getDerivedPosition(); // V1.3.1
+-		mForceEmission = mOriginalForceEmission;
+-		mForceEmissionExecuted = mOriginalForceEmissionExecuted;
++		latestPosition = getDerivedPosition();
++		mDistanceTravelled = 0;
++		mPreviousDerivedPosition = latestPosition;
+ 		mRemainder = 0;
++		mEmittedThisFrame = 0;
+ 		mDurationRemain = 0;
+ 		mRepeatDelayRemain = 0;
+-		setEnabled(mOriginalEnabled); // Also calls _initTimeBased
++		mForceEmission = mOriginalForceEmission;
++		mForceEmissionExecuted = mOriginalForceEmissionExecuted;
++		mRemainingLoops = mNumberOfLoops;
++		if (mDelayFirst && mDynDurationSet)
++		{
++			setEnabled(false);
++		}
++		else
++		{
++			setEnabled(mOriginalEnabled);
++		}
+ 
+-		// Generate the event
+-		_pushEmitterEvent(PU_EVT_EMITTER_STARTED);
++		if (mDynDuration)
++		{
++			Real durationStart = mDynamicAttributeHelper.calculate(0, mDynDuration, 0.0f, 0.0f);
++			Real durationEnd = mDynamicAttributeHelper.calculate(0, mDynDuration, 1.0f, 0.0f);
++			Real repeatStart = 0.0f;
++			Real repeatEnd = 0.0f;
++			if (mDynRepeatDelay)
++			{
++				repeatStart = mDynamicAttributeHelper.calculate(0, mDynRepeatDelay, 0.0f, 0.0f);
++				repeatEnd = mDynamicAttributeHelper.calculate(0, mDynRepeatDelay, 1.0f, 0.0f);
++			}
++			if (durationStart == 0.0f && durationEnd == 0.0f)
++			{
++				mForceEmission = true;
++				if (repeatStart != 0.0f || repeatEnd != 0.0f)
++				{
++					mEnabled = mDelayFirst ? isEnabled() : true;
++					mRemainingLoops = mNumberOfLoops;
++					return;
++				}
++				mRemainingLoops = 0;
++			}
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_notifyStop`: does nothing (Torchlight's copy has no
++	// emitter events).
+ 	void ParticleEmitter::_notifyStop (void)
+ 	{
+-		// Generate the event
+-		_pushEmitterEvent(PU_EVT_EMITTER_STOPPED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_notifyRescaled`: the same as the library's.
+ 	void ParticleEmitter::_notifyRescaled(const Vector3& scale)
+ 	{
+ 		_mEmitterScale = scale;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getDerivedPosition`: the same as the library's, read literally but for z: the binary appears to add the scaled y to the technique's z (unconfirmed) - objdump check wanted.
+ 	const Vector3& ParticleEmitter::getDerivedPosition(void)
+ 	{
+ 		if (mMarkedForEmission)
+@@ -255,32 +337,38 @@ namespace ParticleUniverse
+ 		return mDerivedPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getParticleColour`: the same as the library's.
+ 	const ColourValue& ParticleEmitter::getParticleColour(void) const
+ 	{
+ 		return mParticleColour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setParticleColour`: the same as the library's.
+ 	void ParticleEmitter::setParticleColour(const ColourValue& particleColour)
+ 	{
+ 		mParticleColour = particleColour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getParticleColourRangeStart`: the same as the library's.
+ 	const ColourValue& ParticleEmitter::getParticleColourRangeStart(void) const
+ 	{
+ 		return mParticleColourRangeStart;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setParticleColourRangeStart`: the same as the library's.
+ 	void ParticleEmitter::setParticleColourRangeStart(const ColourValue& particleColourRangeStart)
+ 	{
+ 		mParticleColourRangeStart = particleColourRangeStart;
+ 		mParticleColourRangeSet = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getParticleColourRangeEnd`: the same as the library's.
+ 	const ColourValue& ParticleEmitter::getParticleColourRangeEnd(void) const
+ 	{
+ 		return mParticleColourRangeEnd;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setParticleColourRangeEnd`: the same as the library's.
+ 	void ParticleEmitter::setParticleColourRangeEnd(const ColourValue& particleColourRangeEnd)
+ 	{
+ 		mParticleColourRangeEnd = particleColourRangeEnd;
+@@ -343,10 +431,23 @@ namespace ParticleUniverse
+ 		emitter->mParentTechnique = mParentTechnique;
+ 		emitter->setEmissionRateCameraDependency (mCameraDependencyFactory.clone(getEmissionRateCameraDependency()));
+ 		emitter->mAutoDirection = mAutoDirection;
++		// Torchlight (`ParticleEmitter::copyAttributesTo`): the copy's force
++		// emission, and its original, are this one's force emission, and neither has
++		// executed.
+ 		emitter->mForceEmission = mForceEmission;
+-		emitter->mOriginalForceEmission = mOriginalForceEmission;
+-		emitter->mForceEmissionExecuted = mForceEmissionExecuted;
+-		emitter->mOriginalForceEmissionExecuted = mOriginalForceEmissionExecuted;
++		emitter->mOriginalForceEmission = mForceEmission;
++		emitter->mForceEmissionExecuted = false;
++		emitter->mOriginalForceEmissionExecuted = false;
++		emitter->setNumberOfLoops(mNumberOfLoops);
++		emitter->mDelayFirst = mDelayFirst;
++		emitter->mDynScaleOnLaunchSet = mDynScaleOnLaunchSet;
++		emitter->mUnifiedScale = mUnifiedScale;
++		emitter->mNonExpiring = mNonExpiring;
++		emitter->mEmitOverDistance = mEmitOverDistance;
++		emitter->mDistanceTravelled = mDistanceTravelled;
++		emitter->mPreviousDerivedPosition = mPreviousDerivedPosition;
++		// Not copied, as in the original: the chance to emit - a clone keeps its
++		// default 100 - and whether emission is stopped.
+ 		emitter->mDynDurationSet = mDynDurationSet;
+ 		emitter->mDynRepeatDelaySet = mDynRepeatDelaySet;
+ 		emitter->mDynParticleAllDimensionsSet = mDynParticleAllDimensionsSet;
+@@ -385,6 +486,12 @@ namespace ParticleUniverse
+ 			emitter->setDynRepeatDelay(mDynamicAttributeFactory.cloneDynamicAttribute(getDynRepeatDelay()));
+ 		}
+ 
++		// Torchlight: the scale on launch, only when set.
++		if (mDynScaleOnLaunchSet)
++		{
++			emitter->setDynScaleOnLaunch(mDynamicAttributeFactory.cloneDynamicAttribute(getDynScaleOnLaunch()));
++		}
++
+ 		// Copy Dyn. Particle Mass if available
+ 		emitter->setDynParticleMass(mDynamicAttributeFactory.cloneDynamicAttribute(getDynParticleMass()));
+ 
+@@ -410,25 +517,26 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setParentTechnique`: the same as the library's.
+ 	void ParticleEmitter::setParentTechnique(ParticleTechnique* parentTechnique)
+ 	{
+ 		mParentTechnique = parentTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setEmitsName`: with a parent technique and a name, the
++	// technique is told the emission changed; the emitter is not marked for emission itself (the
++	// library marks it, until the technique's re-marking clears it again).
+ 	void ParticleEmitter::setEmitsName(const String& emitsName)
+ 	{
+ 		mEmitsName = emitsName;
+-		if (mEmitsName != BLANK_STRING)
++		if (mParentTechnique && mEmitsName != BLANK_STRING)
+ 		{
+-			mMarkedForEmission = true;
+-			if (mParentTechnique)
+-			{
+-				// Notify the Technique that something changed
+-				mParentTechnique->_notifyEmissionChange();
+-			}
++			// Notify the Technique that something changed
++			mParentTechnique->_notifyEmissionChange();
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setEmissionRateCameraDependency`: the same as the library's.
+ 	void ParticleEmitter::setEmissionRateCameraDependency(CameraDependency* cameraDependency)
+ 	{
+ 		if (mEmissionRateCameraDependency)
+@@ -437,6 +545,7 @@ namespace ParticleUniverse
+ 		mEmissionRateCameraDependency = cameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setEmissionRateCameraDependency`: the same as the library's (the dependency made with `new`, not the factory).
+ 	void ParticleEmitter::setEmissionRateCameraDependency(Real squareDistance, bool inc)
+ 	{
+ 		if (!mEmissionRateCameraDependency)
+@@ -450,11 +559,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getEmissionRateCameraDependency`: the same as the library's.
+ 	CameraDependency* ParticleEmitter::getEmissionRateCameraDependency(void) const
+ 	{
+ 		return mEmissionRateCameraDependency;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynEmissionRate`: the same as the library's.
+ 	void ParticleEmitter::setDynEmissionRate(DynamicAttribute* dynEmissionRate)
+ 	{
+ 		if (mDynEmissionRate)
+@@ -463,6 +574,7 @@ namespace ParticleUniverse
+ 		mDynEmissionRate = dynEmissionRate;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynTotalTimeToLive`: the same as the library's.
+ 	void ParticleEmitter::setDynTotalTimeToLive(DynamicAttribute* dynTotalTimeToLive)
+ 	{
+ 		if (mDynTotalTimeToLive)
+@@ -471,6 +583,7 @@ namespace ParticleUniverse
+ 		mDynTotalTimeToLive = dynTotalTimeToLive;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynParticleMass`: the same as the library's.
+ 	void ParticleEmitter::setDynParticleMass(DynamicAttribute* dynParticleMass)
+ 	{
+ 		if (mDynParticleMass)
+@@ -479,6 +592,7 @@ namespace ParticleUniverse
+ 		mDynParticleMass = dynParticleMass;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynAngle`: the same as the library's.
+ 	void ParticleEmitter::setDynAngle(DynamicAttribute* dynAngle)
+ 	{
+ 		if (mDynAngle)
+@@ -487,6 +601,7 @@ namespace ParticleUniverse
+ 		mDynAngle = dynAngle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynVelocity`: the same as the library's.
+ 	void ParticleEmitter::setDynVelocity(DynamicAttribute* dynVelocity)
+ 	{
+ 		if (mDynVelocity)
+@@ -495,6 +610,7 @@ namespace ParticleUniverse
+ 		mDynVelocity = dynVelocity;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynDuration`: the same as the library's.
+ 	void ParticleEmitter::setDynDuration(DynamicAttribute* dynDuration)
+ 	{
+ 		if (mDynDuration)
+@@ -510,6 +626,7 @@ namespace ParticleUniverse
+ 		mDynDurationSet = durationSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynRepeatDelay`: the same as the library's.
+ 	void ParticleEmitter::setDynRepeatDelay(DynamicAttribute* dynRepeatDelay)
+ 	{
+ 		if (mDynRepeatDelay)
+@@ -539,6 +656,7 @@ namespace ParticleUniverse
+ 		mDynParticleAllDimensionsSet = particleAllDimensionsSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynParticleWidth`: the same as the library's.
+ 	void ParticleEmitter::setDynParticleWidth(DynamicAttribute* dynParticleWidth)
+ 	{
+ 		if (mDynParticleWidth)
+@@ -553,6 +671,7 @@ namespace ParticleUniverse
+ 		mDynParticleWidthSet = particleWidthSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynParticleHeight`: the same as the library's.
+ 	void ParticleEmitter::setDynParticleHeight(DynamicAttribute* dynParticleHeight)
+ 	{
+ 		if (mDynParticleHeight)
+@@ -567,6 +686,7 @@ namespace ParticleUniverse
+ 		mDynParticleHeightSet = particleHeightSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynParticleDepth`: the same as the library's.
+ 	void ParticleEmitter::setDynParticleDepth(DynamicAttribute* dynParticleDepth)
+ 	{
+ 		if (mDynParticleDepth)
+@@ -581,24 +701,91 @@ namespace ParticleUniverse
+ 		mDynParticleDepthSet = particleDepthSet;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynChanceToEmit`.
++	void ParticleEmitter::setDynChanceToEmit(DynamicAttribute* dynChanceToEmit)
++	{
++		if (mDynChanceToEmit)
++			PU_DELETE_T(mDynChanceToEmit, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++		mDynChanceToEmit = dynChanceToEmit;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setDynScaleOnLaunch`.
++	void ParticleEmitter::setDynScaleOnLaunch(DynamicAttribute* dynScaleOnLaunch)
++	{
++		if (mDynScaleOnLaunch)
++			PU_DELETE_T(mDynScaleOnLaunch, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
++		mDynScaleOnLaunch = dynScaleOnLaunch;
++		mDynScaleOnLaunchSet = true;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setNumberOfLoops`.
++	void ParticleEmitter::setNumberOfLoops(int numberOfLoops)
++	{
++		mNumberOfLoops = numberOfLoops;
++		mRemainingLoops = numberOfLoops;
++		mLoops = numberOfLoops != 0;
++		_initTimeBased();
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::isNonExpiring`.
++	bool ParticleEmitter::isNonExpiring(void) const
++	{
++		return mNonExpiring;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setNonExpiring`.
++	void ParticleEmitter::setNonExpiring(bool nonExpiring)
++	{
++		mNonExpiring = nonExpiring;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setEnabled`: the same as the library's.
+ 	void ParticleEmitter::setEnabled(bool enabled)
+ 	{
+ 		Particle::setEnabled(enabled);
+ 		_initTimeBased();
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::getParticleDirection`: the same as the library's.
+ 	const Vector3& ParticleEmitter::getParticleDirection(void)
+ 	{
+ 		return mParticleDirection;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setParticleDirection`: the library's, with OGRE 1.6's
++	// `normalise` (a vector no longer than 1e-08, compared in double, is left as it is; OGRE 14's
++	// divides anything longer than 0), spelled out for the direction and the up vector.
+ 	void ParticleEmitter::setParticleDirection(const Vector3& direction)
+ 	{
++		struct Ogre16
++		{
++			static void normalise(Vector3& v)
++			{
++				Real length = Math::Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
++				if ((double)length > 1e-08)
++				{
++					Real inverse = 1.0f / length;
++					v.x *= inverse;
++					v.y *= inverse;
++					v.z *= inverse;
++				}
++			}
++			static Vector3 perpendicular(const Vector3& v)
++			{
++				Vector3 perp = v.crossProduct(Vector3::UNIT_X);
++				if (perp.squaredLength() < (Real)(1e-06 * 1e-06))
++				{
++					perp = v.crossProduct(Vector3::UNIT_Y);
++				}
++				normalise(perp);
++				return perp;
++			}
++		};
+ 		mParticleDirection = direction;
+-		mOriginalParticleDirection = direction;
+-		mParticleDirection.normalise();
+-		mUpVector = mParticleDirection.perpendicular();
+-		mUpVector.normalise();
++		mOriginalParticleDirection = direction; // the library's; Torchlight's emitter keeps no copy
++		Ogre16::normalise(mParticleDirection);
++		mUpVector = Ogre16::perpendicular(mParticleDirection);
++		Ogre16::normalise(mUpVector);
+     }
+ 	//-----------------------------------------------------------------------
+ 	const Vector3& ParticleEmitter::getOriginalParticleDirection(void) const
+@@ -638,21 +825,25 @@ namespace ParticleUniverse
+ 		mParticleOrientationRangeSet = true;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::isAutoDirection`: the same as the library's.
+ 	bool ParticleEmitter::isAutoDirection(void) const
+ 	{
+ 		return mAutoDirection;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setAutoDirection`: the same as the library's.
+ 	void ParticleEmitter::setAutoDirection(bool autoDirection)
+ 	{
+ 		mAutoDirection = autoDirection;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::isForceEmission`: the same as the library's.
+ 	bool ParticleEmitter::isForceEmission(void) const
+ 	{
+ 		return mForceEmission;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::setForceEmission`: the same as the library's.
+ 	void ParticleEmitter::setForceEmission(bool forceEmission)
+ 	{
+ 		mForceEmission = forceEmission;
+@@ -661,45 +852,78 @@ namespace ParticleUniverse
+ 		mOriginalForceEmissionExecuted = false;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_preProcessParticles`.
+ 	void ParticleEmitter::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Calculate the emitters' position so it is safe to use mDerivedPosition).
++		mEmittedThisFrame = 0;
+ 		getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_postProcessParticles`. It keeps the
++	// position for release over distance; `latestPosition`, which the library sets
++	// here, is set only at the start.
+ 	void ParticleEmitter::_postProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Added in V1.3.1
+-		latestPosition = getDerivedPosition();
++		mPreviousDerivedPosition = getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initTimeBased`. Attributes are read
++	// at the system's age, as a fraction of its fixed timeout when it has one. An
++	// enabled emitter with loops left runs at least 0.001 s.
+ 	void ParticleEmitter::_initTimeBased(void)
+-    {
+-		if (mEnabled)
++	{
++		if (!mEnabled)
+ 		{
+-			if (mDynDurationSet && mParentTechnique)
++			if (mRemainingLoops != 0)
+ 			{
+-				mDurationRemain = mDynamicAttributeHelper.calculate(mDynDuration, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
++				if (!mDynRepeatDelaySet || !mParentTechnique)
++				{
++					mRepeatDelayRemain = 0;
++					return;
++				}
++				ParticleSystem* system = mParentTechnique->getParentSystem();
++				Real x = system->getTimeElapsedSinceStart();
++				if (system->getFixedTimeout() > 0.0f)
++				{
++					x = system->getTimeElapsedSinceStart() / system->getFixedTimeout();
++					if (x >= 1.0f)
++						x = 1.0f;
++				}
++				mRepeatDelayRemain = mDynamicAttributeHelper.calculate(0, mDynRepeatDelay, x, 0.0f);
++				if (mRepeatDelayRemain > 0.0f)
++				{
++					mForceEmissionExecuted = false;
++				}
+ 			}
++			return;
++		}
+ 
+-			/** Determine whether duration must be used. If it is used, the emitter should at least be enabled.
+-			@remarks
+-				Note, that if the duration has been exceeded, the emitter is disabled. It makes perfect sense to enable 
+-				the emitter again when the duration is initialised with a valid value (> 0).
+-			*/
+-			if (mDurationRemain > 0)
++		if (mDynDurationSet && mParentTechnique)
++		{
++			ParticleSystem* system = mParentTechnique->getParentSystem();
++			Real x = system->getTimeElapsedSinceStart();
++			if (system->getFixedTimeout() > 0.0f)
+ 			{
+-				mEnabled = true;
+-				mRepeatDelayRemain = 0;
++				x = system->getTimeElapsedSinceStart() / system->getFixedTimeout();
++				if (x >= 1.0f)
++					x = 1.0f;
+ 			}
++			mDurationRemain = mDynamicAttributeHelper.calculate(0, mDynDuration, x, 0.0f);
++			mDurationTotal = mDurationRemain;
+ 		}
+-		else
++		int loops = 0;
++		if (mDurationRemain > 0.0f || mRemainingLoops != 0)
+ 		{
+-			if (mDynRepeatDelaySet && mParentTechnique)
++			mEnabled = true;
++			mRepeatDelayRemain = 0;
++			if (mDurationRemain == 0.0f)
+ 			{
+-				mRepeatDelayRemain = mDynamicAttributeHelper.calculate(mDynRepeatDelay, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
++				mDurationTotal = 0.001f;
++				mDurationRemain = 0.001f;
+ 			}
++			loops = mRemainingLoops;
+ 		}
++		mLoops = loops != 0;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleEmitter::_initForEmission(void)
+@@ -709,8 +933,12 @@ namespace ParticleUniverse
+ 
+ 		// Emitting an emitter is similar as starting one.
+ 		_notifyStart();
++
++		// Torchlight: `ParticleEmitter::_initForEmission`.
++		mPreviousDerivedPosition = getDerivedPosition();
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initForExpiration`: the same as the library's.
+ 	void ParticleEmitter::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// The emitter itself is expired.
+@@ -720,31 +948,50 @@ namespace ParticleUniverse
+ 		_notifyStop();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initParticlePosition`. A keep-local
++	// emitter releases at its own scaled position; released over distance, the
++	// frame's particles are spread back along the way the emitter came.
+ 	void ParticleEmitter::_initParticlePosition(Particle* particle)
+ 	{
+-		particle->position = getDerivedPosition();
++		if (!mKeepLocal)
++		{
++			particle->position = getDerivedPosition();
++		}
++		else
++		{
++			particle->position = _mEmitterScale * position;
++		}
++		particle->torchlightVector28 = Vector3::ZERO;
++		if (mEmitOverDistance && mRequestedThisFrame > 0.0f)
++		{
++			const Vector3& derived = getDerivedPosition();
++			Real along = (Real)mEmittedThisFrame / mRequestedThisFrame;
++			particle->position.x = particle->position.x - (derived.x - mPreviousDerivedPosition.x) * along;
++			particle->position.y = particle->position.y - (derived.y - mPreviousDerivedPosition.y) * along;
++			particle->position.z = particle->position.z - (derived.z - mPreviousDerivedPosition.z) * along;
++		}
+ 		particle->originalPosition = particle->position;
+ 		particle->latestPosition = particle->position;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initParticleForEmission`: no
++	// orientation and no texture coordinates - Torchlight's particles have none
++	// from the emitter - and a count of the frame's releases.
+ 	void ParticleEmitter::_initParticleForEmission(Particle* particle)
+ 	{
+-		// Initialise the particle position (localspace)
+ 		particle->parentEmitter = this;
+ 		_initParticlePosition(particle);
+ 		_initParticleDirection(particle);
+ 		_initParticleVelocity(particle);
+-		_initParticleOrientation(particle);
+ 		_initParticleMass(particle);
+ 		_initParticleColour(particle);
+-		_initParticleTextureCoords(particle);
+ 		particle->totalTimeToLive = _initParticleTimeToLive();
+ 		particle->timeToLive = particle->totalTimeToLive;
+-		
+-		// Generate particles' own dimensions if defined.
+ 		_initParticleDimensions(particle);
++		++mEmittedThisFrame;
+ 	}
+ 	//-----------------------------------------------------------------------
++    // Torchlight: `ParticleEmitter::_initParticleDirection`: the same as the library's (OGRE's `randomDeviant` inline: a UnitRandom turn of the up vector about the direction, then the angle about it; OGRE 14's `perpendicular`/`normalise` differ from 1.6's only for vectors no longer than 1e-08).
+     void ParticleEmitter::_initParticleDirection(Particle* particle)
+     {
+ 		// Use the default way of initialising the particle direction
+@@ -762,26 +1009,26 @@ namespace ParticleUniverse
+ 		particle->originalDirectionLength = particle->direction.length();
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_generateAngle`: read at the duration
++	// fraction, in Ogre's angle units, and scattered below it when fixed.
+ 	void ParticleEmitter::_generateAngle(Radian& angle)
+ 	{
+-		Radian a = Angle(mDynamicAttributeHelper.calculate(mDynAngle, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart()));
+-		angle = a;
++		angle = Radian(Math::AngleUnitsToRadians(
++			mDynamicAttributeHelper.calculate(0, mDynAngle, _durationFraction(), 0.0f)));
+ 		if (mDynAngle->getType() == DynamicAttribute::DAT_FIXED)
+ 		{
+-			// Make an exception here and don´t use the fixed angle.
+-			angle = Math::UnitRandom() * angle;
++			angle = Radian(Math::UnitRandom() * angle.valueRadians());
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initParticleVelocity`.
+ 	void ParticleEmitter::_initParticleVelocity(Particle* particle)
+-    {
+-		Real scalar = mDynamicAttributeHelper.calculate(mDynVelocity, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), 1.0f);
++	{
++		Real scalar = mDynamicAttributeHelper.calculate(particle, mDynVelocity, _durationFraction(), 1.0f);
+ 		particle->direction *= scalar;
+ 		particle->originalVelocity = scalar;
+ 		particle->originalScaledDirectionLength = particle->direction.length();
+-
+-		// Don´t change the originalDirection, because the real original value has already been set.
+-    }
++	}
+ 	//-----------------------------------------------------------------------
+ 	void ParticleEmitter::_initParticleOrientation(Particle* particle)
+ 	{
+@@ -806,12 +1053,13 @@ namespace ParticleUniverse
+ 		visualParticle->originalOrientation = visualParticle->orientation;
+     }
+ 	//-----------------------------------------------------------------------
+-    void ParticleEmitter::_initParticleMass(Particle* particle)
+-    {
+-		Real mass = mDynamicAttributeHelper.calculate(mDynParticleMass, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), Particle::DEFAULT_MASS);
+-		particle->mass = mass;
+-    }
++	// Torchlight: `ParticleEmitter::_initParticleMass`.
++	void ParticleEmitter::_initParticleMass(Particle* particle)
++	{
++		particle->mass = mDynamicAttributeHelper.calculate(particle, mDynParticleMass, _durationFraction(), Particle::DEFAULT_MASS);
++	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initParticleColour`: the same as the library's.
+ 	void ParticleEmitter::_initParticleColour(Particle* particle)
+     {
+ 		if (particle->particleType != Particle::PT_VISUAL)
+@@ -842,7 +1090,7 @@ namespace ParticleUniverse
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+ 		if (mParticleTextureCoordsRangeSet)
+ 		{
+-			visualParticle->textureCoordsCurrent = (uint16)Math::RangeRandom((Real)mParticleTextureCoordsRangeStart, (Real)mParticleTextureCoordsRangeEnd + 0.999f);
++			visualParticle->textureCoordsCurrent = (uint16)x86FloatToInt32(Math::RangeRandom((Real)mParticleTextureCoordsRangeStart, (Real)mParticleTextureCoordsRangeEnd + 0.999f)); // portable: x86's answer on every CPU
+ 		}
+ 		else
+ 		{
+@@ -850,138 +1098,192 @@ namespace ParticleUniverse
+ 		}
+     }
+ 	//-----------------------------------------------------------------------
+-    Real ParticleEmitter::_initParticleTimeToLive(void)
+-    {
+-		/*  Generate a value for totalTimeToLive. Use time since start from the particle system as argument 
+-			in getValue(). If mDynTotalTimeToLive doesn´t exist, use the default value.
+-		*/
+-		return mDynamicAttributeHelper.calculate(mDynTotalTimeToLive, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), Particle::DEFAULT_TTL);
+-    }
++	// Torchlight: `ParticleEmitter::_initParticleTimeToLive`. An enabled
++	// emitter that loops for ever, and whose particles expire, shortens their life
++	// with the particle quality: 0.6 + 0.4 x the release percentage.
++	Real ParticleEmitter::_initParticleTimeToLive(void)
++	{
++		Real quality = 1.0f;
++		if (mEnabled && mRemainingLoops < 1 && !mNonExpiring)
++		{
++			quality = ParticleSystemManager::getEmitterLoopingReleasePCT() * 0.4f + 0.6f;
++		}
++		return mDynamicAttributeHelper.calculate(0, mDynTotalTimeToLive, _durationFraction(), Particle::DEFAULT_TTL) * quality;
++	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_calculateRequestedParticles`.
+ 	unsigned short ParticleEmitter::_calculateRequestedParticles(Real timeElapsed)
+ 	{
+-		unsigned short requestedParticles = 0;
+-        
+-		if (mEnabled)
++		if (mEmissionStopped)
++			return 0;
++
++		unsigned int requested = 0;
++		bool enabled;
++		if (!mEnabled)
+ 		{
++			if ((!mDynRepeatDelaySet && !mLoops) || mRemainingLoops == 0)
++			{
++				return 0;
++			}
++			mRepeatDelayRemain -= timeElapsed;
++			if (mRepeatDelayRemain <= 0.0f)
++			{
++				setEnabled(true);
++			}
++			enabled = mEnabled;
++		}
++		else
++		{
++			unsigned int count = 0;
+ 			if (mDynEmissionRate && mParentTechnique && mParentTechnique->getParentSystem())
+ 			{
+-				Real rate = mDynEmissionRate->getValue(mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
++				Real rate = mDynEmissionRate->getValue(0, _durationFraction());
+ 				if (mEmissionRateCameraDependency)
+ 				{
+-					// Affect the emission rate based on the camera distance
+ 					mEmissionRateCameraDependency->affect(rate, mParentTechnique->getCameraSquareDistance());
+ 				}
+-				if (mForceEmission)
++				Real remainder;
++				if (!mForceEmission)
+ 				{
+-					if (mForceEmissionExecuted)
++					if (!mEmitOverDistance)
+ 					{
+-						// It is a single-shot system, so there is nothing left anymore.
+-						requestedParticles = 0;
++						remainder = rate * timeElapsed + mRemainder;
++						requested = x86FloatToUint32(remainder); // portable: x86's answer on every CPU
++						mRemainder = remainder;
++						count = requested & 0xffff;
+ 					}
+ 					else
+ 					{
+-						// Ignore the time. Just emit everything at once (if you absolutely need it).
+-						// The emitter cannot be disabled yet, because it needs to emit its particles first.
+-						requestedParticles = (unsigned short)rate;
+-						mForceEmissionExecuted = true;
++						// One particle per 1/rate units travelled.
++						const Vector3& derived = getDerivedPosition();
++						Real step = 1.0f / rate;
++						Real dx = mPreviousDerivedPosition.x - derived.x;
++						Real dy = mPreviousDerivedPosition.y - derived.y;
++						Real dz = mPreviousDerivedPosition.z - derived.z;
++						Real distance = Math::Sqrt(dx * dx + dy * dy + dz * dz) + mDistanceTravelled;
++						mDistanceTravelled = distance;
++						if (step <= distance)
++						{
++							do
++							{
++								distance -= step;
++								++requested;
++							} while (step <= distance);
++							mDistanceTravelled = distance;
++						}
++						count = requested & 0xffff;
++						remainder = (Real)count;
++						mRemainder = remainder;
+ 					}
+ 				}
++				else if (!mForceEmissionExecuted)
++				{
++					mForceEmissionExecuted = true;
++					requested = x86FloatToUint32(rate); // portable: x86's answer on every CPU
++					remainder = mRemainder;
++					count = requested & 0xffff;
++				}
+ 				else
+ 				{
+-					// Particle emission is time driven
+-					mRemainder += rate * timeElapsed;
+-					requestedParticles = (unsigned short)mRemainder;
++					remainder = mRemainder;
+ 				}
+-				
+-				mRemainder -= requestedParticles;
++				mRemainder = remainder - (Real)count;
+ 			}
++			mRequestedThisFrame = (Real)count;
+ 
+-			// Determine whether the duration period has been exceeded.
+ 			if (mDynDurationSet)
+ 			{
+ 				mDurationRemain -= timeElapsed;
+-				if (mDurationRemain <= 0)
++				if (mDurationRemain <= 0.0f)
+ 				{
+-					setEnabled(false);
+-				}
+-			}
+-		}
+-		else if (mDynRepeatDelaySet)
+-		{
+-			mRepeatDelayRemain -= timeElapsed;
+-			if (mRepeatDelayRemain <= 0)
+-			{
+-				// Initialise again (if stopfade isn't set)
+-				if (mParentTechnique)
+-				{
+-					if (!mParentTechnique->isStopFade())
++					if (mRemainingLoops > 0 && --mRemainingLoops == 0)
++					{
++						// The last loop has run out: this frame's particles still go,
++						// without the chance or the quality below.
++						setEnabled(false);
++						return (unsigned short)requested;
++					}
++					if (!mDynRepeatDelaySet)
++					{
++						_initTimeBased();
++					}
++					else
+ 					{
+-						setEnabled(true);
++						setEnabled(false);
+ 					}
+ 				}
+-				else
++			}
++
++			if ((unsigned short)requested != 0)
++			{
++				Real chance = mDynChanceToEmit->getValue(0, _durationFraction());
++				// DIVERGENCE: the original divides glibc's rand() by 2^31
++				// (4.656613e-10); where RAND_MAX is not 2^31 - 1 (mingw's is 0x7fff)
++				// the draw is scaled to the same 0..1.
++				Real draw = (RAND_MAX == 2147483647) ? (Real)rand() * 4.656613e-10f
++				                                     : (Real)rand() / (Real)RAND_MAX;
++				if (chance < 100.0f && chance / 100.0f < draw)
+ 				{
+-					setEnabled(true);
++					requested = 0;
+ 				}
+ 			}
++			enabled = mEnabled;
+ 		}
+ 
+-		return requestedParticles;
++		// A looping emitter whose particles expire releases the particle quality's
++		// share of them, at least one.
++		if (enabled && (unsigned short)requested != 0 && mRemainingLoops < 1 && !mNonExpiring)
++		{
++			requested = (unsigned int)((Real)(requested & 0xffff) * ParticleSystemManager::getEmitterLoopingReleasePCT());
++			if ((unsigned short)requested == 0)
++				requested = 1;
++		}
++		return (unsigned short)requested;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleEmitter::_initParticleDimensions`. Dimensions
++	// are read at the duration fraction and multiplied by the scale on launch (1
++	// where that is not above 0); `FIXED` takes one value - the width, or the
++	// height when no width is set - for all three.
+ 	void ParticleEmitter::_initParticleDimensions(Particle* particle)
+-    {
++	{
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+ 
+-		// Only continue if one of them is set
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-		if (mDynParticleAllDimensionsSet || mDynParticleWidthSet || mDynParticleHeightSet || mDynParticleDepthSet)
++		Real launch = mDynamicAttributeHelper.calculate(particle, mDynScaleOnLaunch, _durationFraction(), 0.0f);
++		if (!(launch > 0.0f))
++			launch = 1.0f;
++
++		if (mUnifiedScale)
+ 		{
+-			// Set all dimensions equal ...
+-			Real extend = 0;
+-			if (mDynParticleAllDimensionsSet && mDynParticleAllDimensions)
+-			{
+-				extend = mDynamicAttributeHelper.calculate(mDynParticleAllDimensions, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
+-				visualParticle->setOwnDimensions(_mEmitterScale.x * extend, _mEmitterScale.y * extend, _mEmitterScale.z * extend);
++			DynamicAttribute* dimension = mDynParticleWidthSet ? mDynParticleWidth : mDynParticleHeight;
++			if (!dimension)
+ 				return;
+-			}
+-
+-			// ... or set the dimensions independent from each other
+-			Real width = 0;
+-			Real height = 0;
+-			Real depth = 0;
+-			if (mDynParticleWidthSet && mDynParticleWidth)
+-			{
+-				width = mDynamicAttributeHelper.calculate(mDynParticleWidth, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
+-			}
+-			if (mDynParticleHeightSet && mDynParticleHeight)
+-			{
+-				height = mDynamicAttributeHelper.calculate(mDynParticleHeight, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
+-			}
+-			if (mDynParticleDepthSet && mDynParticleDepth)
+-			{
+-				depth = mDynamicAttributeHelper.calculate(mDynParticleDepth, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
+-			}
+-	
+-			/** Set the width, height and depth if at least one of them is set.
+-			@remarks
+-				If one of the dimensions is 0, it will be overridden by the default value later on.
+-			*/
+-			if (mDynParticleWidthSet || mDynParticleHeightSet || mDynParticleDepthSet)
+-			{
+-				visualParticle->setOwnDimensions(_mEmitterScale.x * width, _mEmitterScale.y * height, _mEmitterScale.z * depth);
+-			}
++			Real extend = mDynamicAttributeHelper.calculate(particle, dimension, _durationFraction(), 0.0f) * launch;
++			visualParticle->_setInitialDimensions(_mEmitterScale.x * extend, extend * _mEmitterScale.y, _mEmitterScale.z * extend);
++			return;
+ 		}
+-		else
++
++		if (!mDynParticleWidthSet && !mDynParticleHeightSet && !mDynParticleDepthSet)
+ 		{
+-			// Just set the width, height and depth, but these are just the default settings; the particle doesn't
+-			// have own dimensions. Recalculate the bounding sphere radius.
+-			visualParticle->width = _mEmitterScale.x * mParentTechnique->getDefaultWidth();
+-			visualParticle->height = _mEmitterScale.y * mParentTechnique->getDefaultHeight();
+-			visualParticle->depth = _mEmitterScale.z * mParentTechnique->getDefaultDepth();
++			visualParticle->width = mParentTechnique->getDefaultWidth() * _mEmitterScale.x;
++			visualParticle->height = mParentTechnique->getDefaultHeight() * _mEmitterScale.y;
++			visualParticle->depth = mParentTechnique->getDefaultDepth() * _mEmitterScale.z;
+ 			visualParticle->_calculateBoundingSphereRadius();
++			return;
+ 		}
++
++		Real fraction = _durationFraction();
++		Real width = 0.0f;
++		Real height = 0.0f;
++		Real depth = 0.0f;
++		if (mDynParticleWidthSet && mDynParticleWidth)
++			width = mDynamicAttributeHelper.calculate(particle, mDynParticleWidth, fraction, 0.0f) * launch;
++		if (mDynParticleHeightSet && mDynParticleHeight)
++			height = mDynamicAttributeHelper.calculate(particle, mDynParticleHeight, fraction, 0.0f) * launch;
++		if (mDynParticleDepthSet && mDynParticleDepth)
++			depth = mDynamicAttributeHelper.calculate(particle, mDynParticleDepth, fraction, 0.0f) * launch;
++		visualParticle->_setInitialDimensions(_mEmitterScale.x * width, height * _mEmitterScale.y, depth * _mEmitterScale.z);
+ 	}
+ }

@@ -1,0 +1,231 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseAffector.h b/Plugins/ParticleUniverse/include/ParticleUniverseAffector.h
+index 005f0bd..52ab0d9 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseAffector.h
+@@ -56,7 +56,15 @@ namespace ParticleUniverse
+ 			static const AffectSpecialisation DEFAULT_SPECIALISATION;
+ 
+ 			ParticleAffector(void);
+-			virtual ~ParticleAffector(void) {};
++			virtual ~ParticleAffector(void);
++
++			/** Torchlight: the affector switched off as a whole (+0x110): `_processParticle` does nothing
++				while it is set. `CAffectorWrapper::setEnabled` writes it, as the negation of
++				the node's ENABLE; the constructor clears it and `copyAttributesTo` copies it. It is
++				separate from the Particle's own enabled flag.
++	        */
++			bool isTorchlightDisabled(void) const {return mTorchlightDisabled;};
++			void setTorchlightDisabled(bool disabled) {mTorchlightDisabled = disabled;};
+ 
+ 			/** Todo
+ 	        */
+@@ -84,6 +92,7 @@ namespace ParticleUniverse
+ 				ParticleTechnique. A subclass could implement this function to perform initialisation 
+ 				actions.
+ 	        */
++			// Torchlight: `ParticleAffector::_prepare`: the same as the library's.
+ 			virtual void _prepare(ParticleTechnique* particleTechnique){/* Do nothing */};
+ 
+ 			/** Reverse the actions from the _prepare.
+@@ -96,14 +105,17 @@ namespace ParticleUniverse
+ 
+ 			/** Perform activities when a ParticleAffector is stopped.
+ 			*/
++			// Torchlight: `ParticleAffector::_notifyStop`: the same as the library's.
+ 			virtual void _notifyStop (void){/* Do nothing */};
+ 
+ 			/** Perform activities when a ParticleAffector is paused.
+ 			*/
++			// Torchlight: `ParticleAffector::_notifyPause`: the same as the library's.
+ 			virtual void _notifyPause (void){/* Do nothing */};
+ 
+ 			/** Perform activities when a ParticleAffector is resumed.
+ 			*/
++			// Torchlight: `ParticleAffector::_notifyResume`: the same as the library's.
+ 			virtual void _notifyResume (void){/* Do nothing */};
+ 
+ 			/** Notify that the Affector is rescaled.
+@@ -116,10 +128,12 @@ namespace ParticleUniverse
+ 				the preProcess is typically used to perform calculations where the result must be used in 
+ 				processing each individual particle.
+ 	        */
++			// Torchlight: `ParticleAffector::_preProcessParticles`: the same as the library's.
+ 			virtual void _preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed){/* Do nothing */};
+ 
+ 			/** Perform precalculations if the first Particle in the update-loop is processed.
+ 			*/
++			// Torchlight: `ParticleAffector::_firstParticle`: the same as the library's.
+ 			virtual void _firstParticle(ParticleTechnique* particleTechnique, 
+ 				Particle* particle, 
+ 				Real timeElapsed) { /* by default do nothing */ }
+@@ -136,6 +150,7 @@ namespace ParticleUniverse
+ 			@param
+ 				particle Pointer to a Particle to initialise.
+ 			*/
++			// Torchlight: `ParticleAffector::_initParticleForEmission`: the same as the library's.
+ 			virtual void _initParticleForEmission(Particle* particle) { /* by default do nothing */ }
+ 
+ 			/** Entry point for affecting a Particle.
+@@ -161,6 +176,7 @@ namespace ParticleUniverse
+ 			@remarks
+ 				This function is called after the ParticleTechnique update-loop where all particles are traversed.
+ 	        */
++			// Torchlight: `ParticleAffector::_postProcessParticles`: the same as the library's.
+ 			virtual void _postProcessParticles(ParticleTechnique* technique, Real timeElapsed){/* Do nothing */};
+ 
+ 			/** Affect a particle.
+@@ -220,6 +236,9 @@ namespace ParticleUniverse
+ 			Real _calculateAffectSpecialisationFactor (const Particle* particle);
+ 
+ 		protected:
++			// Torchlight: see setTorchlightDisabled (+0x110, just before the parent technique).
++			bool mTorchlightDisabled;
++
+ 			ParticleTechnique* mParentTechnique;
+ 
+ 			// Type of the affector
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseAffector.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseAffector.cpp
+index b8246ff..22aab93 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseAffector.cpp
+@@ -37,10 +37,16 @@ namespace ParticleUniverse
+ 	const ParticleAffector::AffectSpecialisation ParticleAffector::DEFAULT_SPECIALISATION = ParticleAffector::AFSP_DEFAULT;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::ParticleAffector`: the library's, plus the disabled
++	// flag cleared and the position put at (0, -100, 0) (0xc2c80000 in y), where the library leaves
++	// the Particle's zero. The glue sets every affector's position after creating it (zero when
++	// the node has positioning off), so it shows only on an affector made some other way. It also
++	// counts the manager's affectors up (+0x504), a statistic nothing reads, left out.
+ 	ParticleAffector::ParticleAffector(void) :
+ 		Particle(),
+ 		IAlias(),
+ 		IElement(),
++		mTorchlightDisabled(false),
+ 		mParentTechnique(0),
+ 		mName(BLANK_STRING),
+ 		_mAffectorScale(Vector3::UNIT_SCALE),
+@@ -48,18 +54,36 @@ namespace ParticleUniverse
+ 	{
+ 		particleType = PT_AFFECTOR;
+ 		mAliasType = AT_AFFECTOR;
++		position = Vector3(0, -100, 0);
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::~ParticleAffector`,
++	// where the library's is empty: the affector takes itself out of
++	// its parent technique first. It also counts the manager's affectors down (+0x504), a
++	// statistic nothing reads, left out. (Through `ParticleSystemManager::destroyAffector`
++	// the parent is already cleared, so only an affector deleted otherwise removes itself.)
++	ParticleAffector::~ParticleAffector(void)
++	{
++		if (mParentTechnique)
++		{
++			mParentTechnique->removeAffector(this);
++			mParentTechnique = 0;
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_notifyStart`: the same as the library's.
+ 	void ParticleAffector::_notifyStart (void)
+ 	{
+ 		setEnabled(mOriginalEnabled);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_notifyRescaled`: the same as the library's.
+ 	void ParticleAffector::_notifyRescaled(const Vector3& scale)
+ 	{
+ 		_mAffectorScale = scale;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_initForEmission`: the same as the library's.
+ 	void ParticleAffector::_initForEmission(void)
+ 	{
+ 		// The affector itself is emitted.
+@@ -69,6 +93,7 @@ namespace ParticleUniverse
+ 		_notifyStart();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_initForExpiration`: the same as the library's.
+ 	void ParticleAffector::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// The affector itself is expired.
+@@ -78,6 +103,7 @@ namespace ParticleUniverse
+ 		_notifyStop();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::copyAttributesTo`: the library's parent copy, which the binary has in this one function (the subclasses call it), plus the disabled flag.
+ 	void ParticleAffector::copyAttributesTo(ParticleAffector* affector)
+ 	{
+ 		copyParentAttributesTo(affector);
+@@ -88,6 +114,7 @@ namespace ParticleUniverse
+ 		// Copy Parent attributes
+ 		Particle::copyAttributesTo(affector);
+ 
++		affector->mTorchlightDisabled = mTorchlightDisabled;
+ 		affector->setName(mName);
+ 		affector->mParentTechnique = mParentTechnique;
+ 		affector->_mAffectorScale = _mAffectorScale;
+@@ -95,13 +122,18 @@ namespace ParticleUniverse
+ 		affector->mExcludedEmitters = list<String>(mExcludedEmitters); // Use copy constructor
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::setParentTechnique`: the same as the library's.
+ 	void ParticleAffector::setParentTechnique(ParticleTechnique* parentTechnique)
+ 	{
+ 		mParentTechnique = parentTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_processParticle`: the library's, returning at once while the Torchlight disabled flag is set.
+ 	void ParticleAffector::_processParticle(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed, bool firstParticle)
+ 	{
++		if (mTorchlightDisabled)
++			return;
++
+ 		// Call the _firstParticle() function if the first particle in the update loop is encountered.
+ 		if (firstParticle)
+ 		{
+@@ -124,6 +156,7 @@ namespace ParticleUniverse
+ 		_affect(particleTechnique, particle, timeElapsed);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::addEmitterToExclude`: the same as the library's.
+ 	void ParticleAffector::addEmitterToExclude(const String& emitterName)
+ 	{
+ 		list<String>::iterator it;
+@@ -134,6 +167,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::removeEmitterToExclude`: the same as the library's.
+ 	void ParticleAffector::removeEmitterToExclude(const String& emitterName)
+ 	{
+ 		list<String>::iterator it;
+@@ -144,6 +178,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::removeAllEmittersToExclude`: the same as the library's.
+ 	void ParticleAffector::removeAllEmittersToExclude(void)
+ 	{
+ 		mExcludedEmitters.clear();
+@@ -161,9 +196,10 @@ namespace ParticleUniverse
+ 		return (it != mExcludedEmitters.end());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::getDerivedPosition`: the local position also when there is no parent technique (the library dereferences it). The binary adds y's scaled local value to z, not the rotated z, as in the technique's and the emitter's; the library's sum is kept until an objdump check.
+ 	const Vector3& ParticleAffector::getDerivedPosition(void)
+ 	{
+-		if (mMarkedForEmission)
++		if (mMarkedForEmission || !mParentTechnique)
+ 		{
+ 			// Use the affector position, because it is emitted
+ 			// If a particle is emitted, position and derived position are the same
+@@ -178,6 +214,7 @@ namespace ParticleUniverse
+ 		return mDerivedPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleAffector::_calculateAffectSpecialisationFactor`: the same as the library's.
+ 	Real ParticleAffector::_calculateAffectSpecialisationFactor (const Particle* particle)
+ 	{
+ 		// Assume that particle->totalTimeToLive != 0, which is reasonable

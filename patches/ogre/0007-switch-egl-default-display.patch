@@ -1,0 +1,17 @@
+diff --git a/RenderSystems/GLSupport/src/EGL/OgreEGLSupport.cpp b/RenderSystems/GLSupport/src/EGL/OgreEGLSupport.cpp
+index d0cbf53..8fc29fb 100755
+--- a/RenderSystems/GLSupport/src/EGL/OgreEGLSupport.cpp
++++ b/RenderSystems/GLSupport/src/EGL/OgreEGLSupport.cpp
+@@ -58,7 +58,11 @@ namespace Ogre {
+ 
+     EGLDisplay EGLSupport::getGLDisplay(void)
+     {
+-#if defined(EGL_VERSION_1_5) && OGRE_PLATFORM != OGRE_PLATFORM_ANDROID && OGRE_PLATFORM != OGRE_PLATFORM_EMSCRIPTEN
++// Nintendo Switch, like Android and Emscripten, must use eglGetDisplay() on the
++// native display. Enumerating EGL devices here binds EGL_MESA_device_software via
++// EGL_PLATFORM_DEVICE_EXT, which supports only pbuffer/surfaceless contexts, so
++// eglCreateWindowSurface() then fails and we never reach the GPU at all.
++#if defined(EGL_VERSION_1_5) && OGRE_PLATFORM != OGRE_PLATFORM_ANDROID && OGRE_PLATFORM != OGRE_PLATFORM_EMSCRIPTEN && !defined(__SWITCH__)
+         static auto eglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC)eglGetProcAddress("eglQueryDevicesEXT");
+         static auto eglQueryDeviceStringEXT =
+             (PFNEGLQUERYDEVICESTRINGEXTPROC)eglGetProcAddress("eglQueryDeviceStringEXT");

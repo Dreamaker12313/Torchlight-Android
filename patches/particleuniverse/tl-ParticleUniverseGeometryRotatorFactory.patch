@@ -1,0 +1,12 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
+index aa80b53..754bd04 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
+@@ -47,6 +47,7 @@ namespace ParticleUniverse
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `GeometryRotatorFactory::createAffector`: the same as the library's.
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<GeometryRotator>();

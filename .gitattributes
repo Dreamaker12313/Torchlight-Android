@@ -1,0 +1,11 @@
+# Text is stored with LF; the working copy follows core.autocrlf.
+* text=auto
+
+# Read by bash in WSL and by git apply: LF in the working copy too.
+*.sh    text eol=lf
+scripts/hooks/* text eol=lf
+*.patch text eol=lf
+
+# ParticleUniverse stores its sources with CRLF, so its patches carry CRLF inside
+# their context lines. No conversion at all, or git apply no longer matches them.
+patches/particleuniverse/*.patch -text

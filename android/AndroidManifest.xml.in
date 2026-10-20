@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The manifest of every Android build. A template:
+  scripts/build_apk.py fills in @PACKAGE@, @LABEL@, @LIB@ and @VERSION@.
+
+  Two activities. The launcher (android/java/port/android/Launcher.java) is the
+  icon's: it asks for the folder with the player's own pak.zip and music/,
+  checks it, unpacks OGRE's shader library from the APK, and starts the game.
+  The game is a NativeActivity: the engine owns its loop, and the activity's
+  only job is to load lib@LIB@.so and call its android_main(). It stays
+  exported so `adb shell am start` can start it directly.
+  configChanges lists what a foldable phone does when it is folded or unfolded,
+  so that is a resize the native side handles rather than an activity torn down
+  and rebuilt.
+
+  MANAGE_EXTERNAL_STORAGE ("All files access"): the engine opens the chosen
+  folder's files by path, which a folder picked through the system's picker
+  does not otherwise allow.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="@PACKAGE@"
+          android:versionCode="1"
+          android:versionName="@VERSION@">
+
+    <uses-feature android:glEsVersion="0x00030002" android:required="true" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <application android:label="@LABEL@"
+                 android:icon="@mipmap/ic_launcher"
+                 android:hasCode="true"
+                 android:extractNativeLibs="true"
+                 android:appCategory="game">
+        <activity android:name="port.android.Launcher"
+                  android:exported="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name="android.app.NativeActivity"
+                  android:exported="true"
+                  android:screenOrientation="sensorLandscape"
+                  android:resizeableActivity="true"
+                  android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <meta-data android:name="android.app.lib_name" android:value="@LIB@" />
+        </activity>
+    </application>
+</manifest>

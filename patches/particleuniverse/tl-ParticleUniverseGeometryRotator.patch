@@ -1,0 +1,150 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGeometryRotator.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGeometryRotator.cpp
+index 5ab11dc..419f3dc 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGeometryRotator.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseGeometryRotator.cpp
+@@ -31,12 +31,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`GeometryRotator::_GLOBAL__I_GeometryRotator`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const bool GeometryRotator::DEFAULT_USE_OWN = false;
+ 	const Real GeometryRotator::DEFAULT_ROTATION_SPEED = 10.0f;
+ 	const Vector3 GeometryRotator::DEFAULT_ROTATION_AXIS(0, 0, 0);
+ 
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `GeometryRotator::GeometryRotator`: speed fixed 10,
++	// axis zero and unset, not the particle's own speed.
+ 	GeometryRotator::GeometryRotator(void) : 
+ 		ParticleAffector(),
+ 		mScaledRotationSpeed(0.0f),
+@@ -49,17 +53,21 @@ namespace ParticleUniverse
+ 		(static_cast<DynamicAttributeFixed*>(mDynRotationSpeed))->setValue(DEFAULT_ROTATION_SPEED);
+ 	};
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::~GeometryRotator`: the same as the library's.
+ 	GeometryRotator::~GeometryRotator(void)
+ 	{
+ 		if (mDynRotationSpeed)
+ 			PU_DELETE_T(mDynRotationSpeed, DynamicAttribute, MEMCATEGORY_SCENE_OBJECTS);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::getRotationAxis`: the same as the library's.
+ 	const Vector3& GeometryRotator::getRotationAxis(void) const
+ 	{
+ 		return mRotationAxis;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `GeometryRotator::setRotationAxis`: the same. The
++	// data's axes are not unit vectors ((1, 1, 1) is authored) and nothing normalises them.
+ 	void GeometryRotator::setRotationAxis(const Vector3& rotationAxis)
+ 	{
+ 		mRotationAxis = rotationAxis;
+@@ -73,11 +81,13 @@ namespace ParticleUniverse
+ 		mRotationAxisSet = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::getRotationSpeed`: the same as the library's.
+ 	DynamicAttribute* GeometryRotator::getRotationSpeed(void) const
+ 	{
+ 		return mDynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::setRotationSpeed`: the same as the library's.
+ 	void GeometryRotator::setRotationSpeed(DynamicAttribute* dynRotationSpeed)
+ 	{
+ 		if (mDynRotationSpeed)
+@@ -86,66 +96,63 @@ namespace ParticleUniverse
+ 		mDynRotationSpeed = dynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::useOwnRotationSpeed`: the same as the library's.
+ 	bool GeometryRotator::useOwnRotationSpeed (void) const
+ 	{
+ 		return mUseOwnRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::setUseOwnRotationSpeed`: the same as the library's.
+ 	void GeometryRotator::setUseOwnRotationSpeed (bool useOwnRotationSpeed)
+ 	{
+ 		mUseOwnRotationSpeed = useOwnRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::_calculateRotationSpeed`: the particle's own draw at
++	// its age, in radians.
+ 	Real GeometryRotator::_calculateRotationSpeed(Particle* particle)
+ 	{
+-		return mDynamicAttributeHelper.calculate(mDynRotationSpeed, particle->timeFraction);
++		return mDynamicAttributeHelper.calculate(particle, mDynRotationSpeed, particle->timeFraction, 0.0f);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::_initParticleForEmission`. Without an authored axis the
++	// orientation is drawn at random (x, y, z, w), but no per-particle axis is drawn; the orientation
++	// is normalised either way.
+ 	void GeometryRotator::_initParticleForEmission(Particle* particle)
+ 	{
+-		// Only continue if the particle is a visual particle
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+ 
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+ 		if (!mRotationAxisSet)
+ 		{
+-			// Set initial random rotation axis and orientation(PU 1.4)
+ 			visualParticle->orientation.x = Ogre::Math::RangeRandom(-1, 1);
+ 			visualParticle->orientation.y = Ogre::Math::RangeRandom(-1, 1);
+ 			visualParticle->orientation.z = Ogre::Math::RangeRandom(-1, 1);
+ 			visualParticle->orientation.w = Ogre::Math::RangeRandom(-1, 1);
+-			visualParticle->orientation.normalise();
+-			visualParticle->rotationAxis.x = Math::UnitRandom();
+-			visualParticle->rotationAxis.y = Math::UnitRandom();
+-			visualParticle->rotationAxis.z = Math::UnitRandom();
+-			visualParticle->rotationAxis.normalise();
+ 		}
++		visualParticle->orientation.normalise();
+ 
+ 		if (mUseOwnRotationSpeed)
+ 		{
+-			// Use the rotation speed of the particle itself
+ 			visualParticle->rotationSpeed = _calculateRotationSpeed(particle);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `GeometryRotator::_affect`. Without an authored axis the turn is about
++	// +Z (`Vector3::UNIT_Z`), not about an axis of the particle's own.
+ 	void GeometryRotator::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		// Only continue if the particle is a visual particle
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+ 
+-		// Rotate the geometry
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-
+ 		if (mUseOwnRotationSpeed)
+ 		{
+-			// Use scaled rotationspeed and adjust the speed according to the velocity
+ 			mScaledRotationSpeed = visualParticle->rotationSpeed * timeElapsed;
+ 		}
+ 		else
+ 		{
+-			// Scale speed (beware that dynamic values don't result in a rotation; use a fixed value instead)
+ 			mScaledRotationSpeed = _calculateRotationSpeed(particle) * timeElapsed;
+ 		}
+ 
+@@ -156,12 +163,13 @@ namespace ParticleUniverse
+ 		}
+ 		else
+ 		{
+-			mQ.FromAngleAxis(Radian(mScaledRotationSpeed), visualParticle->rotationAxis);
++			mQ.FromAngleAxis(Radian(mScaledRotationSpeed), Vector3::UNIT_Z);
+ 		}
+ 
+ 		visualParticle->orientation = mQ * visualParticle->orientation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `GeometryRotator::copyAttributesTo`: the same.
+ 	void GeometryRotator::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);

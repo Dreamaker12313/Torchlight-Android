@@ -1,0 +1,134 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h b/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
+index 26a473b..6e26aef 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
+@@ -31,6 +31,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	class DynamicAttribute;
+ 	/** Particle is the abstract/virtual class that represents the object to be emitted.
+ 	@remarks
+ 		Several types of particles are distinguished, where the visual particle is the most obvious one.
+@@ -109,6 +110,12 @@ namespace ParticleUniverse
+ 			// Direction (and speed)
+ 			Vector3 direction;
+ 
++			/** Torchlight: a third vector of Torchlight's Particle (+0x28), zeroed at
++				launch by `ParticleEmitter::_initParticlePosition`. What reads
++				it is not transcribed yet, so it is named by its offset.
++			*/
++			Vector3 torchlightVector28;
++
+ 			/*  Mass of a particle.
+ 			@remarks
+ 				In case of simulations where mass of a particle is needed (i.e. exploding particles of different
+@@ -169,6 +176,16 @@ namespace ParticleUniverse
+ 	        */
+ 			virtual void _initForEmission(void);
+ 
++			/** Torchlight: the value a random attribute drew for this particle, or 0
++				when it has drawn none (`Particle::getDynamicPropertyValue`).
++			*/
++			Real getDynamicPropertyValue(DynamicAttribute* dynamicAttribute) const;
++
++			/** Torchlight: store a draw for this particle; what the random attributes'
++				`getValue` does inline (`DynamicAttributeRandom::getValue`).
++			*/
++			void setDynamicPropertyValue(DynamicAttribute* dynamicAttribute, Real value);
++
+ 			/** Perform some action if the particle expires.
+ 			@remarks
+ 				Note, that this function applies to all particle types (including Particle Techniques, Emitters and
+@@ -269,6 +286,11 @@ namespace ParticleUniverse
+ 			*/
+ 			bool mMarkedForEmission;
+ 
++			/** Torchlight: per-particle draws of the random attributes (Particle +0x38,
++				a std::map<DynamicAttribute*, float>), emptied at emission.
++			*/
++			map<DynamicAttribute*, Real> mDynamicPropertyValues;
++
+ 			/** Determines whether a particle is activated.
+ 			@remarks
+ 				This attribute is particularly used for child classes that must have a capability to be
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
+index 8838c8f..ca7dacf 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
+@@ -43,19 +43,19 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::_initForEmission`. Also empties the
++	// per-particle attribute draws, and does not reset the freeze flag.
+ 	void Particle::_initForEmission(void)
+ 	{
+ 		mEventFlags = 0;
+ 		timeFraction = 0.0f;
++		mDynamicPropertyValues.clear();
+ 
+ 		/*	Note, that this flag must only be set as soon as the particle is emitted. As soon as the particle has
+ 			been moved once, the flag must be removed again.
+ 		*/
+ 		addEventFlags(Particle::PEF_EMITTED);
+ 
+-		// Reset freeze flag
+-		mFreezed = false;
+-
+ 		// Iterate through all Behaviour objects that are registered at the particle.
+ 		if (mBehaviours.empty())
+ 			return;
+@@ -68,6 +68,18 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::getDynamicPropertyValue`.
++	Real Particle::getDynamicPropertyValue(DynamicAttribute* dynamicAttribute) const
++	{
++		map<DynamicAttribute*, Real>::const_iterator it = mDynamicPropertyValues.find(dynamicAttribute);
++		return it != mDynamicPropertyValues.end() ? it->second : 0.0f;
++	}
++	//-----------------------------------------------------------------------
++	void Particle::setDynamicPropertyValue(DynamicAttribute* dynamicAttribute, Real value)
++	{
++		mDynamicPropertyValues[dynamicAttribute] = value;
++	}
++	//-----------------------------------------------------------------------
+ 	bool Particle::isEnabled(void) const
+ 	{
+ 		return mEnabled;
+@@ -123,6 +135,7 @@ namespace ParticleUniverse
+ 		return 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::copyBehaviours` is the library's: a clone of each.
+ 	void Particle::copyBehaviours(ParticleBehaviourList& behaviours)
+ 	{
+ 		ParticleBehaviourIterator it;
+@@ -133,6 +146,8 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::calculateVelocity` computes `(length / scaled length) *
++	// velocity`, the same product.
+ 	Real Particle::calculateVelocity(void) const
+ 	{
+ 		if (originalScaledDirectionLength != 0)
+@@ -172,6 +187,8 @@ namespace ParticleUniverse
+ 		particle->copyBehaviours(mBehaviours);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::_process` is the library's: the time fraction, then each
++	// behaviour.
+ 	void Particle::_process(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		// Calculate the time fraction, because it is used in different other components
+@@ -189,6 +206,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::_initForExpiration` is the library's.
+ 	void Particle::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
+ 	{
+ 		if (mBehaviours.empty())

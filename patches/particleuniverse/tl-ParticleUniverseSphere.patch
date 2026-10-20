@@ -1,0 +1,88 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphere.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphere.cpp
+index ec7191a..d652566 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphere.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphere.cpp
+@@ -32,7 +32,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`Sphere::_GLOBAL__I_Sphere`) sets up only
++	// the stream library, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::Sphere`, the library's: radius 100, white, no owner.
+ 	Sphere::Sphere(void):
+         mOwnRadius(false),
+ 		mPosition(Vector3::ZERO),
+@@ -44,6 +47,7 @@ namespace ParticleUniverse
+ 		mOrientation = Quaternion::IDENTITY;
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `Sphere::Sphere`, the library's: radius 10, position and owner ignored.
+     Sphere::Sphere(const Vector3& position, SphereSet* owner) :
+         mOwnRadius(false),
+ 		mPosition(Vector3::ZERO),
+@@ -55,15 +59,18 @@ namespace ParticleUniverse
+ 		mOrientation = Quaternion::IDENTITY;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::~Sphere`: the same as the library's.
+ 	Sphere::~Sphere(void)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::setPosition`: the same as the library's.
+ 	void Sphere::setPosition(const Vector3& position)
+ 	{
+ 		mPosition = position;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::setPosition`: the same as the library's.
+ 	void Sphere::setPosition(Real x, Real y, Real z)
+ 	{
+ 		mPosition.x = x;
+@@ -71,11 +78,13 @@ namespace ParticleUniverse
+ 		mPosition.z = z;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::getPosition`: the same as the library's.
+ 	const Vector3& Sphere::getPosition(void) const
+ 	{
+ 		return mPosition;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::setRadius`, the library's.
+ 	void Sphere::setRadius(Real radius)
+ 	{
+ 		mOwnRadius = true;
+@@ -85,26 +94,31 @@ namespace ParticleUniverse
+ 		mRadiusChanged = true;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::hasOwnRadius`: the same as the library's.
+ 	bool Sphere::hasOwnRadius(void) const
+ 	{
+ 		return mOwnRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::_notifyOwner`: the same as the library's.
+ 	void Sphere::_notifyOwner(SphereSet* owner)
+ 	{
+ 		mParentSet = owner;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::setColour`: the same as the library's.
+ 	void Sphere::setColour(const ColourValue& colour)
+ 	{
+ 		mColour = colour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::getColour`: the same as the library's.
+ 	const ColourValue& Sphere::getColour(void) const
+ 	{
+ 		return mColour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Sphere::getOwnRadius`: the same as the library's.
+ 	Real Sphere::getOwnRadius(void) const
+ 	{
+ 		return mRadius;

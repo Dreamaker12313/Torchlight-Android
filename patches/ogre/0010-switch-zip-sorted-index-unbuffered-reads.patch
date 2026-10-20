@@ -1,0 +1,47 @@
+diff --git a/OgreMain/src/zip/miniz.h b/OgreMain/src/zip/miniz.h
+index 88a5ae8..e14d4f0 100644
+--- a/OgreMain/src/zip/miniz.h
++++ b/OgreMain/src/zip/miniz.h
+@@ -5922,6 +5922,16 @@ mz_bool mz_zip_reader_init_file_v2(mz_zip_archive *pZip, const char *pFilename,
+   if (!pFile)
+     return mz_zip_set_error(pZip, MZ_ZIP_FILE_OPEN_FAILED);
+ 
++#ifdef __SWITCH__
++  /* torchlight-switch: unbuffered, before the first read. libnx's fsdev
++     reports no st_blksize, so newlib gives the stream a 1 KB buffer and a
++     fread() larger than that goes through it 1 KB at a time: every 64 KB
++     chunk of an entry became 64 SD-card reads. Every read here is a seek
++     to an entry followed by its header or a whole chunk, so unbuffered is
++     one read per request. */
++  setvbuf(pFile, NULL, _IONBF, 0);
++#endif
++
+   file_size = archive_size;
+   if (!file_size) {
+     if (MZ_FSEEK64(pFile, 0, SEEK_END)) {
+diff --git a/OgreMain/src/zip/zip.c b/OgreMain/src/zip/zip.c
+index 0b213d6..af6bce2 100644
+--- a/OgreMain/src/zip/zip.c
++++ b/OgreMain/src/zip/zip.c
+@@ -810,9 +810,21 @@ struct zip_t *zip_open(const char *zipname, int level, char mode) {
+   case 'r':
+   case 'a':
+   case 'd':
++#ifdef __SWITCH__
++    /* torchlight-switch: a read-only archive keeps miniz's sorted index.
++       Without it mz_zip_reader_locate_file() scans the whole central
++       directory on every zip_entry_open() - 22,426 entries for Pak.zip, once
++       per asset OGRE opens - where the sorted index is a binary search.
++       zip_stream_open(), which the desktop mounts through, already sorts;
++       only the append and delete modes need the unsorted order. */
++    if (!mz_zip_reader_init_file(
++            &(zip->archive), zipname,
++            zip->level | (mode == 'r' ? 0 : MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY))) {
++#else
+     if (!mz_zip_reader_init_file(
+             &(zip->archive), zipname,
+             zip->level | MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY)) {
++#endif
+       // An archive file does not exist or cannot initialize
+       // zip_archive reader
+       goto cleanup;

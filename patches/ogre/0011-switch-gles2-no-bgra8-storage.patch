@@ -1,0 +1,24 @@
+diff --git a/RenderSystems/GLES2/src/OgreGLES2TextureManager.cpp b/RenderSystems/GLES2/src/OgreGLES2TextureManager.cpp
+index ff832887a..4b831c82e 100644
+--- a/RenderSystems/GLES2/src/OgreGLES2TextureManager.cpp
++++ b/RenderSystems/GLES2/src/OgreGLES2TextureManager.cpp
+@@ -82,6 +82,19 @@ namespace Ogre {
+             return GLRTTManager::getSingleton().getSupportedAlternative(format);
+         }
+ 
++#ifdef __SWITCH__
++        // The Switch's driver (Mesa, ES 3.2) takes the hasGLES30 branch and
++        // allocates with glTexStorage2D, which refuses the sized GL_BGRA8_EXT
++        // these formats map to - neither GL_EXT_texture_storage nor
++        // GL_APPLE_texture_format_BGRA8888 is advertised - and the texture
++        // then samples black (Torchlight's cobweb DDSs, A8R8G8B8). Store them
++        // as RGBA; the upload converts the bytes.
++        if (format == PF_A8R8G8B8 || format == PF_X8R8G8B8 || format == PF_B8G8R8A8)
++        {
++            return PF_BYTE_RGBA;
++        }
++#endif
++
+         // format not supported by GLES2: e.g. BGR
+         if(GLES2PixelUtil::getGLInternalFormat(format) == GL_NONE)
+         {

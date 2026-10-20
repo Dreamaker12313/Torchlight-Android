@@ -1,0 +1,17 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h b/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
+index 9f08808..af993c3 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
+@@ -179,10 +179,8 @@ namespace ParticleUniverse
+ 				// Move element pointed by iterator from released elements to locked elements
+ 				mLocked.insert(make_pair(mPoolMapIterator->first, mPoolMapIterator->second));
+ 				mReleased.erase(mPoolMapIterator++); // Watch the ++ at the end to set mPoolMapIterator to the next element
+-				if (mPoolMapIterator != mReleased.begin() && mPoolMapIterator != mReleased.end())
+-				{
+-					mPoolMapIterator--;
+-				}
++				// Torchlight (inlined in `ParticlePool::lockLatestParticle`): not stepped back,
++				// as in Pool::lockLatestElement.
+ 			};
+ 			//-----------------------------------------------------------------------
+ 			/** Lock all elements in the pool.

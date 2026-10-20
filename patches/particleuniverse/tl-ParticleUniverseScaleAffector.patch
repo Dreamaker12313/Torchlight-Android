@@ -1,0 +1,216 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffector.h
+index e8d7cfd..4bc0ae8 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffector.h
+@@ -81,6 +81,12 @@ namespace ParticleUniverse
+ 			bool isSinceStartSystem(void) const {return mSinceStartSystem;};
+ 			void setSinceStartSystem(bool sinceStartSystem){mSinceStartSystem = sinceStartSystem;};
+ 
++			/** Torchlight: one track for all three dimensions (affector +0x173, the Scale node's
++				`FIXED`, written directly by `CScaleAffectorDescriptor`): X's, or Y's without X.
++			*/
++			bool isUnifiedScale(void) const {return mUnifiedScale;};
++			void setUnifiedScale(bool unifiedScale){mUnifiedScale = unifiedScale;};
++
+ 	protected:
+ 			DynamicAttribute* mDynScaleX;
+ 			DynamicAttribute* mDynScaleY;
+@@ -90,6 +96,7 @@ namespace ParticleUniverse
+ 			bool mDynScaleYSet;
+ 			bool mDynScaleZSet;
+ 			bool mDynScaleXYZSet;
++			bool mUnifiedScale;
+ 			DynamicAttributeFactory mDynamicAttributeFactory;
+ 			DynamicAttributeHelper mDynamicAttributeHelper;
+ 			bool mSinceStartSystem;
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
+index eeabaae..f7f52b5 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
+@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`ScaleAffector::_GLOBAL__I_ScaleAffector`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Real ScaleAffector::DEFAULT_X_SCALE = 1.0f;
+ 	const Real ScaleAffector::DEFAULT_Y_SCALE = 1.0f;
+@@ -38,12 +40,14 @@ namespace ParticleUniverse
+ 	const Real ScaleAffector::DEFAULT_XYZ_SCALE = 1.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::ScaleAffector`: X, Y and Z fixed 1, none set.
+ 	ScaleAffector::ScaleAffector(void) : 
+ 		ParticleAffector(),
+ 		mDynScaleXSet(false),
+ 		mDynScaleYSet(false),
+ 		mDynScaleZSet(false),
+ 		mDynScaleXYZSet(false),
++		mUnifiedScale(false),
+ 		mSinceStartSystem(false)
+ 	{
+ 		mDynScaleX = PU_NEW_T(DynamicAttributeFixed, MEMCATEGORY_SCENE_OBJECTS)();
+@@ -57,6 +61,7 @@ namespace ParticleUniverse
+ 		mLatestTimeElapsed = 1.0f;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::~ScaleAffector`: the same as the library's (Torchlight has no XYZ track to delete).
+ 	ScaleAffector::~ScaleAffector(void)
+ 	{
+ 		if (mDynScaleX)
+@@ -81,72 +86,49 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::_affect`. Not a rate: a track is a multiple of the
++	// dimensions the particle was launched with (and nothing happens before those are known).
++	// Unified (`FIXED`), X's track - or Y's, without X - scales all three; otherwise each set
++	// track scales its own dimension and an unset one gives 0, which setOwnDimensions turns into
++	// next to nothing.
+ 	void ScaleAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		// Only continue if the particle is a visual particle
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+-
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-		Real ds = 0;
+-		Real width = 0;
+-		Real height = 0;
+-		Real depth = 0;
+-		Real dimension = 0; // Added in V1.4
++		if (!visualParticle->initialDimensionsSet)
++			return;
+ 
+-		if (mDynScaleXYZSet)
+-		{
+-			ds = _calculateScale(mDynScaleXYZ, particle) * timeElapsed * _calculateAffectSpecialisationFactor(particle);
+-			dimension = visualParticle->width + ds * _mAffectorScale.x;
+-			if (dimension > 0)
+-			{
+-				width = dimension;
+-			}
+-			dimension = visualParticle->height + ds * _mAffectorScale.y;
+-			if (dimension > 0)
+-			{
+-				height = dimension;
+-			}
+-			dimension = visualParticle->depth + ds * _mAffectorScale.z;
+-			if (dimension > 0)
+-			{
+-				depth = dimension;
+-			}
+-			visualParticle->setOwnDimensions(width, height, depth);
+-		}
+-		else
++		Real width;
++		Real height;
++		Real depth;
++		if (!mUnifiedScale)
+ 		{
++			Real factor = _calculateAffectSpecialisationFactor(particle);
++			width = 0.0f;
+ 			if (mDynScaleXSet)
+-			{
+-				ds = _calculateScale(mDynScaleX, particle) * timeElapsed;
+-				dimension = visualParticle->width + ds * _mAffectorScale.x;
+-				if (dimension > 0)
+-				{
+-					width = dimension;
+-				}
+-			}
++				width = _calculateScale(mDynScaleX, particle) * factor * visualParticle->initialWidth;
++			height = 0.0f;
+ 			if (mDynScaleYSet)
+-			{
+-				ds = _calculateScale(mDynScaleY, particle) * timeElapsed;
+-				dimension = visualParticle->height + ds * _mAffectorScale.y;
+-				if (dimension > 0)
+-				{
+-					height = dimension;
+-				}
+-			}
++				height = _calculateScale(mDynScaleY, particle) * factor * visualParticle->initialHeight;
++			depth = 0.0f;
+ 			if (mDynScaleZSet)
+-			{
+-				ds = _calculateScale(mDynScaleZ, particle) * timeElapsed;
+-				dimension = visualParticle->depth + ds * _mAffectorScale.z;
+-				if (dimension > 0)
+-				{
+-					depth = dimension;
+-				}
+-			}
+-			visualParticle->setOwnDimensions(width, height, depth);
++				depth = _calculateScale(mDynScaleZ, particle) * factor * visualParticle->initialDepth;
++		}
++		else
++		{
++			DynamicAttribute* track = mDynScaleXSet ? mDynScaleX : mDynScaleY;
++			if (!track)
++				return;
++			Real scale = _calculateScale(track, particle) * _calculateAffectSpecialisationFactor(particle);
++			width = visualParticle->initialWidth * scale;
++			depth = visualParticle->initialDepth * scale;
++			height = scale * visualParticle->initialHeight;
+ 		}
++		visualParticle->setOwnDimensions(width, height, depth);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::setDynScaleX`: the same as the library's.
+ 	void ScaleAffector::setDynScaleX(DynamicAttribute* dynScaleX)
+ 	{
+ 		if (mDynScaleX)
+@@ -171,6 +153,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::setDynScaleY`: the same as the library's.
+ 	void ScaleAffector::setDynScaleY(DynamicAttribute* dynScaleY)
+ 	{
+ 		if (mDynScaleY)
+@@ -195,6 +178,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::setDynScaleZ`: the same as the library's.
+ 	void ScaleAffector::setDynScaleZ(DynamicAttribute* dynScaleZ)
+ 	{
+ 		if (mDynScaleZ)
+@@ -243,22 +227,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ScaleAffector::_calculateScale`: the track at the particle's age,
++	// its random draws kept per particle.
+ 	Real ScaleAffector::_calculateScale(DynamicAttribute* dynScale, Particle* particle)
+-    {
++	{
+ 		if (!particle)
+ 			return 0.0f;
+-
+-		if (mSinceStartSystem)
+-		{
+-			// If control points are used (curved type), the first value of each control point is seconds from the start of the system
+-			return mDynamicAttributeHelper.calculate(dynScale, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart());
+-		}
+-		else
+-		{
+-			// If control points are used (curved type), the first value of each control point is the fraction of the particle lifetime [0..1]
+-			return mDynamicAttributeHelper.calculate(dynScale, particle->timeFraction);
+-		}
+-    }
++		return mDynamicAttributeHelper.calculate(particle, dynScale, particle->timeFraction, 0.0f);
++	}
+ 	//-----------------------------------------------------------------------
+ 	void ScaleAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+@@ -274,5 +250,7 @@ namespace ParticleUniverse
+ 		scaleAffector->mDynScaleZSet = mDynScaleZSet;
+ 		scaleAffector->mDynScaleXYZSet = mDynScaleXYZSet;
+ 		scaleAffector->mSinceStartSystem = mSinceStartSystem;
++		// Torchlight (`ScaleAffector::copyAttributesTo`) copies the unified flag too.
++		scaleAffector->mUnifiedScale = mUnifiedScale;
+ 	}
+ }

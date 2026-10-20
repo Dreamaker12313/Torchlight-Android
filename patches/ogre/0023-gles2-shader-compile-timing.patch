@@ -1,0 +1,111 @@
+Torchlight: what GLES2 shader compiles and links cost the calling thread, for
+the game's log. With glthread (patches/mesa) the driver compiles on its worker,
+and the game's thread waits for it at the status query that ends
+GLSLESProgram::loadFromSource and each link; the wall time around them is what
+a new shader costs the game. GLSLESShaderTimer adds it to
+`ogre_gles2_shader_stats` (extern "C", read and reset by render/gl_thread.cpp
+once a log window). The separable pipeline's compileAndLink is not timed itself:
+it links through linkSeparable, which is. Not __SWITCH__-guarded: the GLES2
+render system is built for the devices only, and both want the figure.
+
+
+diff --git a/RenderSystems/GLES2/src/GLSLES/include/OgreGLSLESProgram.h b/RenderSystems/GLES2/src/GLSLES/include/OgreGLSLESProgram.h
+--- a/RenderSystems/GLES2/src/GLSLES/include/OgreGLSLESProgram.h
++++ b/RenderSystems/GLES2/src/GLSLES/include/OgreGLSLESProgram.h
+@@ -34,6 +34,18 @@ THE SOFTWARE.
+ #include "OgreGLES2ManagedResource.h"
+ 
+ namespace Ogre {
++    /** Torchlight (patches/ogre/0023): adds the wall time of the scope it lives
++        in to `ogre_gles2_shader_stats`, as a compile or a link. */
++    class GLSLESShaderTimer
++    {
++    public:
++        explicit GLSLESShaderTimer(bool link);
++        ~GLSLESShaderTimer();
++    private:
++        bool mLink;
++        unsigned long long mStarted;
++    };
++
+     class _OgreGLES2Export GLSLESProgram : public GLSLShaderCommon MANAGED_RESOURCE
+     {
+     public:
+diff --git a/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESProgram.cpp b/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESProgram.cpp
+--- a/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESProgram.cpp
++++ b/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESProgram.cpp
+@@ -36,6 +36,47 @@ THE SOFTWARE.
+ #include "OgreGLNativeSupport.h"
+ 
+ #include "OgreGLSLESProgram.h"
++
++#include <chrono>
++
++// Torchlight (patches/ogre/0023): shader compiles and links on the calling
++// thread, in nanoseconds, since the game last read them.
++extern "C" {
++struct ogre_gles2_shader_stats_t
++{
++    unsigned long long compile_ns, link_ns, worst_compile_ns, worst_link_ns;
++    unsigned compiles, links;
++};
++struct ogre_gles2_shader_stats_t ogre_gles2_shader_stats;
++}
++
++namespace Ogre {
++    static unsigned long long shaderTimerNow()
++    {
++        return static_cast<unsigned long long>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now().time_since_epoch()).count());
++    }
++
++    GLSLESShaderTimer::GLSLESShaderTimer(bool link) : mLink(link), mStarted(shaderTimerNow()) {}
++
++    GLSLESShaderTimer::~GLSLESShaderTimer()
++    {
++        const unsigned long long ns = shaderTimerNow() - mStarted;
++        ogre_gles2_shader_stats_t& s = ogre_gles2_shader_stats;
++        if (mLink)
++        {
++            s.link_ns += ns;
++            s.links++;
++            if (ns > s.worst_link_ns) s.worst_link_ns = ns;
++        }
++        else
++        {
++            s.compile_ns += ns;
++            s.compiles++;
++            if (ns > s.worst_compile_ns) s.worst_compile_ns = ns;
++        }
++    }
++}
+ #include "OgreGLSLESProgramManager.h"
+ #include "OgreGLSLPreprocessor.h"
+ 
+@@ -103,6 +144,7 @@ namespace Ogre {
+ #endif
+     bool GLSLESProgram::linkSeparable()
+     {
++        GLSLESShaderTimer timer(true);
+         if(mLinked)
+             return true;
+ 
+@@ -132,6 +174,7 @@ namespace Ogre {
+ 
+     void GLSLESProgram::loadFromSource()
+     {
++        GLSLESShaderTimer timer(false);
+         const RenderSystemCapabilities* caps = Root::getSingleton().getRenderSystem()->getCapabilities();
+ 
+         // Only create a shader object if glsl es is supported
+diff --git a/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESLinkProgram.cpp b/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESLinkProgram.cpp
+--- a/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESLinkProgram.cpp
++++ b/RenderSystems/GLES2/src/GLSLES/src/OgreGLSLESLinkProgram.cpp
+@@ -120,6 +120,7 @@ namespace Ogre {
+     //-----------------------------------------------------------------------
+     void GLSLESLinkProgram::compileAndLink()
+     {
++        GLSLESShaderTimer timer(true);
+         uint32 hash = getCombinedHash();
+ 
+         // attach Vertex Program

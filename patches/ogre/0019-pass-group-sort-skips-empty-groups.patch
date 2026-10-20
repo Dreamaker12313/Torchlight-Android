@@ -1,0 +1,19 @@
+diff --git a/OgreMain/src/OgreRenderQueueSortingGrouping.cpp b/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
+--- a/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
++++ b/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
+@@ -365,6 +365,15 @@ namespace {
+             // cluster by submesh
+             for(auto& it : mGrouped)
+             {
++#ifdef __SWITCH__
++                // mGrouped keeps every pass ever queued (clear() empties the
++                // lists, not the map), so most entries are empty, and the test
++                // below copies a shared_ptr per entry: 5% of the console's main
++                // thread in the town, every queue group of every viewport. One
++                // renderable or none is already clustered.
++                if (it.second.size() < 2)
++                    continue;
++#endif
+                 auto instanced = it.first->hasVertexProgram() && it.first->getVertexProgram()->isInstancingIncluded();
+                 if (!instanced)
+                     continue;

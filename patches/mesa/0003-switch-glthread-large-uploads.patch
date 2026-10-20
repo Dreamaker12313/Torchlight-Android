@@ -1,0 +1,243 @@
+diff --git a/src/mesa/main/glthread.c b/src/mesa/main/glthread.c
+--- a/src/mesa/main/glthread.c
++++ b/src/mesa/main/glthread.c
+@@ -37,6 +37,7 @@
+ #include "main/glthread_marshal.h"
+ #include "main/hash.h"
+ #include "util/debug.h"
++#include "util/os_time.h"
+ #include "util/u_atomic.h"
+ #include "util/u_thread.h"
+ 
+@@ -213,8 +214,15 @@
+ 
+    p_atomic_add(&glthread->stats.num_offloaded_items, next->used);
+ 
++#ifdef __SWITCH__
++   /* util_queue_add_job blocks while the queue is full. */
++   const int64_t queued_at = os_time_get_nano();
++#endif
+    util_queue_add_job(&glthread->queue, next, &next->fence,
+                       glthread_unmarshal_batch, NULL, 0);
++#ifdef __SWITCH__
++   mesa_switch_glthread_stats.full_ns += (uint64_t)(os_time_get_nano() - queued_at);
++#endif
+    glthread->last = glthread->next;
+    glthread->next = (glthread->next + 1) % MARSHAL_MAX_BATCHES;
+    glthread->next_batch = &glthread->batches[glthread->next];
+@@ -270,10 +278,30 @@
+       p_atomic_inc(&glthread->stats.num_syncs);
+ }
+ 
++#ifdef __SWITCH__
++__attribute__((visibility("default"))) struct mesa_switch_glthread_stats mesa_switch_glthread_stats;
++#endif
++
+ void
+ _mesa_glthread_finish_before(struct gl_context *ctx, const char *func)
+ {
++#ifdef __SWITCH__
++   const int64_t started = os_time_get_nano();
++#endif
+    _mesa_glthread_finish(ctx);
++#ifdef __SWITCH__
++   struct mesa_switch_glthread_stats *stats = &mesa_switch_glthread_stats;
++   stats->sync_ns += (uint64_t)(os_time_get_nano() - started);
++   stats->syncs++;
++   /* By name: the names are string literals, one address each. */
++   for (unsigned i = 0; i < MESA_SWITCH_GLTHREAD_FUNCS; i++) {
++      if (stats->by_func[i].func == func || stats->by_func[i].func == NULL) {
++         stats->by_func[i].func = func;
++         stats->by_func[i].count++;
++         break;
++      }
++   }
++#endif
+ 
+    /* Uncomment this if you want to know where glthread syncs. */
+    /*printf("fallback to sync: %s\n", func);*/
+diff --git a/src/mesa/main/glthread.h b/src/mesa/main/glthread.h
+--- a/src/mesa/main/glthread.h
++++ b/src/mesa/main/glthread.h
+@@ -122,6 +122,29 @@
+ void _mesa_glthread_disable(struct gl_context *ctx, const char *func);
+ void _mesa_glthread_flush_batch(struct gl_context *ctx);
+ void _mesa_glthread_finish(struct gl_context *ctx);
++
++#ifdef __SWITCH__
++/* What glthread cost the application's own thread, for a game's log: the
++ * time it spent synchronised with the worker (every fallback to a
++ * synchronous call goes through _mesa_glthread_finish_before, which also
++ * executes the pending batch on this thread), the time it spent blocked
++ * handing a batch to a full queue (the worker is the slower of the two), and
++ * the large buffer uploads queued as a heap copy instead of a sync. Only the
++ * application's thread writes it; the game reads it between frames. */
++#define MESA_SWITCH_GLTHREAD_FUNCS 16
++struct mesa_switch_glthread_stats {
++   uint64_t sync_ns;
++   uint64_t full_ns;
++   uint64_t heap_bytes;
++   uint32_t syncs;
++   uint32_t heap_uploads;
++   struct {
++      const char *func;
++      uint32_t count;
++   } by_func[MESA_SWITCH_GLTHREAD_FUNCS];
++};
++extern struct mesa_switch_glthread_stats mesa_switch_glthread_stats;
++#endif
+ void _mesa_glthread_finish_before(struct gl_context *ctx, const char *func);
+ 
+ void _mesa_glthread_BindBuffer(struct gl_context *ctx, GLenum target,
+diff --git a/src/mesa/main/glthread_bufferobj.c b/src/mesa/main/glthread_bufferobj.c
+--- a/src/mesa/main/glthread_bufferobj.c
++++ b/src/mesa/main/glthread_bufferobj.c
+@@ -23,6 +23,19 @@
+ 
+ #include "glthread_marshal.h"
+ #include "dispatch.h"
++
++#ifdef __SWITCH__
++/* glBufferData and glBufferSubData copy their data into the command, and a
++ * command must fit in one 8 KiB batch, so any larger upload used to wait for
++ * the worker to finish everything queued and then ran on the application's
++ * thread: a game streaming its dynamic vertex buffers (particles,
++ * billboards, software-skinned meshes, every one of them over 8 KiB) paid a
++ * full synchronisation for each. An upload up to this size is copied to the
++ * heap instead and the command carries the copy, which the worker frees
++ * once it has made the call. The data is still copied at the call, as GL
++ * requires; only the wait is gone. */
++#define SWITCH_HEAP_UPLOAD_MAX (32 * 1024 * 1024)
++#endif
+ 
+ /** Tracks the current bindings for the vertex array and index array buffers.
+  *
+@@ -98,6 +111,7 @@
+    GLsizeiptr size;
+    GLenum usage;
+    const GLvoid *data_external_mem;
++   void *data_heap; /* If set, the data is here (and freed), not after */
+    bool data_null; /* If set, no data follows for "data" */
+    bool named;
+    bool ext_dsa;
+@@ -113,7 +127,9 @@
+    const GLenum usage = cmd->usage;
+    const void *data;
+ 
+-   if (cmd->data_null)
++   if (cmd->data_heap)
++      data = cmd->data_heap;
++   else if (cmd->data_null)
+       data = NULL;
+    else if (!cmd->named && target_or_name == GL_EXTERNAL_VIRTUAL_MEMORY_BUFFER_AMD)
+       data = cmd->data_external_mem;
+@@ -130,6 +146,7 @@
+       CALL_BufferData(ctx->CurrentServerDispatch,
+                       (target_or_name, size, data, usage));
+    }
++   free(cmd->data_heap);
+ }
+ 
+ void
+@@ -156,6 +173,31 @@
+                        target_or_name == GL_EXTERNAL_VIRTUAL_MEMORY_BUFFER_AMD;
+    bool copy_data = data && !external_mem;
+    int cmd_size = sizeof(struct marshal_cmd_BufferData) + (copy_data ? size : 0);
++
++#ifdef __SWITCH__
++   if (copy_data && size > 0 && size <= SWITCH_HEAP_UPLOAD_MAX &&
++       (cmd_size < 0 || cmd_size > MARSHAL_MAX_CMD_SIZE) &&
++       !(named && target_or_name == 0)) {
++      void *heap = malloc(size);
++      if (heap) {
++         memcpy(heap, data, size);
++         struct marshal_cmd_BufferData *cmd =
++            _mesa_glthread_allocate_command(ctx, DISPATCH_CMD_BufferData,
++                                            sizeof(struct marshal_cmd_BufferData));
++         cmd->target_or_name = target_or_name;
++         cmd->size = size;
++         cmd->usage = usage;
++         cmd->data_null = false;
++         cmd->named = named;
++         cmd->ext_dsa = ext_dsa;
++         cmd->data_external_mem = NULL;
++         cmd->data_heap = heap;
++         mesa_switch_glthread_stats.heap_uploads++;
++         mesa_switch_glthread_stats.heap_bytes += (uint64_t)size;
++         return;
++      }
++   }
++#endif
+ 
+    if (unlikely(size < 0 || size > INT_MAX || cmd_size < 0 ||
+                 cmd_size > MARSHAL_MAX_CMD_SIZE ||
+@@ -182,6 +224,7 @@
+    cmd->named = named;
+    cmd->ext_dsa = ext_dsa;
+    cmd->data_external_mem = data;
++   cmd->data_heap = NULL;
+ 
+    if (copy_data) {
+       char *variable_data = (char *) (cmd + 1);
+@@ -221,6 +264,7 @@
+    GLenum target_or_name;
+    GLintptr offset;
+    GLsizeiptr size;
++   void *data_heap; /* If set, the data is here (and freed), not after */
+    bool named;
+    bool ext_dsa;
+    /* Next size bytes are GLubyte data[size] */
+@@ -233,7 +277,7 @@
+    const GLenum target_or_name = cmd->target_or_name;
+    const GLintptr offset = cmd->offset;
+    const GLsizeiptr size = cmd->size;
+-   const void *data = (const void *) (cmd + 1);
++   const void *data = cmd->data_heap ? cmd->data_heap : (const void *) (cmd + 1);
+ 
+    if (cmd->ext_dsa) {
+       CALL_NamedBufferSubDataEXT(ctx->CurrentServerDispatch,
+@@ -245,6 +289,7 @@
+       CALL_BufferSubData(ctx->CurrentServerDispatch,
+                          (target_or_name, offset, size, data));
+    }
++   free(cmd->data_heap);
+ }
+ 
+ void
+@@ -268,6 +313,28 @@
+ {
+    GET_CURRENT_CONTEXT(ctx);
+    size_t cmd_size = sizeof(struct marshal_cmd_BufferSubData) + size;
++
++#ifdef __SWITCH__
++   if (data && size > 0 && size <= SWITCH_HEAP_UPLOAD_MAX &&
++       cmd_size > MARSHAL_MAX_CMD_SIZE && !(named && target_or_name == 0)) {
++      void *heap = malloc(size);
++      if (heap) {
++         memcpy(heap, data, size);
++         struct marshal_cmd_BufferSubData *cmd =
++            _mesa_glthread_allocate_command(ctx, DISPATCH_CMD_BufferSubData,
++                                            sizeof(struct marshal_cmd_BufferSubData));
++         cmd->target_or_name = target_or_name;
++         cmd->offset = offset;
++         cmd->size = size;
++         cmd->named = named;
++         cmd->ext_dsa = ext_dsa;
++         cmd->data_heap = heap;
++         mesa_switch_glthread_stats.heap_uploads++;
++         mesa_switch_glthread_stats.heap_bytes += (uint64_t)size;
++         return;
++      }
++   }
++#endif
+ 
+    if (unlikely(size < 0 || size > INT_MAX || cmd_size < 0 ||
+                 cmd_size > MARSHAL_MAX_CMD_SIZE || !data ||
+@@ -291,6 +358,7 @@
+    cmd->size = size;
+    cmd->named = named;
+    cmd->ext_dsa = ext_dsa;
++   cmd->data_heap = NULL;
+ 
+    char *variable_data = (char *) (cmd + 1);
+    memcpy(variable_data, data, size);

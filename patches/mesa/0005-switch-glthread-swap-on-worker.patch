@@ -1,0 +1,216 @@
+diff --git a/src/egl/drivers/switch/egl_switch.c b/src/egl/drivers/switch/egl_switch.c
+--- a/src/egl/drivers/switch/egl_switch.c
++++ b/src/egl/drivers/switch/egl_switch.c
+@@ -55,6 +55,7 @@
+ #include "util/format/u_format.h"
+ #include "util/u_inlines.h"
+ #include "util/u_memory.h"
++#include "util/u_queue.h"
+ 
+ #include "state_tracker/st_api.h"
+ #include "state_tracker/st_gl_api.h"
+@@ -103,6 +104,11 @@
+     s32 cur_slot;
+     struct pipe_resource *buffers[NUM_BUFFERS];
+     NvFence fences[NUM_BUFFERS];
++
++    // The swap queued on glthread's worker (switch_swap_buffers): signalled
++    // once it has presented, and the context it flushes.
++    struct util_queue_fence swap_fence;
++    struct switch_egl_context *swap_context;
+ };
+ 
+ struct switch_framebuffer
+@@ -247,6 +253,10 @@
+ {
+     u32 i;
+ 
++    // A queued swap still to run reads this surface.
++    util_queue_fence_wait(&surface->swap_fence);
++    util_queue_fence_destroy(&surface->swap_fence);
++
+     for (i = 0; i < ST_ATTACHMENT_COUNT; i ++)
+     {
+         if (i == ST_ATTACHMENT_FRONT_LEFT || i == ST_ATTACHMENT_BACK_LEFT)
+@@ -288,6 +298,7 @@
+         _eglError(EGL_BAD_ALLOC, "switch_create_window_surface: failed to allocate switch_egl_surface");
+         return NULL;
+     }
++    util_queue_fence_init(&surface->swap_fence);
+ 
+     if (!_eglInitSurface(&surface->base, dpy, EGL_WINDOW_BIT, conf, attrib_list, native_window))
+         goto cleanup;
+@@ -729,22 +740,16 @@
+ }
+ 
+ 
+-static EGLBoolean
+-switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
+-{
+-    CALLED();
+-    struct switch_egl_surface* surface = switch_egl_surface(surf);
+-    struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
+-
++// Flush the frame and queue its back buffer for display. On glthread's
++// worker when it runs (switch_swap_job), after everything the frame queued;
++// on the application's thread otherwise.
++static void
++switch_present(struct switch_egl_surface *surface, struct switch_egl_context *context)
++{
+     if (surface->cur_slot < 0) {
+         TRACE("Nothing to do\n");
+-        return EGL_TRUE;
+-    }
+-
+-    // Everything the frame queued has to reach the pipe context before this
+-    // thread flushes it and reads the back buffer's fence.
+-    if (context->stctx->thread_finish)
+-        context->stctx->thread_finish(context->stctx);
++        return;
++    }
+ 
+     TRACE("Flushing context\n");
+     context->stctx->flush(context->stctx, ST_FLUSH_END_OF_FRAME, NULL, NULL, NULL);
+@@ -771,6 +776,37 @@
+     surface->attachments[ST_ATTACHMENT_BACK_LEFT] = NULL;
+     surface->attachments[ST_ATTACHMENT_FRONT_LEFT] = old_back;
+     p_atomic_inc(&surface->stfbi->stamp);
++}
++
++static void
++switch_swap_job(void *data, int thread_index)
++{
++    (void)thread_index;
++    struct switch_egl_surface *surface = (struct switch_egl_surface *) data;
++    switch_present(surface, surface->swap_context);
++}
++
++static EGLBoolean
++switch_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
++{
++    CALLED();
++    struct switch_egl_surface* surface = switch_egl_surface(surf);
++    struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
++
++    // With glthread the swap is queued after the frame's commands and runs on
++    // the worker, so the application's thread goes on to the next frame
++    // instead of waiting for the worker to finish this one: on the console the
++    // game's thread spent a tenth of a town frame in that wait. One swap in
++    // flight at a time, which keeps the application at most a frame ahead.
++    util_queue_fence_wait(&surface->swap_fence);
++    surface->swap_context = context;
++    if (context->stctx->thread_call &&
++        context->stctx->thread_call(context->stctx, switch_swap_job, surface, &surface->swap_fence))
++        return EGL_TRUE;
++
++    // Without glthread: everything the frame queued has reached the pipe
++    // context already.
++    switch_present(surface, context);
+     return EGL_TRUE;
+ }
+ 
+diff --git a/src/gallium/include/state_tracker/st_api.h b/src/gallium/include/state_tracker/st_api.h
+--- a/src/gallium/include/state_tracker/st_api.h
++++ b/src/gallium/include/state_tracker/st_api.h
+@@ -269,6 +269,7 @@
+ };
+ 
+ struct st_context_iface;
++struct util_queue_fence;
+ struct st_manager;
+ 
+ /**
+@@ -431,6 +432,18 @@
+     * Called from the main thread.
+     */
+    void (*thread_finish)(struct st_context_iface *stctxi);
++
++#ifdef __SWITCH__
++   /**
++    * Run fn(data) on glthread's worker after everything queued so far, and
++    * return at once; `fence` is signalled when it has run and must not be
++    * reused before. thread_finish also waits for the last one. False when
++    * glthread is not running: the caller runs fn itself.
++    */
++   bool (*thread_call)(struct st_context_iface *stctxi,
++                       void (*fn)(void *data, int thread_index),
++                       void *data, struct util_queue_fence *fence);
++#endif
+ };
+ 
+ 
+diff --git a/src/mesa/main/glthread.c b/src/mesa/main/glthread.c
+--- a/src/mesa/main/glthread.c
++++ b/src/mesa/main/glthread.c
+@@ -257,6 +257,14 @@
+       util_queue_fence_wait(&last->fence);
+       synced = true;
+    }
++#ifdef __SWITCH__
++   /* A queued call (st thread_call) runs after the last batch; the batch
++    * executed below on this thread must not race it. */
++   if (glthread->call_fence && !util_queue_fence_is_signalled(glthread->call_fence)) {
++      util_queue_fence_wait(glthread->call_fence);
++      synced = true;
++   }
++#endif
+ 
+    if (next->used) {
+       p_atomic_add(&glthread->stats.num_direct_items, next->used);
+diff --git a/src/mesa/main/glthread.h b/src/mesa/main/glthread.h
+--- a/src/mesa/main/glthread.h
++++ b/src/mesa/main/glthread.h
+@@ -93,6 +93,11 @@
+    /** Multithreaded queue. */
+    struct util_queue queue;
+ 
++#ifdef __SWITCH__
++   /** The fence of the last st thread_call, which finish waits for too. */
++   struct util_queue_fence *call_fence;
++#endif
++
+    /** This is sent to the driver for framebuffer overlay / HUD. */
+    struct util_queue_monitoring stats;
+ 
+diff --git a/src/mesa/state_tracker/st_manager.c b/src/mesa/state_tracker/st_manager.c
+--- a/src/mesa/state_tracker/st_manager.c
++++ b/src/mesa/state_tracker/st_manager.c
+@@ -844,6 +844,28 @@
+ }
+ 
+ 
++#ifdef __SWITCH__
++static bool
++st_thread_call(struct st_context_iface *stctxi,
++               void (*fn)(void *data, int thread_index),
++               void *data, struct util_queue_fence *fence)
++{
++   struct st_context *st = (struct st_context *) stctxi;
++   struct glthread_state *glthread = &st->ctx->GLThread;
++
++   if (!glthread->enabled)
++      return false;
++
++   /* What was recorded so far goes first; the queue runs jobs in order on
++    * its one thread. */
++   _mesa_glthread_flush_batch(st->ctx);
++   util_queue_add_job(&glthread->queue, data, fence, fn, NULL, 0);
++   glthread->call_fence = fence;
++   return true;
++}
++#endif
++
++
+ static void
+ st_manager_destroy(struct st_manager *smapi)
+ {
+@@ -998,6 +1020,9 @@
+     * driver never started it. egl_switch.c can now, on request. */
+    st->iface.start_thread = st_start_thread;
+    st->iface.thread_finish = st_thread_finish;
++#ifdef __SWITCH__
++   st->iface.thread_call = st_thread_call;
++#endif
+    st->iface.st_context_private = (void *) smapi;
+    st->iface.cso_context = st->cso_context;
+    st->iface.pipe = st->pipe;

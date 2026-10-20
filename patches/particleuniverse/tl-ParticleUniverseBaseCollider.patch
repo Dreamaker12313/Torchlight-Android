@@ -1,0 +1,114 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseCollider.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseCollider.h
+index 3aa87ab..44eada0 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseCollider.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseCollider.h
+@@ -68,6 +68,7 @@ namespace ParticleUniverse
+ 			static const CollisionType DEFAULT_COLLISION_TYPE;
+ 
+ 			BaseCollider(void);
++	        // Torchlight: `Collider::~Collider`: the same as the library's.
+ 	        virtual ~BaseCollider(void){};
+ 
+ 			/** @copydoc ParticleAffector::_preProcessParticles */
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseCollider.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseCollider.cpp
+index cd62588..15e8d24 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseCollider.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseCollider.cpp
+@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`Collider::_GLOBAL__I_Collider`) sets up
++	// only the stream library, the same as the library's.
+ 	// Constants
+ 	const Real BaseCollider::DEFAULT_BOUNCYNESS = 1.0f;
+ 	const Real BaseCollider::DEFAULT_FRICTION = 0.0f;
+@@ -38,6 +40,9 @@ namespace ParticleUniverse
+ 	const BaseCollider::CollisionType BaseCollider::DEFAULT_COLLISION_TYPE = BaseCollider::CT_BOUNCE;
+ 
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `Collider::Collider`: friction 0 (+0x154),
++	// bouncyness 1 (+0x158), intersection `Fast` = point (+0x15c), collision `Bounce` (+0x160). Its
++	// collider keeps no velocity scale; the plane and sphere colliders do not read it.
+ 	BaseCollider::BaseCollider(void) :
+ 		ParticleAffector(),
+ 		mBouncyness(DEFAULT_BOUNCYNESS),
+@@ -58,46 +63,55 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::getIntersectionType`: the same as the library's.
+ 	const BaseCollider::IntersectionType BaseCollider::getIntersectionType(void) const
+ 	{
+ 		return mIntersectionType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::setIntersectionType`: the same as the library's.
+ 	void BaseCollider::setIntersectionType(const BaseCollider::IntersectionType& intersectionType)
+ 	{
+ 		mIntersectionType = intersectionType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::getCollisionType`: the same as the library's.
+ 	const BaseCollider::CollisionType BaseCollider::getCollisionType(void) const
+ 	{
+ 		return mCollisionType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::setCollisionType`: the same as the library's.
+ 	void BaseCollider::setCollisionType(const BaseCollider::CollisionType& collisionType)
+ 	{
+ 		mCollisionType = collisionType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::getFriction`: the same as the library's.
+ 	const Real BaseCollider::getFriction(void) const
+ 	{
+ 		return mFriction;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::setFriction`: the same as the library's.
+ 	void BaseCollider::setFriction(const Real friction)
+ 	{
+ 		mFriction = friction;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::getBouncyness`: the same as the library's.
+ 	const Real BaseCollider::getBouncyness(void) const
+ 	{
+ 		return mBouncyness;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::setBouncyness`: the same as the library's.
+ 	void BaseCollider::setBouncyness(const Real bouncyness)
+ 	{
+ 		mBouncyness = bouncyness;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `Collider::populateAlignedBox`: the same finite box.
+ 	void BaseCollider::populateAlignedBox(AxisAlignedBox& box,
+ 		const Vector3& position, 
+ 		const Real width,
+@@ -115,17 +129,21 @@ namespace ParticleUniverse
+ 			position.z + halfDepth);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Collider::calculateRotationSpeedAfterCollision`. Both rotation
++	// speeds are multiplied by the friction itself, its sign drawn - not by `friction - 1` as in the
++	// library. So the default friction 0 stops a particle's spin at its first collision.
+ 	void BaseCollider::calculateRotationSpeedAfterCollision(Particle* particle)
+ 	{
+ 		if (particle->particleType != Particle::PT_VISUAL)
+ 			return;
+ 
+ 		VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+-		Real signedFriction = Math::UnitRandom() > 0.5 ? -(mFriction - 1) : (mFriction - 1);
++		Real signedFriction = Math::UnitRandom() > 0.5f ? -mFriction : mFriction;
+ 		visualParticle->rotationSpeed *= signedFriction;
+ 		visualParticle->zRotationSpeed *= signedFriction;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `Collider::copyAttributesTo`: the same four values.
+ 	void BaseCollider::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);

@@ -1,0 +1,33 @@
+Torchlight: ZipArchive::exists compares basenames without regard to case, as
+OGRE_RESOURCEMANAGER_STRICT=0 promises everywhere else. With STRICT=0 an
+archive is indexed by basename, so a lookup by full path ("media/UI/
+BRLNSDB.TTF") misses the group's index and falls back to exists(), which
+compared the basename case-sensitively. The PC Pak.zip happens to store names
+in the case the game asks for; the Xbox 360 pak.zip stores every name in lower
+case (media/ui/brlnsdb.ttf), so on it the interface font - and any other
+full-path lookup the index misses - was "Cannot locate resource". open() was
+already case-insensitive (zip_entry_open with casesensitive = STRICT). Not
+__SWITCH__-guarded: every target reads the pak through it.
+
+
+diff --git a/OgreMain/src/OgreZip.cpp b/OgreMain/src/OgreZip.cpp
+--- a/OgreMain/src/OgreZip.cpp
++++ b/OgreMain/src/OgreZip.cpp
+@@ -286,8 +286,17 @@ namespace {
+         }
+ #endif
+ 
++#if !OGRE_RESOURCEMANAGER_STRICT
++        StringUtil::toLowerCase(cleanName);
++#endif
+         return std::find_if(mFileList.begin(), mFileList.end(), [&cleanName](const Ogre::FileInfo& fi) {
++#if !OGRE_RESOURCEMANAGER_STRICT
++                   String name = fi.filename;
++                   StringUtil::toLowerCase(name);
++                   return name == cleanName;
++#else
+                    return fi.filename == cleanName;
++#endif
+                }) != mFileList.end();
+     }
+     //---------------------------------------------------------------------

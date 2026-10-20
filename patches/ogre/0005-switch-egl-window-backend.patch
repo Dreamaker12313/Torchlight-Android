@@ -1,0 +1,330 @@
+diff --git a/RenderSystems/GLSupport/CMakeLists.txt b/RenderSystems/GLSupport/CMakeLists.txt
+index fa85fa5f0..e96287cae 100644
+--- a/RenderSystems/GLSupport/CMakeLists.txt
++++ b/RenderSystems/GLSupport/CMakeLists.txt
+@@ -23,6 +23,15 @@ if(ANDROID)
+   set(NATIVE_INCLUDES 
+       ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL 
+       ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL/Android)
++elseif (NINTENDO_SWITCH)
++  # Switch has one fullscreen NWindow from libnx and no window manager.
++  file(GLOB PLATFORM_HEADERS "include/EGL/Switch/*.h" "include/EGL/*.h")
++  file(GLOB PLATFORM_SOURCES "src/EGL/Switch/*.cpp" "src/EGL/*.cpp")
++
++  set(NATIVE_INCLUDES
++      ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL
++      ${CMAKE_CURRENT_SOURCE_DIR}/include/EGL/Switch)
++  set(PLATFORM_LIBS ${EGL_egl_LIBRARY} ${OPENGLES2_gl_LIBRARY})
+ elseif (EMSCRIPTEN)
+   file(GLOB PLATFORM_HEADERS "include/EGL/Emscripten/*.h" "include/EGL/*.h")
+   file(GLOB PLATFORM_SOURCES "src/EGL/Emscripten/*.cpp" "src/EGL/*.cpp")
+diff --git a/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLSupport.h b/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLSupport.h
+new file mode 100644
+index 000000000..0d30d9d5f
+--- /dev/null
++++ b/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLSupport.h
+@@ -0,0 +1,25 @@
++// Nintendo Switch EGL support for OGRE, added by the Torchlight Switch port.
++// Models the Android backend: one fullscreen native window owned by the OS,
++// no window manager, EGL_DEFAULT_DISPLAY.
++#ifndef __SwitchEGLSupport_H__
++#define __SwitchEGLSupport_H__
++
++#include "OgreEGLSupport.h"
++
++namespace Ogre {
++    class _OgrePrivate SwitchEGLSupport : public EGLSupport
++    {
++    public:
++        // The profile the render system asked for: CONTEXT_ES for GLES2,
++        // CONTEXT_CORE for GL3Plus (switch-mesa offers desktop GL 4.3 too).
++        explicit SwitchEGLSupport(int profile);
++        virtual ~SwitchEGLSupport();
++
++        RenderWindow* newWindow(const String& name,
++                                unsigned int width, unsigned int height,
++                                bool fullScreen,
++                                const NameValuePairList* miscParams = 0) override;
++    };
++}
++
++#endif
+diff --git a/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLWindow.h b/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLWindow.h
+new file mode 100644
+index 000000000..c18e27342
+--- /dev/null
++++ b/RenderSystems/GLSupport/include/EGL/Switch/OgreSwitchEGLWindow.h
+@@ -0,0 +1,23 @@
++// Nintendo Switch EGL window for OGRE, added by the Torchlight Switch port.
++#ifndef __SwitchEGLWindow_H__
++#define __SwitchEGLWindow_H__
++
++#include "OgreEGLWindow.h"
++#include "OgreSwitchEGLSupport.h"
++
++namespace Ogre {
++    class _OgrePrivate SwitchEGLWindow : public EGLWindow
++    {
++    protected:
++        void resize(unsigned int width, unsigned int height) override;
++        void windowMovedOrResized() override;
++
++    public:
++        SwitchEGLWindow(SwitchEGLSupport* glsupport);
++
++        void create(const String& name, unsigned int width, unsigned int height,
++                    bool fullScreen, const NameValuePairList* miscParams) override;
++    };
++}
++
++#endif
+diff --git a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLSupport.cpp b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLSupport.cpp
+new file mode 100644
+index 000000000..70aff945a
+--- /dev/null
++++ b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLSupport.cpp
+@@ -0,0 +1,36 @@
++// Nintendo Switch EGL support for OGRE, added by the Torchlight Switch port.
++#include "OgreException.h"
++#include "OgreLogManager.h"
++#include "OgreStringConverter.h"
++#include "OgreRoot.h"
++
++#include "OgreSwitchEGLSupport.h"
++#include "OgreSwitchEGLWindow.h"
++#include "OgreGLUtil.h"
++
++namespace Ogre {
++
++    GLNativeSupport* getGLSupport(int profile)
++    {
++        return new SwitchEGLSupport(profile);
++    }
++
++    SwitchEGLSupport::SwitchEGLSupport(int profile) : EGLSupport(profile)
++    {
++        mNativeDisplay = EGL_DEFAULT_DISPLAY;
++        mGLDisplay = getGLDisplay();
++    }
++
++    SwitchEGLSupport::~SwitchEGLSupport()
++    {
++    }
++
++    RenderWindow* SwitchEGLSupport::newWindow(const String& name, unsigned int width,
++                                              unsigned int height, bool fullScreen,
++                                              const NameValuePairList* miscParams)
++    {
++        SwitchEGLWindow* window = new SwitchEGLWindow(this);
++        window->create(name, width, height, fullScreen, miscParams);
++        return window;
++    }
++}
+diff --git a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
+new file mode 100644
+index 000000000..03696e62c
+--- /dev/null
++++ b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
+@@ -0,0 +1,202 @@
++// Nintendo Switch EGL window for OGRE, added by the Torchlight Switch port.
++//
++// The Switch presents a single fullscreen framebuffer owned by the OS. libnx
++// exposes it as NWindow* via nwindowGetDefault(), which switch-mesa accepts
++// directly as an EGLNativeWindowType. There is no window manager, so most of
++// EGLWindow's resize/move machinery is inert here.
++//
++// The console reports 1280x720 handheld and 1920x1080 docked. Passing a size
++// through nwindowSetDimensions() lets us render at a fixed internal resolution
++// and have the compositor scale, which matters for hitting frame rate on the
++// Tegra X1.
++#include "OgreRoot.h"
++#include "OgreException.h"
++#include "OgreLogManager.h"
++#include "OgreStringConverter.h"
++#include "OgreGLRenderSystemCommon.h"
++#include "OgreViewport.h"
++
++#include "OgreSwitchEGLSupport.h"
++#include "OgreSwitchEGLWindow.h"
++
++#include <switch.h>
++
++namespace Ogre {
++
++    SwitchEGLWindow::SwitchEGLWindow(SwitchEGLSupport* glsupport)
++        : EGLWindow(glsupport)
++    {
++    }
++
++    void SwitchEGLWindow::resize(unsigned int width, unsigned int height)
++    {
++        // The OS owns the framebuffer; size changes arrive via dock/undock and
++        // are picked up by querying the surface, not by resizing it here.
++    }
++
++    void SwitchEGLWindow::windowMovedOrResized()
++    {
++        if (!mActive || !mEglSurface)
++            return;
++
++        // switch-mesa does not report usable EGL_WIDTH/EGL_HEIGHT for an NWindow
++        // surface - it answers 0 - so only trust the query when it gives a real
++        // size and otherwise keep the dimensions we asked the compositor for.
++        // Leaving this at 0 renders every viewport at zero size while a full
++        // glClear still fills the screen, which looks deceptively like success.
++        EGLint qw = 0, qh = 0;
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_WIDTH, &qw);
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_HEIGHT, &qh);
++        EGL_CHECK_ERROR
++
++        LogManager::getSingleton().logMessage(
++            "SwitchEGLWindow: eglQuerySurface reported " + StringConverter::toString(qw) +
++            "x" + StringConverter::toString(qh));
++
++        // Keep the previous size if the query is unusable (see create()).
++        if (qw > 0) mWidth  = (unsigned int)qw;
++        if (qh > 0) mHeight = (unsigned int)qh;
++
++        for (auto& it : mViewportList)
++            it.second->_updateDimensions();
++    }
++
++    void SwitchEGLWindow::create(const String& name, uint width, uint height,
++                                 bool fullScreen, const NameValuePairList* miscParams)
++    {
++        mName = name;
++        mLeft = 0;
++        mTop = 0;
++        mIsFullScreen = true;   // the Switch has no windowed mode
++
++        int msaa = 0;
++        if (miscParams)
++        {
++            NameValuePairList::const_iterator end = miscParams->end();
++            NameValuePairList::const_iterator opt;
++
++            if ((opt = miscParams->find("FSAA")) != end)
++                msaa = StringConverter::parseInt(opt->second);
++            if ((opt = miscParams->find("gamma")) != end)
++                mHwGamma = StringConverter::parseBool(opt->second);
++            if ((opt = miscParams->find("externalGLControl")) != end)
++                mIsExternalGLControl = StringConverter::parseBool(opt->second);
++        }
++
++        NWindow* nw = nwindowGetDefault();
++        if (!nw)
++        {
++            OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                        "nwindowGetDefault() returned null - is the applet foreground?",
++                        "SwitchEGLWindow::create");
++        }
++
++        // Only pin the internal resolution if the caller asked for one.
++        if (width > 0 && height > 0)
++            nwindowSetDimensions(nw, width, height);
++
++        mWindow = (EGLNativeWindowType)nw;
++        mEglDisplay = mGLSupport->getGLDisplay();
++
++        // GLES2 makes an ES context and GL3Plus a desktop GL one, and the
++        // config has to be renderable with the API the context is made for:
++        // eglCreateContext refuses a config without the matching bit.
++        const bool es = mGLSupport->getContextProfile() == GLNativeSupport::CONTEXT_ES;
++        const EGLint renderable = es ? EGL_OPENGL_ES2_BIT : EGL_OPENGL_BIT;
++
++        // EGL_ALPHA_SIZE is deliberate, not an omission: the automap's minimap
++        // draws several nearly-coincident full-screen quads into a second,
++        // higher z-order viewport on this same window, blended and depth-
++        // masked against each other and against the world drawn underneath.
++        // Without an explicit alpha request the driver is free to (and does)
++        // hand back a 24-bit RGB-only, 16-bit-depth config, and the automap
++        // renders as a solid opaque square instead of the intended circular,
++        // blended overlay. EGL_BUFFER_SIZE 32 / EGL_DEPTH_SIZE 24 make that
++        // the *only* config in range, not just an allowed one.
++        EGLint minAttribs[] = {
++            EGL_RENDERABLE_TYPE, renderable,
++            EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
++            EGL_BUFFER_SIZE,     32,
++            EGL_ALPHA_SIZE,      8,
++            EGL_DEPTH_SIZE,      24,
++            EGL_NONE
++        };
++        EGLint maxAttribs[] = {
++            EGL_BUFFER_SIZE,   32,
++            EGL_ALPHA_SIZE,    8,
++            EGL_DEPTH_SIZE,    24,
++            EGL_STENCIL_SIZE,  8,
++            EGL_NONE
++        };
++
++        if (msaa > 1)
++        {
++            EGLint msaaMin[] = {
++                EGL_RENDERABLE_TYPE, renderable,
++                EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
++                EGL_BUFFER_SIZE,     32,
++                EGL_ALPHA_SIZE,      8,
++                EGL_DEPTH_SIZE,      24,
++                EGL_SAMPLE_BUFFERS,  1,
++                EGL_SAMPLES,         msaa,
++                EGL_NONE
++            };
++            EGLint msaaMax[] = {
++                EGL_BUFFER_SIZE,    32,
++                EGL_ALPHA_SIZE,     8,
++                EGL_DEPTH_SIZE,     24,
++                EGL_STENCIL_SIZE,   8,
++                EGL_SAMPLE_BUFFERS, 1,
++                EGL_SAMPLES,        msaa,
++                EGL_NONE
++            };
++            try
++            {
++                mEglConfig = mGLSupport->selectGLConfig(msaaMin, msaaMax);
++            }
++            catch (Exception&)
++            {
++                LogManager::getSingleton().logMessage(
++                    "SwitchEGLWindow: no config with FSAA " + StringConverter::toString(msaa) +
++                    ", falling back to no multisampling");
++                mEglConfig = 0;
++            }
++        }
++
++        if (!mEglConfig)
++            mEglConfig = mGLSupport->selectGLConfig(minAttribs, maxAttribs);
++
++        mEglSurface = createSurfaceFromWindow(mEglDisplay, mWindow);
++
++        mContext = createEGLContext();
++        mContext->setCurrent();
++
++        // switch-mesa does not report usable EGL_WIDTH/EGL_HEIGHT for an NWindow
++        // surface - it answers 0 - so only trust the query when it returns a real
++        // size, else keep what we asked the compositor for. Leaving these at 0
++        // gives every viewport zero size while a full glClear still fills the
++        // screen, which looks deceptively like success.
++        EGLint qw = 0, qh = 0;
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_WIDTH, &qw);
++        eglQuerySurface(mEglDisplay, mEglSurface, EGL_HEIGHT, &qh);
++        EGL_CHECK_ERROR
++
++        LogManager::getSingleton().logMessage(
++            "SwitchEGLWindow: eglQuerySurface reported " + StringConverter::toString(qw) +
++            "x" + StringConverter::toString(qh));
++
++        mWidth  = (qw > 0) ? (unsigned int)qw : (width  > 0 ? width  : 1280);
++        mHeight = (qh > 0) ? (unsigned int)qh : (height > 0 ? height : 720);
++
++        LogManager::getSingleton().logMessage(
++            "SwitchEGLWindow: created " + StringConverter::toString(mWidth) + "x" +
++            StringConverter::toString(mHeight) + (es ? " GLES2" : " desktop GL") +
++            " surface on the default NWindow");
++
++        mActive  = true;
++        mVisible = true;
++        mClosed  = false;
++
++        finaliseWindow();
++    }
++}

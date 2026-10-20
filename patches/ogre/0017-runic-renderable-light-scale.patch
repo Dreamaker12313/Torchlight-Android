@@ -1,0 +1,98 @@
+Torchlight: Runic's per-renderable light scale. Not __SWITCH__-guarded (both
+targets draw the console's units). The Xbox build's Renderable has a float at
++0x1c that CGenericModel::setLightOverride writes on every
+record's SubEntity, the unit's light faded by its distance from the camera
+focus and quantised to sixteenths, and Runic's AutoParamDataSource multiplies
+the surface ambient and emissive colours by
+it: a monster at the edge of the light is drawn at a quarter of its ambient,
+its outline at the same scale. Captured on the console: two skeletons of one
+material drawn in one frame with derived_scene_colour 0.1976 and 0.2223
+(palacemini2), the pet's outline at 0.75. The port passes the scale as the
+renderable's custom parameter 0x52554e43 (x), 1 when absent; the four
+parameters that depend on it are refreshed per object.
+
+diff --git a/OgreMain/src/OgreAutoParamDataSource.cpp b/OgreMain/src/OgreAutoParamDataSource.cpp
+index 2eb2046ca..1431b84f7 100644
+--- a/OgreMain/src/OgreAutoParamDataSource.cpp
++++ b/OgreMain/src/OgreAutoParamDataSource.cpp
+@@ -686,9 +686,28 @@ namespace Ogre {
+         return Vector4f(size[0], size[1], 1 / size[0], 1 / size[1]);
+     }
+     //-----------------------------------------------------------------------------
++    // Torchlight port: Runic's Renderable carries a light scale (X360 Renderable
++    // +0x1c, set by CGenericModel::setLightOverride on each record's
++    // SubEntity), and its AutoParamDataSource multiplies the surface ambient and
++    // emissive colours by it: the console's units
++    // darken with distance from the camera focus. The port hands it over as the
++    // renderable's custom parameter RunicLightScale (x); without one it is 1.
++    static const size_t RunicLightScale = 0x52554e43;
++    static float runicLightScale(const Renderable* rend)
++    {
++        if (rend && rend->hasCustomParameter(RunicLightScale))
++            return rend->getCustomParameter(RunicLightScale).x;
++        return 1.0f;
++    }
++    //-----------------------------------------------------------------------------
+     const ColourValue& AutoParamDataSource::getSurfaceAmbientColour(void) const
+     {
+-        return mCurrentPass->getAmbient();
++        // Torchlight port: scaled by the renderable's light, alpha kept.
++        static ColourValue scaled;
++        const ColourValue& ambient = mCurrentPass->getAmbient();
++        const float s = runicLightScale(mCurrentRenderable);
++        scaled = ColourValue(ambient.r * s, ambient.g * s, ambient.b * s, ambient.a);
++        return scaled;
+     }
+     //-----------------------------------------------------------------------------
+     const ColourValue& AutoParamDataSource::getSurfaceDiffuseColour(void) const
+@@ -703,7 +722,14 @@ namespace Ogre {
+     //-----------------------------------------------------------------------------
+     const ColourValue& AutoParamDataSource::getSurfaceEmissiveColour(void) const
+     {
+-        return mCurrentPass->getSelfIllumination();
++        // Torchlight port: scaled by the renderable's light, and its alpha the
++        // ambient's, as Runic's does (reads the pass's +0x4c).
++        static ColourValue scaled;
++        const ColourValue& emissive = mCurrentPass->getSelfIllumination();
++        const float s = runicLightScale(mCurrentRenderable);
++        scaled = ColourValue(emissive.r * s, emissive.g * s, emissive.b * s,
++                             mCurrentPass->getAmbient().a);
++        return scaled;
+     }
+     //-----------------------------------------------------------------------------
+     Real AutoParamDataSource::getSurfaceShininess(void) const
+diff --git a/OgreMain/src/OgreGpuProgramParams.cpp b/OgreMain/src/OgreGpuProgramParams.cpp
+index ff8e4a67f..06c0a458f 100644
+--- a/OgreMain/src/OgreGpuProgramParams.cpp
++++ b/OgreMain/src/OgreGpuProgramParams.cpp
+@@ -944,6 +944,15 @@ namespace Ogre
+     {
+         switch(act)
+         {
++        // Torchlight port: the surface ambient and emissive colours, and what is
++        // derived from them, follow the renderable's light scale
++        // (OgreAutoParamDataSource.cpp), so they are refreshed per object too.
++        case ACT_DERIVED_AMBIENT_LIGHT_COLOUR:
++        case ACT_DERIVED_SCENE_COLOUR:
++        case ACT_SURFACE_AMBIENT_COLOUR:
++        case ACT_SURFACE_EMISSIVE_COLOUR:
++            return (uint16)(GPV_GLOBAL | GPV_PER_OBJECT);
++
+         case ACT_VIEW_MATRIX:
+         case ACT_INVERSE_VIEW_MATRIX:
+         case ACT_TRANSPOSE_VIEW_MATRIX:
+@@ -959,14 +968,10 @@ namespace Ogre
+         case ACT_RENDER_TARGET_FLIPPING:
+         case ACT_VERTEX_WINDING:
+         case ACT_AMBIENT_LIGHT_COLOUR:
+-        case ACT_DERIVED_AMBIENT_LIGHT_COLOUR:
+-        case ACT_DERIVED_SCENE_COLOUR:
+         case ACT_FOG_COLOUR:
+         case ACT_FOG_PARAMS:
+-        case ACT_SURFACE_AMBIENT_COLOUR:
+         case ACT_SURFACE_DIFFUSE_COLOUR:
+         case ACT_SURFACE_SPECULAR_COLOUR:
+-        case ACT_SURFACE_EMISSIVE_COLOUR:
+         case ACT_SURFACE_SHININESS:
+         case ACT_SURFACE_ALPHA_REJECTION_VALUE:
+         case ACT_CAMERA_POSITION:

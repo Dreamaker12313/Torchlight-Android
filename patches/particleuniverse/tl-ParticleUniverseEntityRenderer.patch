@@ -1,0 +1,699 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRenderer.h
+index d7a0dc4..9fd17f2 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRenderer.h
+@@ -28,25 +28,47 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #include "ParticleUniverseRenderer.h"
+ #include "ParticleUniverseIVisualData.h"
+ #include "OgreSceneNode.h"
++#include "OgreSceneManager.h"
+ 
+ namespace ParticleUniverse
+ {
+-	/** Visual data specific for this type of renderer.
+-    */
++	/** Visual data specific for this type of renderer: one node, made unnamed by the renderer's
++		`_prepare`, and the scene manager that destroys it. Torchlight's node inherits its parent's
++		scale (the library's turns that off).
++	*/
+ 	class _ParticleUniverseExport EntityRendererVisualData : public IVisualData
+ 	{
+ 		public:
+-			EntityRendererVisualData (Ogre::SceneNode* sceneNode) : IVisualData(), node(sceneNode)
++			EntityRendererVisualData (Ogre::SceneNode* sceneNode, Ogre::SceneManager* manager) :
++				IVisualData(),
++				node(sceneNode),
++				sceneManager(manager){};
++
++			/** Torchlight: `EntityRendererVisualData::~EntityRendererVisualData`
++				: the node taken off its parent and destroyed.
++			*/
++			virtual ~EntityRendererVisualData(void)
+ 			{
+-				// If the parentnode scales, the childnodes may not be scaled because of that
+-				sceneNode->setInheritScale(false);
++				if (node)
++				{
++					if (node->getParentSceneNode())
++					{
++						node->getParentSceneNode()->removeChild(node);
++					}
++					sceneManager->destroySceneNode(node);
++				}
+ 			};
+-			Ogre::SceneNode* node;
++
++			Ogre::SceneNode* node;              // +0x8
++			Ogre::SceneManager* sceneManager;   // +0x10
++
++			/** Torchlight: `EntityRendererVisualData::setVisible`, cascading.
++			*/
+ 			virtual void setVisible(bool visible)
+ 			{
+ 				if (node)
+ 				{
+-					node->setVisible(visible);
++					node->setVisible(visible, true);
+ 				}
+ 			};
+ 	};
+@@ -80,26 +102,29 @@ namespace ParticleUniverse
+ 			/** Deletes all ChildSceneNodes en Entities.
+ 			*/
+ 			void _destroyAll(void);
+-			
+-			/** Disable all ChildSceneNodes.
++
++			/** Torchlight: `EntityRenderer::_notifyStop`: the nodes hidden, then
++				everything destroyed; the next `_prepare` builds it again.
+ 			*/
+-//			virtual void _notifyStop(void);
+-			
+-			/** Make all objects visible or invisible.
++			virtual void _notifyStop(void);
++
++			/** Torchlight: `EntityRenderer::setVisible`. Only hides: the nodes are shown
++				again one by one in `_updateRenderQueue`. The renderer's own flag is not touched.
+ 			*/
+ 			virtual void setVisible(bool visible);
+ 
+ 			/** @copydoc ParticleRenderer::_prepare */
+ 			virtual void _prepare(ParticleTechnique* technique);
+ 
+-			/** @copydoc ParticleRenderer::_unprepare */
+-			virtual void _unprepare(ParticleTechnique* technique);
++			/** Torchlight: `EntityRenderer::_releaseParticles`.
++			*/
++			virtual void _releaseParticles(ParticlePool* pool);
+ 
+ 			/** 
+ 			*/
+ 			virtual void _updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool);
+ 
+-			/** 
++			/** Torchlight: `EntityRenderer::_notifyAttached` does nothing.
+ 			*/
+ 			virtual void _notifyAttached(Ogre::Node* parent, bool isTagPoint = false);
+ 
+@@ -146,10 +171,20 @@ namespace ParticleUniverse
+ 			*/
+ 			void setEntityOrientationType(const EntityOrientationType& entityOrientationType);
+ 
+-			/** 
++			/**
+ 			*/
+ 			virtual void copyAttributesTo (ParticleRenderer* renderer);
+ 
++			/** The port's own. DIVERGENCE: Torchlight never frees the material clones its
++				entities are given (`_prepare`, `_setMaterialName`), so every
++				system built and stopped leaves them in the material manager; on the console that
++				memory is scarce. The port installs this to release a clone the renderer has let
++				go of, with the shader generator's techniques for it. Unset, the clones stay, as
++				in Torchlight. Nothing drawn changes either way.
++			*/
++			typedef void (*MaterialCloneReleaser)(const Ogre::MaterialPtr& material);
++			static void setMaterialCloneReleaser(MaterialCloneReleaser releaser);
++
+ 		protected:
+ 			vector<EntityRendererVisualData*> mAllVisualData;
+ 			vector<EntityRendererVisualData*> mVisualData;
+@@ -163,9 +198,17 @@ namespace ParticleUniverse
+ 			bool mZRotated;
+ 			EntityOrientationType mEntityOrientationType;
+ 
+-			/** Make all nodes to which the entities are attached visible or invisible.
++			/** Torchlight (+0x80): the system's scene manager, stored by `_prepare`. */
++			Ogre::SceneManager* mSceneManager;
++
++			/** The port's own: the material each entity was given, a clone of its own
++				(see `_giveEntityMaterial`). */
++			vector<Ogre::MaterialPtr> mEntityMaterials;
++
++			/** Torchlight: an entity's material is a clone of its own, named by
++				`uniqueName("pum")`; the port releases the one it replaces.
+ 			*/
+-			void _makeNodesVisible(bool visible);
++			void _giveEntityMaterial(size_t index, const Ogre::MaterialPtr& material);
+ 	};
+ 
+ }
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseEntityRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseEntityRenderer.cpp
+index 9566806..73b5748 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseEntityRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseEntityRenderer.cpp
+@@ -36,13 +36,30 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #include "OgreMesh.h"
+ #include "OgreTechnique.h"
+ 
++#include "OgreMaterialManager.h"
++#include "OgrePass.h"
++
+ namespace ParticleUniverse
+ {
+ 	// Constants
+ 	const EntityRenderer::EntityOrientationType EntityRenderer::DEFAULT_ORIENTATION_TYPE = EntityRenderer::ENT_ORIENTED_SHAPE;
+ 
++	namespace
++	{
++		EntityRenderer::MaterialCloneReleaser sMaterialCloneReleaser = 0;
++
++		/** Torchlight: `uniqueName`: the prefix, a star, then a count that starts at 1.
++		*/
++		String torchlightUniqueName(const String& prefix)
++		{
++			static unsigned int uniqueNameValue = 0;
++			return prefix + "*" + StringConverter::toString(++uniqueNameValue);
++		}
++	}
+ 	//-----------------------------------------------------------------------
+-	EntityRenderer::EntityRenderer(void) : 
++	// Torchlight: `EntityRenderer::EntityRenderer`. Oriented by shape until told
++	// otherwise, a unit box.
++	EntityRenderer::EntityRenderer(void) :
+ 		ParticleRenderer(),
+ 		mQuota(0),
+ 		mMeshName(BLANK_STRING),
+@@ -51,34 +68,46 @@ namespace ParticleUniverse
+ 		mBoxHeight(1.0),
+ 		mBoxDepth(1.0),
+ 		mZRotated(false),
+-		mEntityOrientationType(DEFAULT_ORIENTATION_TYPE)
++		mEntityOrientationType(DEFAULT_ORIENTATION_TYPE),
++		mSceneManager(0)
+ 	{
+-		autoRotate = true; // Because the nodes inherit the orientation from the parent
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::~EntityRenderer`: everything destroyed once
++	// `_prepare` has stored the scene manager.
+ 	EntityRenderer::~EntityRenderer(void)
+ 	{
+-		if (!mParentTechnique)
++		if (!mSceneManager)
+ 			return;
+-		
++
++		mRendererInitialised = false;
+ 		_destroyAll();
+ 	}
+ 	//-----------------------------------------------------------------------
++	void EntityRenderer::setMaterialCloneReleaser(MaterialCloneReleaser releaser)
++	{
++		sMaterialCloneReleaser = releaser;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::getEntityOrientationType`: the same as the library's.
+ 	const EntityRenderer::EntityOrientationType& EntityRenderer::getEntityOrientationType(void) const
+ 	{
+ 		return mEntityOrientationType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::setEntityOrientationType`: the same as the library's.
+ 	void EntityRenderer::setEntityOrientationType(const EntityRenderer::EntityOrientationType& entityOrientationType)
+ 	{
+ 		mEntityOrientationType = entityOrientationType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::getMeshName`: the same as the library's.
+ 	const String& EntityRenderer::getMeshName(void) const
+ 	{
+ 		return mMeshName;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::setMeshName`.
+ 	void EntityRenderer::setMeshName(const String& meshName)
+ 	{
+ 		mMeshName = meshName;
+@@ -86,157 +115,217 @@ namespace ParticleUniverse
+ 		_destroyAll(); // Delete all nodes en entities, they will be rebuild
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void EntityRenderer::_unprepare(ParticleTechnique* technique)
++	// Torchlight: `EntityRenderer::_notifyStop`.
++	void EntityRenderer::_notifyStop(void)
+ 	{
+-		mRendererInitialised = false; // Retriggers the _prepare function
+-		_destroyAll(); // Delete all nodes, they will be rebuild
++		setVisible(false);
++		mRendererInitialised = false;
++		_destroyAll();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_destroyAll`. The visual data destroy their own
++	// nodes; the entities are found by name; the pool's particles forget their visual data.
+ 	void EntityRenderer::_destroyAll(void)
+ 	{
+-		if (!mParentTechnique)
+-			return;
+-
+-
+-		// Delete the visual data
+ 		vector<EntityRendererVisualData*>::const_iterator it;
+ 		vector<EntityRendererVisualData*>::const_iterator itEnd = mAllVisualData.end();
+ 		for (it = mAllVisualData.begin(); it != itEnd; ++it)
+ 		{
+-			PU_DELETE_T(*it, EntityRendererVisualData, MEMCATEGORY_SCENE_OBJECTS);
++			if (*it)
++			{
++				PU_DELETE_T(*it, EntityRendererVisualData, MEMCATEGORY_SCENE_OBJECTS);
++			}
+ 		}
+-
+ 		mAllVisualData.clear();
+ 		mVisualData.clear();
+ 
+-		// V1.5: Destroy the created ChildSceneNodes (which leads to detaching the Entities)
+-		if (mParentTechnique->getParentSystem())
++		// Torchlight reaches the scene manager unchecked; the quota is 0 until `_prepare` ran.
++		for (size_t i = 0; mSceneManager && i < mQuota; i++)
+ 		{
+-			Ogre::SceneNode* parentNode = mParentTechnique->getParentSystem()->getParentSceneNode();
+-			if (parentNode)
++			const String name = mEntityName + StringConverter::toString(i);
++			if (mSceneManager->hasEntity(name))
+ 			{
+-				String sceneNodeName;
+-				std::stringstream ss; 
+-				unsigned short numChilds = parentNode->numChildren();
+-				for (unsigned short i = 0; i < numChilds; ++i)
+-				{
+-					Ogre::Node* node = parentNode->getChild(i);
+-					if (node)
+-					{
+-						Ogre::String name = node->getName();
+-						if (name.find("ParticleUniverse") != Ogre::String::npos)
+-						{
+-							parentNode->removeAndDestroyChild(i);
+-						}
+-					}
+-				}
++				mSceneManager->destroyEntity(name);
+ 			}
+-		} // V1.5
++		}
++		mEntities.clear();
+ 
+-		// Destroy the Entities. Do it like this, because it must be assured that the entity still exists
+-		// and has not already been destroyed.
+-		Ogre::SceneManager* sceneManager = mParentTechnique->getParentSystem()->getSceneManager();
+-		for (size_t i = 0; i < mQuota; i++)
++		// The port's own: see setMaterialCloneReleaser.
++		if (sMaterialCloneReleaser)
+ 		{
+-			if (sceneManager->hasEntity(mEntityName + StringConverter::toString(i)))
++			vector<Ogre::MaterialPtr>::const_iterator itMaterial;
++			for (itMaterial = mEntityMaterials.begin(); itMaterial != mEntityMaterials.end(); ++itMaterial)
+ 			{
+-				sceneManager->destroyEntity(mEntityName + StringConverter::toString(i));
++				if (*itMaterial)
++				{
++					sMaterialCloneReleaser(*itMaterial);
++				}
+ 			}
+ 		}
+-		mEntities.clear();
++		mEntityMaterials.clear();
+ 
+-		// Reset the visual data in the pool
+-		mParentTechnique->initVisualDataInPool();
++		if (mParentTechnique)
++		{
++			mParentTechnique->initVisualDataInPool();
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::setVisible`.
+ 	void EntityRenderer::setVisible(bool visible)
+ 	{
+-		ParticleRenderer::setVisible(visible);
++		if (visible)
++			return;
+ 
+-		 // Always make the nodes invisible; they are made visible in the next _updateRenderQueue() call if visible is true.
+-		_makeNodesVisible(false);
+-	}
+-	//-----------------------------------------------------------------------
+-	void EntityRenderer::_makeNodesVisible(bool visible)
+-	{
+ 		vector<EntityRendererVisualData*>::const_iterator it;
+ 		vector<EntityRendererVisualData*>::const_iterator itEnd = mAllVisualData.end();
+ 		for (it = mAllVisualData.begin(); it != itEnd; ++it)
+ 		{
+-			(*it)->node->setVisible(visible);
++			(*it)->node->setVisible(false, true);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void EntityRenderer::_prepare(ParticleTechnique* technique)
++	void EntityRenderer::_giveEntityMaterial(size_t index, const Ogre::MaterialPtr& material)
+ 	{
+-		/** 
+-			- This renderer is a �hacky� solution to display geometry-based particles. It pre-creates a 
+-			number of SceneNodes (childs of the parent Node to which the ParticleSystem is attached) and 
+-			Entities and uses these pools to display the particles. There are better solutions, but 
+-			this one is simple and fast enough, although it has some drawbacks.
+-			- Future solutions should rather make use of hardware instancing to display a large number of
+-			geometry-based particles at once.
+-		*/
++		Ogre::MaterialPtr clone = material->clone(torchlightUniqueName("pum"));
++
++		// The port's own plumbing, for OGRE 14. `_updateRenderQueue` turns the clone's lighting
++		// on before its first draw, which OGRE 1.6's fixed-function pipeline took at once; the
++		// shader generator builds a clone's shaders once, so it has to see lighting on from the
++		// start. And the technique's material tracks vertex colour for the billboards (OGRE 14's
++		// generated shaders read it only when asked; `createTextureMaterial` in the glue), which
++		// Torchlight's did not: lit, the entity would take its diffuse from the mesh's vertices
++		// instead of the black `_updateRenderQueue` gives it. A mesh's own material is left as
++		// its script wrote it.
++		clone->setLightingEnabled(true);
++		if (mParentTechnique && material->getName() == mParentTechnique->getMaterialName())
++		{
++			for (unsigned short t = 0; t < clone->getNumTechniques(); ++t)
++			{
++				Ogre::Technique* technique = clone->getTechnique(t);
++				for (unsigned short p = 0; p < technique->getNumPasses(); ++p)
++				{
++					technique->getPass(p)->setVertexColourTracking(Ogre::TVC_NONE);
++				}
++			}
++		}
+ 
+-		// Use the given technique, although it should be the same as mParentTechnique (must be set already)
+-		if (!technique || mRendererInitialised)
++		mEntities[index]->setMaterial(clone);
++		if (mEntityMaterials[index] && sMaterialCloneReleaser)
++		{
++			sMaterialCloneReleaser(mEntityMaterials[index]);
++		}
++		mEntityMaterials[index] = clone;
++	}
++	//-----------------------------------------------------------------------
++	/** Torchlight: `EntityRenderer::_prepare`.
++
++		Nothing without a mesh. A node per particle of the quota, unnamed, under the system's
++		node, and an entity cloned for each from one made and destroyed here. Every entity has
++		a material of its own, a clone of the technique's - or of the mesh's first material
++		when the technique's has no texture - because `_updateRenderQueue` colours each
++		particle through its material. The mesh's box is kept but used nowhere.
++	*/
++	void EntityRenderer::_prepare(ParticleTechnique* technique)
++	{
++		if (!technique || mRendererInitialised || mMeshName == BLANK_STRING)
+ 			return;
+ 
+-		std::stringstream ss; 
++		mParentTechnique = technique;
++		std::stringstream ss;
+ 		ss << this;
+ 		mEntityName = mMeshName + ss.str();
+ 		mQuota = technique->getVisualParticleQuota();
+ 		Ogre::SceneNode* parentNode = technique->getParentSystem()->getParentSceneNode();
+-		Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().load(mMeshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+-		Ogre::Mesh* meshPointer = mesh.get();
+-		Vector3 size = meshPointer->getBounds().getSize();
++
++		// OGRE 1.6's `MeshManager::load(name, DEFAULT group)`. The port has loaded the mesh
++		// already (the glue's model), and OGRE 14 finds it in whichever group holds it; a mesh
++		// that fails to load leaves the renderer unprepared, as the original's null pointer does.
++		Ogre::MeshPtr mesh;
++		try
++		{
++			mesh = Ogre::MeshManager::getSingleton().load(mMeshName, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
++		}
++		catch (const Ogre::Exception&)
++		{
++			return;
++		}
++		if (!mesh)
++			return;
++
++		Vector3 size = mesh->getBounds().getSize();
+ 		mBoxWidth = size.x == 0.0f ? 1.0f : size.x;
+ 		mBoxHeight = size.y == 0.0f ? 1.0f : size.y;
+ 		mBoxDepth = size.z == 0.0f ? 1.0f : size.z;
+ 
+ 		if (parentNode)
+ 		{
+-			// Create number of VisualData objects including SceneNodes
+-			String sceneNodeName;
++			mSceneManager = technique->getParentSystem()->getSceneManager();
+ 			for (size_t i = 0; i < mQuota; i++)
+ 			{
+-				sceneNodeName = "ParticleUniverse" + ss.str() + StringConverter::toString(i);
+-				EntityRendererVisualData* visualData = 
+-					PU_NEW_T(EntityRendererVisualData, MEMCATEGORY_SCENE_OBJECTS)(parentNode->createChildSceneNode(sceneNodeName));
+-
++				EntityRendererVisualData* visualData =
++					PU_NEW_T(EntityRendererVisualData, MEMCATEGORY_SCENE_OBJECTS)(
++						parentNode->createChildSceneNode(Vector3::ZERO, Quaternion::IDENTITY), mSceneManager);
+ 				mAllVisualData.push_back(visualData); // Managed by this renderer
+ 				mVisualData.push_back(visualData); // Used to assign to a particle
+ 			}
+ 
+-			// Create number of Entities
+-			Ogre::Entity* entity = technique->getParentSystem()->getSceneManager()->createEntity(mEntityName, mMeshName); // Base entity
+-			vector<EntityRendererVisualData*>::const_iterator it;
+-			vector<EntityRendererVisualData*>::const_iterator itEnd = mAllVisualData.end();
+-			size_t j;
+-			for (it = mAllVisualData.begin(), j = 0; it != itEnd; ++it, ++j)
++			Ogre::Entity* entity = mSceneManager->createEntity(mEntityName, mMeshName); // Base entity
++			Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(technique->getMaterialName());
++			Ogre::Technique* first = material ? material->getTechnique(0) : 0;
++			Ogre::Pass* pass = first ? first->getPass(0) : 0;
++			if (!pass || pass->getNumTextureUnitStates() == 0)
++			{
++				material = entity->getSubEntity(0)->getMaterial();
++			}
++
++			for (size_t j = 0; j < mAllVisualData.size(); ++j)
+ 			{
+ 				Ogre::Entity* clonedEntity = entity->clone(mEntityName + StringConverter::toString(j));
+-				clonedEntity->setMaterialName(technique->getMaterialName());
+-				clonedEntity->setRenderQueueGroup(mQueueId);
+ 				mEntities.push_back(clonedEntity);
+-				(*it)->node->attachObject(clonedEntity);
++				mEntityMaterials.push_back(Ogre::MaterialPtr());
++				_giveEntityMaterial(j, material);
++				clonedEntity->setRenderQueueGroup(mQueueId);
++				mAllVisualData[j]->node->attachObject(clonedEntity);
++				mAllVisualData[j]->node->setVisible(false, true);
+ 			}
+-			technique->getParentSystem()->getSceneManager()->destroyEntity(mEntityName);
++			mSceneManager->destroyEntity(mEntityName);
+ 		}
+-
+-		_makeNodesVisible(false);
+ 		mRendererInitialised = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void EntityRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
++	/** Torchlight: `EntityRenderer::_releaseParticles`: each particle's node hidden
++		and handed back.
++	*/
++	void EntityRenderer::_releaseParticles(ParticlePool* pool)
+ 	{
+-		// Always perform this one
+-		ParticleRenderer::_updateRenderQueue(queue, pool);
+-
+-		if (!mVisible)
++		if (pool->isEmpty(Particle::PT_VISUAL) || !mRendererInitialised)
+ 			return;
+ 
+-		// Fast check to determine whether there are visual particles
++		VisualParticle* particle = static_cast<VisualParticle*>(pool->getFirst(Particle::PT_VISUAL));
++		while (!pool->end(Particle::PT_VISUAL))
++		{
++			if (particle && particle->visualData)
++			{
++				particle->visualData->setVisible(false);
++				mVisualData.push_back(static_cast<EntityRendererVisualData*>(particle->visualData));
++				particle->visualData = 0;
++			}
++			particle = static_cast<VisualParticle*>(pool->getNext(Particle::PT_VISUAL));
++		}
++	}
++	//-----------------------------------------------------------------------
++	/** Torchlight: `EntityRenderer::_updateRenderQueue`.
++
++		Differs from the library throughout. No base-class call and no visibility test. The
++		node is placed with `setPosition`, relative to its parent: the particle's position plus
++		Torchlight's offset, less the system's derived position unless the technique keeps
++		local (turned by the parent node, as in the original). Its scale is the particle's size
++		itself, not divided by the mesh's box, so a 1 x 1 x 1 particle draws the mesh at its
++		own size. And each particle colours its entity through the entity's material: lit,
++		its colour as self-illumination, ambient and diffuse black with the colour's alpha.
++	*/
++	void EntityRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
++	{
+ 		if (pool->isEmpty(Particle::PT_VISUAL))
+ 			return;
+ 
+@@ -251,35 +340,42 @@ namespace ParticleUniverse
+ 					mVisualData.pop_back();
+ 				}
+ 
+-				if (particle->visualData)
++				EntityRendererVisualData* visualData = dynamic_cast<EntityRendererVisualData*>(particle->visualData);
++				Ogre::SceneNode* node = visualData ? visualData->node : 0;
++				if (node)
+ 				{
+-					Ogre::SceneNode* node = (static_cast<EntityRendererVisualData*>(particle->visualData))->node;
+-					if (node)
++					Vector3 position = particle->position + particle->torchlightVector28;
++					if (!mParentTechnique->isKeepLocal())
+ 					{
+-						node->_setDerivedPosition(particle->position);
++						position -= mParentTechnique->getParentSystem()->getDerivedPosition();
++					}
++					node->setPosition(position);
+ 
+-						if (mEntityOrientationType == ENT_ORIENTED_SHAPE)
+-						{
+-							// Use the orientation of the particle itself
+-							node->setOrientation(particle->orientation);
+-						}
+-						else if (mEntityOrientationType == ENT_ORIENTED_SELF)
+-						{
+-							// Rotate towards the direction
+-							node->setOrientation(Vector3::UNIT_X.getRotationTo(particle->direction));
+-						}
+-						else if (mEntityOrientationType == ENT_ORIENTED_SELF_MIRRORED)
+-						{
+-							// Rotate towards the negative direction
+-							node->setOrientation(Vector3::UNIT_X.getRotationTo(-particle->direction));
+-						}
++					if (mEntityOrientationType == ENT_ORIENTED_SHAPE)
++					{
++						node->setOrientation(particle->orientation);
++					}
++					else if (mEntityOrientationType == ENT_ORIENTED_SELF)
++					{
++						node->setOrientation(Vector3::UNIT_X.getRotationTo(particle->direction));
++					}
++					else if (mEntityOrientationType == ENT_ORIENTED_SELF_MIRRORED)
++					{
++						node->setOrientation(Vector3::UNIT_X.getRotationTo(-particle->direction));
++					}
+ 
+-						node->setVisible(true);
+-						node->setScale(particle->width / mBoxWidth, particle->height / mBoxHeight, particle->depth / mBoxDepth);
+-						if (mZRotated)
+-						{
+-							_rotateTexture(particle, static_cast<Ogre::Entity*>(node->getAttachedObject(0))); // We know for sure there is only one and it is an Entity*
+-						}
++					node->setVisible(true, true);
++					node->setScale(particle->width, particle->height, particle->depth);
++
++					Ogre::Entity* entity = static_cast<Ogre::Entity*>(node->getAttachedObject(0));
++					const Ogre::MaterialPtr& material = entity->getSubEntity(0)->getMaterial();
++					material->setLightingEnabled(true);
++					material->setSelfIllumination(particle->colour);
++					material->setAmbient(ColourValue(0.0f, 0.0f, 0.0f, particle->colour.a));
++					material->setDiffuse(ColourValue(0.0f, 0.0f, 0.0f, particle->colour.a));
++					if (mZRotated)
++					{
++						_rotateTexture(particle, entity);
+ 					}
+ 				}
+ 			}
+@@ -287,58 +383,67 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_notifyAttached`.
+ 	void EntityRenderer::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+-		_makeNodesVisible(parent); // If parent doesn't exist, make everything invisible
+ 	}
+ 	//-----------------------------------------------------------------------
++	/** Torchlight: `EntityRenderer::_setMaterialName`. A material with a texture
++		gives every entity a clone of its own; one without changes nothing.
++	*/
+ 	void EntityRenderer::_setMaterialName(const String& materialName)
+ 	{
+ 		if (mEntities.empty())
+ 			return;
+ 
+-		vector<Ogre::Entity*>::const_iterator itEntity = mEntities.begin();
+-		vector<Ogre::Entity*>::const_iterator itEntityEnd = mEntities.end();
+-		for (itEntity = mEntities.begin(); itEntity != itEntityEnd; ++itEntity)
++		Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(materialName);
++		Ogre::Technique* first = material ? material->getTechnique(0) : 0;
++		Ogre::Pass* pass = first ? first->getPass(0) : 0;
++		if (!pass || pass->getNumTextureUnitStates() == 0)
++			return;
++
++		for (size_t i = 0; i < mEntities.size(); ++i)
+ 		{
+-			(*itEntity)->setMaterialName(materialName);
++			_giveEntityMaterial(i, material);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::notifyCurrentCamera` does nothing.
+ 	void EntityRenderer::_notifyCurrentCamera(Camera* cam)
+ 	{
+-		// No implementation
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_notifyParticleQuota`.
+ 	void EntityRenderer::_notifyParticleQuota(size_t quota)
+ 	{
+ 		mRendererInitialised = false; // Retriggers the _prepare function
+ 		_destroyAll(); // Delete all nodes en entities, they will be rebuild
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_notifyDefaultDimensions`: the size itself, as
++	// `_updateRenderQueue` scales.
+ 	void EntityRenderer::_notifyDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+-		if (mAllVisualData.empty())
+-			return;
+-
+ 		vector<EntityRendererVisualData*>::const_iterator it;
+ 		vector<EntityRendererVisualData*>::const_iterator itEnd = mAllVisualData.end();
+ 		for (it = mAllVisualData.begin(); it != itEnd; ++it)
+ 		{
+-			(*it)->node->setScale(width/mBoxWidth, height/mBoxHeight, depth/mBoxDepth);
++			(*it)->node->setScale(width, height, depth);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_notifyParticleResized` does nothing.
+ 	void EntityRenderer::_notifyParticleResized(void)
+ 	{
+-		// This will be taken into account in the next _updateRenderQueue
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_notifyParticleZRotated`.
+ 	void EntityRenderer::_notifyParticleZRotated(void)
+ 	{
+ 		mZRotated = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_rotateTexture`, the same as the library's.
+ 	void EntityRenderer::_rotateTexture(VisualParticle* particle, Ogre::Entity* entity)
+ 	{
+ 		Ogre::TextureUnitState::EffectMap::const_iterator it;
+@@ -373,6 +478,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::setRenderQueueGroup`, the same as the library's.
+ 	void EntityRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
+ 		mQueueId = queueId;
+@@ -388,11 +494,13 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::_getSortMode`, the same as the library's.
+ 	SortMode EntityRenderer::_getSortMode(void) const
+ 	{
+ 		return SM_DISTANCE; // In fact there is no sorting
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `EntityRenderer::copyAttributesTo`, the same as the library's.
+ 	void EntityRenderer::copyAttributesTo (ParticleRenderer* renderer)
+ 	{
+ 		// First copy parent attributes

@@ -1,0 +1,126 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitter.h
+index 78e4e5c..a88fb7f 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitter.h
+@@ -50,6 +50,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_DEPTH;
+ 
+ 			BoxEmitter(void);
++	        // Torchlight: `BoxEmitter::~BoxEmitter`: the same as the library's.
+ 	        virtual ~BoxEmitter(void) {};
+ 
+ 			/** 
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseBoxEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseBoxEmitter.cpp
+index 68d58f2..75245f0 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseBoxEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseBoxEmitter.cpp
+@@ -31,12 +31,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`BoxEmitter::_GLOBAL__I_BoxEmitter`) sets
++	// only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Real BoxEmitter::DEFAULT_WIDTH = 100.0f;
+ 	const Real BoxEmitter::DEFAULT_HEIGHT = 100.0f;
+ 	const Real BoxEmitter::DEFAULT_DEPTH = 100.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `BoxEmitter::BoxEmitter`: 100 each way, half-ranges 50.
+ 	BoxEmitter::BoxEmitter(void) : 
+ 		ParticleEmitter(),
+ 		mWidth(DEFAULT_WIDTH),
+@@ -48,68 +51,78 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::getHeight`: the same as the library's.
+ 	const Real BoxEmitter::getHeight(void) const
+ 	{
+ 		return mHeight;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::setHeight`: the same as the library's.
+ 	void BoxEmitter::setHeight(const Real height)
+ 	{
+ 		mHeight = height;
+ 		mYRange = 0.5f * height;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::getWidth`: the same as the library's.
+ 	const Real BoxEmitter::getWidth(void) const
+ 	{
+ 		return mWidth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::setWidth`: the same as the library's.
+ 	void BoxEmitter::setWidth(const Real width)
+ 	{
+ 		mWidth = width;
+ 		mXRange = 0.5f * width;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::getDepth`: the same as the library's.
+ 	const Real BoxEmitter::getDepth(void) const
+ 	{
+ 		return mDepth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::setDepth`: the same as the library's.
+ 	void BoxEmitter::setDepth(const Real depth)
+ 	{
+ 		mDepth = depth;
+ 		mZRange = 0.5f * depth;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::_initParticlePosition`. The three draws are made z, y,
++	// x. Keep local: the emitter's own position, scaled, plus the unscaled offset (the particle
++	// stays in the technique's space). Otherwise the scaled offset turned by the system and put at
++	// the emitter's derived position. Torchlight's third particle vector is zeroed.
+ 	void BoxEmitter::_initParticlePosition(Particle* particle)
+ 	{
+-		ParticleSystem* sys = mParentTechnique->getParentSystem();
+-		if (sys)
++		Real z = Math::SymmetricRandom();
++		Real y = Math::SymmetricRandom();
++		Real x = Math::SymmetricRandom();
++		if (!isKeepLocal())
+ 		{
+-			particle->position = getDerivedPosition() + 
+-				sys->getDerivedOrientation() *
+-				(_mEmitterScale *
+-				Vector3(Math::SymmetricRandom() * mXRange,
+-					Math::SymmetricRandom() * mYRange,
+-					Math::SymmetricRandom() * mZRange));
++			Vector3 offset(x * mXRange * _mEmitterScale.x, mYRange * y * _mEmitterScale.y, mZRange * z * _mEmitterScale.z);
++			particle->position = getDerivedPosition() + mParentTechnique->getParentSystem()->getDerivedOrientation() * offset;
+ 		}
+ 		else
+ 		{
+-			particle->position = getDerivedPosition() + 
+-				_mEmitterScale *
+-				Vector3(Math::SymmetricRandom() * mXRange,
+-					Math::SymmetricRandom() * mYRange,
+-					Math::SymmetricRandom() * mZRange);
++			particle->position.x = x * mXRange + _mEmitterScale.x * position.x;
++			particle->position.y = _mEmitterScale.y * position.y + mYRange * y;
++			particle->position.z = _mEmitterScale.z * position.z + mZRange * z;
+ 		}
+-
++		particle->torchlightVector28 = Vector3::ZERO;
+ 		particle->originalPosition = particle->position;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxEmitter::copyAttributesTo`: the box only onto another Box emitter
++	// (a dynamic_cast, where the library casts whatever it is given).
+ 	void BoxEmitter::copyAttributesTo (ParticleEmitter* emitter)
+ 	{
+ 		ParticleEmitter::copyAttributesTo(emitter);
+ 
+-		BoxEmitter* boxEmitter = static_cast<BoxEmitter*>(emitter);
++		BoxEmitter* boxEmitter = dynamic_cast<BoxEmitter*>(emitter);
++		if (!boxEmitter)
++			return;
+ 		boxEmitter->mHeight = mHeight;
+ 		boxEmitter->mWidth = mWidth;
+ 		boxEmitter->mDepth = mDepth;

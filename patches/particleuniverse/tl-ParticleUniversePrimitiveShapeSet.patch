@@ -1,0 +1,184 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniversePrimitiveShapeSet.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniversePrimitiveShapeSet.h
+index 9f52166..a7b780f 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniversePrimitiveShapeSet.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniversePrimitiveShapeSet.h
+@@ -173,6 +173,7 @@ namespace ParticleUniverse
+ 
+ 			/** @see MovableObject
+ 		    */
++			// Torchlight: `PrimitiveShapeSet::visitRenderables`: the same as the library's.
+ 			virtual void visitRenderables(Ogre::Renderable::Visitor* visitor,
+ 				bool debugRenderables = false) {/* No implementation */};
+ 	};
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniversePrimitiveShapeSet.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniversePrimitiveShapeSet.cpp
+index c142291..7db7f30 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniversePrimitiveShapeSet.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniversePrimitiveShapeSet.cpp
+@@ -35,7 +35,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`PrimitiveShapeSet::_GLOBAL__I_PrimitiveShapeSet`)
++	// sets up only the stream library, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::PrimitiveShapeSet`: the same as the library's.
+ 	PrimitiveShapeSet::PrimitiveShapeSet(void) :
+ 		mBoundingRadius(0.0f), 
+ 		mWorldSpace(false),
+@@ -47,6 +50,7 @@ namespace ParticleUniverse
+ 		mCastShadows = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::PrimitiveShapeSet`, the library's: BaseWhite, no shadows.
+ 	PrimitiveShapeSet::PrimitiveShapeSet(const String& name, unsigned int poolSize, bool externalData) :
+ 		MovableObject(name),
+ 		mBoundingRadius(0.0f), 
+@@ -59,54 +63,60 @@ namespace ParticleUniverse
+ 		mCastShadows = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::~PrimitiveShapeSet`: the same as the library's.
+ 	PrimitiveShapeSet::~PrimitiveShapeSet(void)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::setMaterialName` looks the material up and
++	// loads it whatever the manager's auto-load setting (it has none to read).
+ 	void PrimitiveShapeSet::setMaterialName(const String& name)
+ 	{
+ 		mMaterialName = name;
+ 
+-		if (ParticleSystemManager::getSingletonPtr()->isAutoLoadMaterials())
+-		{
+-			mpMaterial = Ogre::MaterialManager::getSingleton().getByName(name);
++		mpMaterial = Ogre::MaterialManager::getSingleton().getByName(name);
+ 
+-			if (!mpMaterial)
+-				EXCEPT(Exception::ERR_ITEM_NOT_FOUND, "Could not find material " + name,
+-				"PrimitiveShapeSet::setMaterialName" );
+-	
+-			/** Load material if not already loaded
+-			*/
+-			mpMaterial->load();
+-		}
++		if (!mpMaterial)
++			EXCEPT(Exception::ERR_ITEM_NOT_FOUND, "Could not find material " + name,
++			"PrimitiveShapeSet::setMaterialName" );
++
++		/** Load material if not already loaded
++		*/
++		mpMaterial->load();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getMaterialName`: the same as the library's.
+ 	const String& PrimitiveShapeSet::getMaterialName(void) const
+ 	{
+ 		return mMaterialName;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::notifyCurrentCamera`, the library's.
+ 	void PrimitiveShapeSet::_notifyCurrentCamera(Camera* cam)
+     {
+ 		Ogre::MovableObject::_notifyCurrentCamera(cam);
+ 		mCurrentCamera = cam;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getBoundingBox`: the same as the library's.
+ 	const AxisAlignedBox& PrimitiveShapeSet::getBoundingBox(void) const
+ 	{
+ 		return mAABB;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getMaterial`: the same as the library's.
+ 	const Ogre::MaterialPtr& PrimitiveShapeSet::getMaterial(void) const
+ 	{
+ 		return mpMaterial;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::_notifyResized`: the same as the library's.
+ 	void PrimitiveShapeSet::_notifyResized(void)
+ 	{
+ 		mAllDefaultSize = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getWorldTransforms`, the library's: identity in world space.
+ 	void PrimitiveShapeSet::getWorldTransforms(Ogre::Matrix4* xform) const
+ 	{
+ 		if (mWorldSpace)
+@@ -119,31 +129,37 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++    // Torchlight: `PrimitiveShapeSet::getWorldOrientation`: the same as the library's.
+     const Quaternion& PrimitiveShapeSet::getWorldOrientation(void) const
+ 	{
+ 		return mParentNode->_getDerivedOrientation();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getWorldPosition`: the same as the library's.
+ 	const Vector3& PrimitiveShapeSet::getWorldPosition(void) const
+ 	{
+ 		return mParentNode->_getDerivedPosition();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::setZRotated`: the same as the library's.
+ 	void PrimitiveShapeSet::setZRotated(bool zRotated)
+ 	{
+ 		mZRotated = zRotated;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::isZRotated`: the same as the library's.
+ 	bool PrimitiveShapeSet::isZRotated(void) const
+ 	{
+ 		return mZRotated;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::_notifyZRotated`: the same as the library's.
+ 	void PrimitiveShapeSet::_notifyZRotated(void)
+ 	{
+ 		mZRotated = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::rotateTexture`, the library's: a rotation added where a unit has none.
+ 	void PrimitiveShapeSet::rotateTexture(Real speed)
+ 	{
+ 		// Get the material and rotate it, assume the material is loaded already, otherwise skip.
+@@ -177,32 +193,38 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::isCullIndividually`: the same as the library's.
+ 	bool PrimitiveShapeSet::isCullIndividually(void) const
+ 	{
+ 		return mCullIndividual;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::setCullIndividually`: the same as the library's.
+ 	void PrimitiveShapeSet::setCullIndividually(bool cullIndividual)
+ 	{
+ 		mCullIndividual = cullIndividual;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getTypeFlags`: the same as the library's.
+ 	uint32 PrimitiveShapeSet::getTypeFlags(void) const
+ 	{
+ 		return Ogre::SceneManager::FX_TYPE_MASK;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getSquaredViewDepth`, the library's.
+ 	Real PrimitiveShapeSet::getSquaredViewDepth(const Camera* const cam) const
+ 	{
+ 		assert(mParentNode);
+ 		return mParentNode->getSquaredViewDepth(cam);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getBoundingRadius`: the same as the library's.
+ 	Real PrimitiveShapeSet::getBoundingRadius(void) const
+ 	{
+ 		return mBoundingRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `PrimitiveShapeSet::getLights`: the same as the library's.
+ 	const Ogre::LightList& PrimitiveShapeSet::getLights(void) const
+ 	{
+ 		return queryLights();

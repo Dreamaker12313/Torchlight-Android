@@ -1,0 +1,47 @@
+Torchlight: RTSS's linear skinning blend reads the bone matrices where they are
+declared instead of through a copy. `blendBonesMat3x4` took the whole
+`mat3x4 bones_mat[BONE_COUNT]` uniform array as an `in` parameter, which GLSL
+copies - up to 64 matrices a vertex on the phone - and Adreno 750's compiler
+(GLES 3.2, the Android build) got that copy wrong: vertices of skinned models
+were thrown off them as long spikes ("lines shooting from the NPCs"), on some
+frames and not others. CPU skinning (`--cpu-skinning`) drew the same frames
+clean, and so does this, with GPU skinning on (scratch run 2026-10-19: the town
+horse spiked in 2 of 3 frames before, 0 of 11 after). Desktop GL draws the same
+models with it. A macro per WEIGHT_COUNT, same arithmetic and order as the
+function. Not __SWITCH__-guarded: a GLSL library file every GLES target reads.
+
+diff --git a/Media/RTShaderLib/SGXLib_DualQuaternion.glsl b/Media/RTShaderLib/SGXLib_DualQuaternion.glsl
+index e9a64a3f2..3efbb91c3 100644
+--- a/Media/RTShaderLib/SGXLib_DualQuaternion.glsl
++++ b/Media/RTShaderLib/SGXLib_DualQuaternion.glsl
+@@ -157,16 +157,16 @@ void blendBonesDQ(mat2x4 bones_dq[BONE_COUNT], vec4 indices, vec4 weights, out m
+ 	blendDQ /= length(blendDQ[0]); // normalise dual quaternion
+ }
+ 
+-void blendBonesMat3x4(mat3x4 bones_mat[BONE_COUNT], vec4 indices, vec4 weights, out mat3x4 blendMat)
+-{
+-	blendMat = bones_mat[int(indices.x)] * weights.x;
+-#if WEIGHT_COUNT > 1
+-	blendMat += bones_mat[int(indices.y)] * weights.y;
+-#endif
+-#if WEIGHT_COUNT > 2
+-	blendMat += bones_mat[int(indices.z)] * weights.z;
+-#endif
++// Torchlight: a macro, not a function. As a function the whole bone array is
++// an `in` parameter - a copy of up to BONE_COUNT matrices per vertex - and
++// Adreno's compiler gets it wrong: vertices thrown off the model as spikes.
++// Indexing the uniform where it is declared draws the same blend.
+ #if WEIGHT_COUNT > 3
+-	blendMat += bones_mat[int(indices.w)] * weights.w;
+-#endif
+-}
+\ No newline at end of file
++#define blendBonesMat3x4(bones_mat, indices, weights, blendMat) blendMat = bones_mat[int(indices.x)] * weights.x + bones_mat[int(indices.y)] * weights.y + bones_mat[int(indices.z)] * weights.z + bones_mat[int(indices.w)] * weights.w
++#elif WEIGHT_COUNT > 2
++#define blendBonesMat3x4(bones_mat, indices, weights, blendMat) blendMat = bones_mat[int(indices.x)] * weights.x + bones_mat[int(indices.y)] * weights.y + bones_mat[int(indices.z)] * weights.z
++#elif WEIGHT_COUNT > 1
++#define blendBonesMat3x4(bones_mat, indices, weights, blendMat) blendMat = bones_mat[int(indices.x)] * weights.x + bones_mat[int(indices.y)] * weights.y
++#else
++#define blendBonesMat3x4(bones_mat, indices, weights, blendMat) blendMat = bones_mat[int(indices.x)] * weights.x
++#endif
+\ No newline at end of file

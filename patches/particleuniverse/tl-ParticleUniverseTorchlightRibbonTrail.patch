@@ -1,0 +1,679 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h
+new file mode 100644
+index 0000000..10a0567
+--- /dev/null
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h
+@@ -0,0 +1,132 @@
++/*
++-----------------------------------------------------------------------------------------------
++Torchlight's ribbon trail.
++
++Torchlight links its own build of OGRE 1.6.5 (`game/lib64/libOgreMain-1.6.5.so` in the Linux
++release), and Runic changed that build's `Ogre::RibbonTrail`: a flipbook frame per chain, a start
++and an end colour for the two ends, texture coordinates stretched over the whole trail, and a
++"beam" mode that lays the chain out along a line with a sine displacement. Torchlight's
++`ParticleUniverse::RibbonTrailRenderer` drives those additions every frame, so a ribbon drawn with
++OGRE 14's stock trail would be neither Torchlight's shape nor its colour.
++
++OGRE 14's RibbonTrail keeps its members private and `updateTrail` non-virtual, so this is a class
++of its own: OGRE's RibbonTrail (MIT) with Runic's changes transcribed from the library. Addresses
++are the library's own (`libOgreMain-1.6.5.so`, loaded at 0), not `Torchlight.bin.x86_64`'s.
++-----------------------------------------------------------------------------------------------
++*/
++
++#ifndef __PU_TORCHLIGHT_RIBBON_TRAIL_H__
++#define __PU_TORCHLIGHT_RIBBON_TRAIL_H__
++
++#include "ParticleUniversePrerequisites.h"
++#include "OgreBillboardChain.h"
++#include "OgreController.h"
++#include "OgreNode.h"
++
++namespace ParticleUniverse
++{
++	class _ParticleUniverseExport TorchlightRibbonTrail : public Ogre::BillboardChain, public Ogre::Node::Listener
++	{
++		public:
++			TorchlightRibbonTrail(const String& name, size_t maxElements = 20, size_t numberOfChains = 1,
++				bool useTextureCoords = true, bool useVertexColours = true);
++			virtual ~TorchlightRibbonTrail(void);
++
++			void addNode(Ogre::Node* n);
++			void removeNode(const Ogre::Node* n);
++			size_t getChainIndexForNode(const Ogre::Node* n);
++
++			void setTrailLength(Real len);
++			Real getTrailLength(void) const {return mTrailLength;}
++			virtual void setMaxChainElements(size_t maxElements) override;
++			virtual void setNumberOfChains(size_t numChains) override;
++			virtual void clearChain(size_t chainIndex) override;
++
++			void setInitialColour(size_t chainIndex, const ColourValue& col);
++			void setInitialColour(size_t chainIndex, float r, float g, float b, float a = 1.0f);
++			void setColourChange(size_t chainIndex, const ColourValue& valuePerSecond);
++			void setColourChange(size_t chainIndex, float r, float g, float b, float a);
++			void setInitialWidth(size_t chainIndex, Real width);
++			void setWidthChange(size_t chainIndex, Real widthDeltaPerSecond);
++
++			/** Runic: the flipbook the chains share and the frame one chain shows
++				(`Ogre::RibbonTrail::setFrame` 0x26bca0).
++			*/
++			void setFrame(unsigned int chainIndex, int flipbookWidth, int flipbookHeight, int frame);
++
++			/** Runic: what the head and the tail element are tinted by
++				(`Ogre::RibbonTrail::setStartEndColors` 0x268f40).
++			*/
++			void setStartEndColors(const ColourValue& start, const ColourValue& end);
++
++			/** Runic: lay the chains out along a line to `end` with a sine displacement
++				(`Ogre::RibbonTrail::updateTrailBeam` 0x2690c0), or not.
++			*/
++			void updateTrailBeam(bool beam, const Vector3& end, Real sineAngle, const Vector3& force,
++				Real frequencyMin, Real frequencyMax);
++
++			virtual void nodeUpdated(const Ogre::Node* node) override;
++			virtual void nodeDestroyed(const Ogre::Node* node) override;
++
++			/** Fading and width change, a frame at a time. */
++			void _timeUpdate(Real time);
++
++			virtual const String& getMovableType(void) const override;
++
++		protected:
++			typedef vector<Ogre::Node*> NodeList;
++			typedef vector<size_t> IndexVector;
++			typedef map<const Ogre::Node*, size_t> NodeToChainSegmentMap;
++			typedef vector<ColourValue> ColourValueList;
++			typedef vector<Real> RealList;
++
++			NodeList mNodeList;
++			IndexVector mNodeToChainSegment;
++			IndexVector mFreeChains;
++			NodeToChainSegmentMap mNodeToSegMap;
++
++			/* Runic's fields, with their offsets in its RibbonTrail. */
++			bool mBeam;                         // +0x290
++			Real mBeamSineAngle;                // +0x294
++			Real mBeamFrequencyMin;             // +0x298
++			Real mBeamFrequencyMax;             // +0x29c
++			int mFlipbookWidth;                 // +0x2a0
++			int mFlipbookHeight;                // +0x2a4
++			Vector3 mBeamForce;                 // +0x2a8
++			Vector3 mBeamEnd;                   // +0x2b4
++			ColourValue mStartColour;           // +0x2c0
++			ColourValue mEndColour;             // +0x2d0
++
++			Real mTrailLength;                  // +0x2e0
++			Real mElemLength;                   // +0x2e4
++			Real mSquaredElemLength;            // +0x2e8
++			ColourValueList mInitialColour;     // +0x2f0
++			ColourValueList mDeltaColour;       // +0x308
++			vector<int> mFrames;                // +0x320, Runic: one frame per chain
++			RealList mInitialWidth;             // +0x338
++			RealList mDeltaWidth;               // +0x350
++			Ogre::ControllerFloat* mFadeController;
++			Ogre::ControllerValueRealPtr mTimeControllerValue;
++
++			void manageController(void);
++			void updateTrail(size_t index, const Ogre::Node* node);
++			void resetTrail(size_t index, const Ogre::Node* node);
++			void resetAllTrails(void);
++	};
++
++	/** Creates TorchlightRibbonTrails for a scene manager, so the trail has one (its lights and
++		its destruction go through it), as OGRE's own trails do.
++	*/
++	class _ParticleUniverseExport TorchlightRibbonTrailFactory : public Ogre::MovableObjectFactory
++	{
++		public:
++			static const String FACTORY_TYPE_NAME;
++			virtual const String& getType(void) const override {return FACTORY_TYPE_NAME;}
++
++		private:
++			virtual Ogre::MovableObject* createInstanceImpl(const String& name,
++				const Ogre::NameValuePairList* params) override;
++	};
++}
++
++#endif
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.cpp
+new file mode 100644
+index 0000000..8b0d964
+--- /dev/null
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.cpp
+@@ -0,0 +1,535 @@
++/*
++-----------------------------------------------------------------------------------------------
++Torchlight's ribbon trail: OGRE's RibbonTrail as Runic changed it in the OGRE 1.6.5 build the
++game ships (`libOgreMain-1.6.5.so`). See the header. Addresses are the library's.
++-----------------------------------------------------------------------------------------------
++*/
++
++#include "ParticleUniversePCH.h"
++
++#ifndef PARTICLE_UNIVERSE_EXPORTS
++#define PARTICLE_UNIVERSE_EXPORTS
++#endif
++
++#include "ParticleRenderers/ParticleUniverseTorchlightRibbonTrail.h"
++#include "OgreControllerManager.h"
++#include "OgreException.h"
++#include "OgreMath.h"
++#include "OgreSceneNode.h"
++
++namespace ParticleUniverse
++{
++	namespace
++	{
++		/** Passes frame time to the trail's fading, as OGRE's own trail does. */
++		class TimeControllerValue : public Ogre::ControllerValue<Real>
++		{
++			public:
++				explicit TimeControllerValue(TorchlightRibbonTrail* trail) : mTrail(trail) {}
++				Real getValue(void) const override {return 0;}
++				void setValue(Real value) override {mTrail->_timeUpdate(value);}
++			private:
++				TorchlightRibbonTrail* mTrail;
++		};
++	}
++
++	const String TorchlightRibbonTrailFactory::FACTORY_TYPE_NAME = "TorchlightRibbonTrail";
++
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::RibbonTrail` (0x26b170): Runic's fields start clear - no beam, a 1 x 1
++	// flipbook, both end colours transparent black - then the trail is 100 long, and V runs along it.
++	TorchlightRibbonTrail::TorchlightRibbonTrail(const String& name, size_t maxElements,
++		size_t numberOfChains, bool useTextureCoords, bool useVertexColours) :
++		Ogre::BillboardChain(name, maxElements, 0, useTextureCoords, useVertexColours, true),
++		mBeam(false),
++		mBeamSineAngle(0.0f),
++		mBeamFrequencyMin(0.0f),
++		mBeamFrequencyMax(0.0f),
++		mFlipbookWidth(1),
++		mFlipbookHeight(1),
++		mBeamForce(Vector3::ZERO),
++		mBeamEnd(Vector3::ZERO),
++		mStartColour(0.0f, 0.0f, 0.0f, 0.0f),
++		mEndColour(0.0f, 0.0f, 0.0f, 0.0f),
++		mTrailLength(0.0f),
++		mElemLength(0.0f),
++		mSquaredElemLength(0.0f),
++		mFadeController(0)
++	{
++		setTrailLength(100.0f);
++		setNumberOfChains(numberOfChains);
++		mTimeControllerValue = Ogre::ControllerValueRealPtr(OGRE_NEW TimeControllerValue(this));
++		setTextureCoordDirection(TCD_V);
++	}
++	//-----------------------------------------------------------------------
++	TorchlightRibbonTrail::~TorchlightRibbonTrail(void)
++	{
++		for (NodeList::iterator i = mNodeList.begin(); i != mNodeList.end(); ++i)
++		{
++			(*i)->setListener(0);
++		}
++		if (mFadeController)
++		{
++			Ogre::ControllerManager::getSingleton().destroyController(mFadeController);
++		}
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::addNode` (0x26c880): the last free chain, reset at the node.
++	void TorchlightRibbonTrail::addNode(Ogre::Node* n)
++	{
++		if (mNodeList.size() == mChainCount)
++		{
++			OGRE_EXCEPT(Ogre::Exception::ERR_INVALIDPARAMS,
++				mName + " cannot monitor any more nodes, chain count exceeded",
++				"TorchlightRibbonTrail::addNode");
++		}
++		if (n->getListener())
++		{
++			OGRE_EXCEPT(Ogre::Exception::ERR_INVALIDPARAMS,
++				mName + " cannot monitor node " + n->getName() + " since it already has a listener.",
++				"TorchlightRibbonTrail::addNode");
++		}
++		size_t chainIndex = mFreeChains.back();
++		mFreeChains.pop_back();
++		mNodeToChainSegment.push_back(chainIndex);
++		mNodeToSegMap[n] = chainIndex;
++		resetTrail(chainIndex, n);
++		mNodeList.push_back(n);
++		n->setListener(this);
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::getChainIndexForNode` (0x26ced0).
++	size_t TorchlightRibbonTrail::getChainIndexForNode(const Ogre::Node* n)
++	{
++		NodeToChainSegmentMap::const_iterator i = mNodeToSegMap.find(n);
++		if (i == mNodeToSegMap.end())
++		{
++			OGRE_EXCEPT(Ogre::Exception::ERR_ITEM_NOT_FOUND,
++				"This node is not being tracked", "TorchlightRibbonTrail::getChainIndexForNode");
++		}
++		return i->second;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::removeNode` (0x26a710): the chain is emptied and freed.
++	void TorchlightRibbonTrail::removeNode(const Ogre::Node* n)
++	{
++		NodeList::iterator i = std::find(mNodeList.begin(), mNodeList.end(), n);
++		if (i == mNodeList.end())
++			return;
++		size_t index = std::distance(mNodeList.begin(), i);
++		IndexVector::iterator mi = mNodeToChainSegment.begin();
++		std::advance(mi, index);
++		size_t chainIndex = *mi;
++		Ogre::BillboardChain::clearChain(chainIndex);
++		mFreeChains.push_back(chainIndex);
++		(*i)->setListener(0);
++		mNodeList.erase(i);
++		mNodeToChainSegment.erase(mi);
++		mNodeToSegMap.erase(mNodeToSegMap.find(n));
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::setTrailLength` (0x268fc0).
++	void TorchlightRibbonTrail::setTrailLength(Real len)
++	{
++		mTrailLength = len;
++		mElemLength = mTrailLength / mMaxElementsPerChain;
++		mSquaredElemLength = mElemLength * mElemLength;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::setMaxChainElements` (0x2697e0).
++	void TorchlightRibbonTrail::setMaxChainElements(size_t maxElements)
++	{
++		Ogre::BillboardChain::setMaxChainElements(maxElements);
++		mElemLength = mTrailLength / mMaxElementsPerChain;
++		mSquaredElemLength = mElemLength * mElemLength;
++		resetAllTrails();
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::setNumberOfChains` (0x26acf0): Runic's per-chain frame list grows
++	// with the others (frame 0).
++	void TorchlightRibbonTrail::setNumberOfChains(size_t numChains)
++	{
++		if (numChains < mNodeList.size())
++		{
++			OGRE_EXCEPT(Ogre::Exception::ERR_INVALIDPARAMS,
++				"Can't shrink the number of chains less than number of tracking nodes",
++				"TorchlightRibbonTrail::setNumberOfChains");
++		}
++		size_t oldChains = getNumberOfChains();
++		Ogre::BillboardChain::setNumberOfChains(numChains);
++
++		mInitialColour.resize(numChains, ColourValue::White);
++		mDeltaColour.resize(numChains, ColourValue::ZERO);
++		mInitialWidth.resize(numChains, 10.0f);
++		mDeltaWidth.resize(numChains, 0.0f);
++		mFrames.resize(numChains, 0);
++
++		if (oldChains > numChains)
++		{
++			for (IndexVector::iterator i = mFreeChains.begin(); i != mFreeChains.end();)
++			{
++				if (*i >= numChains)
++					i = mFreeChains.erase(i);
++				else
++					++i;
++			}
++		}
++		else if (oldChains < numChains)
++		{
++			for (size_t i = oldChains; i < numChains; ++i)
++				mFreeChains.insert(mFreeChains.begin(), i);
++		}
++		resetAllTrails();
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::clearChain` (0x2696c0).
++	void TorchlightRibbonTrail::clearChain(size_t chainIndex)
++	{
++		Ogre::BillboardChain::clearChain(chainIndex);
++		IndexVector::iterator i = std::find(mNodeToChainSegment.begin(), mNodeToChainSegment.end(), chainIndex);
++		if (i != mNodeToChainSegment.end())
++		{
++			size_t nodeIndex = std::distance(mNodeToChainSegment.begin(), i);
++			resetTrail(*i, mNodeList[nodeIndex]);
++		}
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setInitialColour(size_t chainIndex, const ColourValue& col)
++	{
++		setInitialColour(chainIndex, col.r, col.g, col.b, col.a);
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setInitialColour(size_t chainIndex, float r, float g, float b, float a)
++	{
++		mInitialColour.at(chainIndex) = ColourValue(r, g, b, a);
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setColourChange(size_t chainIndex, const ColourValue& valuePerSecond)
++	{
++		setColourChange(chainIndex, valuePerSecond.r, valuePerSecond.g, valuePerSecond.b, valuePerSecond.a);
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setColourChange(size_t chainIndex, float r, float g, float b, float a)
++	{
++		mDeltaColour.at(chainIndex) = ColourValue(r, g, b, a);
++		manageController();
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setInitialWidth(size_t chainIndex, Real width)
++	{
++		mInitialWidth.at(chainIndex) = width;
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::setWidthChange(size_t chainIndex, Real widthDeltaPerSecond)
++	{
++		mDeltaWidth.at(chainIndex) = widthDeltaPerSecond;
++		manageController();
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::setFrame` (0x26bca0): the flipbook is the trail's, the frame the chain's.
++	void TorchlightRibbonTrail::setFrame(unsigned int chainIndex, int flipbookWidth, int flipbookHeight, int frame)
++	{
++		if (chainIndex >= mChainCount)
++		{
++			OGRE_EXCEPT(Ogre::Exception::ERR_INVALIDPARAMS, "chainIndex out of bounds",
++				"TorchlightRibbonTrail::setFrame");
++		}
++		mFlipbookWidth = flipbookWidth;
++		mFlipbookHeight = flipbookHeight;
++		mFrames[chainIndex] = frame;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::setStartEndColors` (0x268f40).
++	void TorchlightRibbonTrail::setStartEndColors(const ColourValue& start, const ColourValue& end)
++	{
++		mStartColour = start;
++		mEndColour = end;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::updateTrailBeam` (0x2690c0).
++	void TorchlightRibbonTrail::updateTrailBeam(bool beam, const Vector3& end, Real sineAngle,
++		const Vector3& force, Real frequencyMin, Real frequencyMax)
++	{
++		mBeam = beam;
++		mBeamEnd = end;
++		mBeamSineAngle = sineAngle;
++		mBeamForce = force;
++		mBeamFrequencyMin = frequencyMin;
++		mBeamFrequencyMax = frequencyMax;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::manageController` (0x2695c0).
++	void TorchlightRibbonTrail::manageController(void)
++	{
++		bool needController = false;
++		for (size_t i = 0; i < mChainCount; ++i)
++		{
++			if (mDeltaWidth[i] != 0 || mDeltaColour[i] != ColourValue::ZERO)
++			{
++				needController = true;
++				break;
++			}
++		}
++		if (!mFadeController && needController)
++		{
++			mFadeController = Ogre::ControllerManager::getSingleton().createFrameTimePassthroughController(mTimeControllerValue);
++		}
++		else if (mFadeController && !needController)
++		{
++			Ogre::ControllerManager::getSingleton().destroyController(mFadeController);
++			mFadeController = 0;
++		}
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::nodeUpdated(const Ogre::Node* node)
++	{
++		updateTrail(getChainIndexForNode(node), node);
++	}
++	//-----------------------------------------------------------------------
++	void TorchlightRibbonTrail::nodeDestroyed(const Ogre::Node* node)
++	{
++		removeNode(node);
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::updateTrail` (0x269850), Runic's:
++	// - the flipbook: a chain's frame picks a column across the width
++	//   (`setOtherTextureCoordRange`) and a row along it;
++	// - the tracked node's own `getPosition()` is taken, not its derived position, and not
++	//   brought into the trail's space (the trail hangs off a node at the origin);
++	// - texture coordinates run over the whole trail, 0 at the head, 1 at the tail, a row high;
++	// - every update re-colours the chain: the head by the start colour, the tail by the end
++	//   colour, both times the chain's initial colour, the rest the initial colour;
++	// - in beam mode the chain is laid out along a line to the beam's end instead.
++	void TorchlightRibbonTrail::updateTrail(size_t index, const Ogre::Node* node)
++	{
++		const Real invHeight = 1.0f / (Real)mFlipbookHeight;
++		const Real invWidth = 1.0f / (Real)mFlipbookWidth;
++		Real rowOffset = 0.0f;
++		Real columnStart = 0.0f;
++		if (!(mFlipbookWidth == 1 && mFlipbookHeight == 1))
++		{
++			int frame = mFrames[index];
++			int row = (int)floorf((Real)frame / (Real)mFlipbookWidth);
++			int column = frame - row * mFlipbookWidth;
++			rowOffset = (Real)row * invHeight;
++			columnStart = (Real)column * invWidth;
++		}
++		setOtherTextureCoordRange(columnStart, invWidth + columnStart);
++
++		ChainSegment& seg = mChainSegmentList[index];
++		const ColourValue& initial = mInitialColour[index];
++		const ColourValue headColour(mStartColour.r * initial.r, mStartColour.g * initial.g,
++			mStartColour.b * initial.b, mStartColour.a * initial.a);
++		const ColourValue tailColour(mEndColour.r * initial.r, mEndColour.g * initial.g,
++			mEndColour.b * initial.b, mEndColour.a * initial.a);
++
++		if (!mBeam)
++		{
++			bool done = false;
++			while (!done)
++			{
++				Element& headElem = mChainElementList[seg.start + seg.head];
++				size_t nextElemIdx = seg.head + 1;
++				if (nextElemIdx == mMaxElementsPerChain)
++					nextElemIdx = 0;
++				Element& nextElem = mChainElementList[seg.start + nextElemIdx];
++
++				Vector3 newPos = node->getPosition();
++				Vector3 diff = newPos - nextElem.position;
++				Real sqlen = diff.squaredLength();
++				if (sqlen >= mSquaredElemLength)
++				{
++					Vector3 scaledDiff = diff * (mElemLength / Ogre::Math::Sqrt(sqlen));
++					headElem.position = nextElem.position + scaledDiff;
++					Element newElem(newPos, mInitialWidth[index], 0.0f, mInitialColour[index],
++						Ogre::Quaternion::IDENTITY);
++					addChainElement(index, newElem);
++					diff = newPos - headElem.position;
++					if (diff.squaredLength() <= mSquaredElemLength)
++						done = true;
++				}
++				else
++				{
++					headElem.position = newPos;
++					done = true;
++				}
++
++				if ((seg.tail + 1) % mMaxElementsPerChain == seg.head)
++				{
++					Element& tailElem = mChainElementList[seg.start + seg.tail];
++					size_t preTailIdx = seg.tail == 0 ? mMaxElementsPerChain - 1 : seg.tail - 1;
++					Element& preTailElem = mChainElementList[seg.start + preTailIdx];
++					Vector3 taildiff = tailElem.position - preTailElem.position;
++					Real taillen = taildiff.length();
++					if (taillen > 1e-06)
++					{
++						Real tailsize = mElemLength - diff.length();
++						taildiff *= tailsize / taillen;
++						tailElem.position = preTailElem.position + taildiff;
++					}
++				}
++			}
++
++			// The distance of every element from the head...
++			Real total = 0.0f;
++			size_t e = seg.head;
++			Element* previous = &mChainElementList[seg.start + e];
++			while (true)
++			{
++				if (e == mMaxElementsPerChain)
++					e = 0;
++				Element& elem = mChainElementList[seg.start + e];
++				if (e == seg.head)
++				{
++					elem.texCoord = 0.0f;
++				}
++				else
++				{
++					total += (elem.position - previous->position).length();
++					elem.texCoord = total;
++				}
++				if (e == seg.tail)
++					break;
++				++e;
++				previous = &elem;
++			}
++			// ...as a fraction of the whole, a row high; and the colours.
++			if (total > 0.0f)
++			{
++				e = seg.head;
++				while (true)
++				{
++					if (e == mMaxElementsPerChain)
++						e = 0;
++					Element& elem = mChainElementList[seg.start + e];
++					elem.texCoord = (elem.texCoord / total) * invHeight + rowOffset;
++					if (e == seg.head)
++						elem.colour = headColour;
++					else if (e == seg.tail)
++						elem.colour = tailColour;
++					else
++						elem.colour = initial;
++					if (e == seg.tail)
++						break;
++					++e;
++				}
++			}
++		}
++		else
++		{
++			// Beam: the chain is filled to its whole length, then its elements are spread from
++			// the node to the beam's end, each but the two ends pushed along the force by a sine
++			// whose phase runs once along the chain.
++			const int count = (int)mMaxElementsPerChain > 1 ? (int)mMaxElementsPerChain : 2;
++			const Vector3 start = node->getPosition();
++			const Vector3 span = mBeamEnd - start;
++			const Real step = 1.0f / ((Real)count - 1.0f);
++			int missing = (count - (int)seg.tail) - 1 + (int)seg.head;
++			for (int i = 0; i < missing; ++i)
++			{
++				Element newElem(start, mInitialWidth[index], 0.0f, mInitialColour[index],
++					Ogre::Quaternion::IDENTITY);
++				addChainElement(index, newElem);
++			}
++			if (span.length() > 0.0f)
++			{
++				Real i = 0.0f;
++				size_t e = seg.head;
++				while (true)
++				{
++					if ((int)e == count)
++						e = 0;
++					Real phase = mBeamFrequencyMax;
++					if (mBeamFrequencyMin != phase)
++						phase = Ogre::Math::RangeRandom(mBeamFrequencyMin, mBeamFrequencyMax);
++					Real wave = sinf(step * i * 6.2831855f + mBeamSineAngle + phase);
++					Vector3 offset = Vector3::ZERO;
++					if (e != seg.head && e != seg.tail)
++						offset = mBeamForce * wave;
++					Element& elem = mChainElementList[seg.start + e];
++					elem.texCoord = step * i * invHeight + rowOffset;
++					if (e == seg.head)
++						elem.colour = headColour;
++					else if (e == seg.tail)
++						elem.colour = tailColour;
++					else
++						elem.colour = initial;
++					elem.position = span * step * i + start + offset;
++					elem.width = mInitialWidth[index];
++					if (e == seg.tail)
++						break;
++					i += 1.0f;
++					++e;
++				}
++			}
++		}
++
++		mBoundsDirty = true;
++		// OGRE 14's chain rebuilds its vertices when told its content changed; 1.6.5's rebuilt
++		// them every frame.
++		mVertexContentDirty = true;
++		if (mParentNode)
++		{
++			Ogre::Node::queueNeedUpdate(getParentSceneNode());
++		}
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::_timeUpdate` (0x269130): OGRE's, unchanged.
++	void TorchlightRibbonTrail::_timeUpdate(Real time)
++	{
++		for (size_t s = 0; s < mChainSegmentList.size(); ++s)
++		{
++			ChainSegment& seg = mChainSegmentList[s];
++			if (seg.head != SEGMENT_EMPTY && seg.head != seg.tail)
++			{
++				for (size_t e = seg.head + 1;; ++e)
++				{
++					e = e % mMaxElementsPerChain;
++					Element& elem = mChainElementList[seg.start + e];
++					elem.width = elem.width - (time * mDeltaWidth[s]);
++					elem.width = std::max(Real(0.0f), elem.width);
++					elem.colour = elem.colour - (mDeltaColour[s] * time);
++					elem.colour.saturate();
++					if (e == seg.tail)
++						break;
++				}
++			}
++		}
++		mVertexContentDirty = true;
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::resetTrail` (0x2694e0): two elements on the node's derived position,
++	// again not brought into the trail's space. (updateTrail reads the node's own position; the
++	// two agree while the trail hangs off a node at the origin, which is how Torchlight uses it.)
++	void TorchlightRibbonTrail::resetTrail(size_t index, const Ogre::Node* node)
++	{
++		ChainSegment& seg = mChainSegmentList[index];
++		seg.head = seg.tail = SEGMENT_EMPTY;
++		Element e(node->_getDerivedPosition(), mInitialWidth[index], 0.0f, mInitialColour[index],
++			Ogre::Quaternion::IDENTITY);
++		addChainElement(index, e);
++		addChainElement(index, e);
++	}
++	//-----------------------------------------------------------------------
++	// `Ogre::RibbonTrail::resetAllTrails` (0x269390): quirk kept - it passes the node's position
++	// in the list as its chain index, as OGRE's does.
++	void TorchlightRibbonTrail::resetAllTrails(void)
++	{
++		for (size_t i = 0; i < mNodeList.size(); ++i)
++		{
++			resetTrail(i, mNodeList[i]);
++		}
++	}
++	//-----------------------------------------------------------------------
++	const String& TorchlightRibbonTrail::getMovableType(void) const
++	{
++		return TorchlightRibbonTrailFactory::FACTORY_TYPE_NAME;
++	}
++	//-----------------------------------------------------------------------
++	Ogre::MovableObject* TorchlightRibbonTrailFactory::createInstanceImpl(const String& name,
++		const Ogre::NameValuePairList* params)
++	{
++		(void)params;
++		return OGRE_NEW TorchlightRibbonTrail(name);
++	}
++}

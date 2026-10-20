@@ -1,0 +1,128 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseAffectorTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseAffectorTokens.cpp
+index 859d8c8..2df4ad8 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseAffectorTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseAffectorTokens.cpp
+@@ -74,7 +74,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->addAffector(mAffector);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseBehaviourTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseBehaviourTokens.cpp
+index 07e5123..13e8f0b 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseBehaviourTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseBehaviourTokens.cpp
+@@ -72,7 +72,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->_addBehaviourTemplate(mBehaviour);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseEmitterTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseEmitterTokens.cpp
+index 94d0c51..225187e 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseEmitterTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseEmitterTokens.cpp
+@@ -76,7 +76,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->addEmitter(mEmitter);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseEventHandlerTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseEventHandlerTokens.cpp
+index f81f115..2f46017 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseEventHandlerTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseEventHandlerTokens.cpp
+@@ -73,7 +73,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleObserver* observer = any_cast<ParticleObserver*>(obj->parent->context);
+ 			observer->addEventHandler(mParticleEventHandler);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseExternTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseExternTokens.cpp
+index f740306..4823ce9 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseExternTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseExternTokens.cpp
+@@ -73,7 +73,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->addExtern(mExtern);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseObserverTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseObserverTokens.cpp
+index 4b96975..7d8a960 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseObserverTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseObserverTokens.cpp
+@@ -77,7 +77,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->addObserver(mObserver);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseRendererTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseRendererTokens.cpp
+index ad380fb..f159ddf 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseRendererTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseRendererTokens.cpp
+@@ -114,7 +114,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleTechnique* technique = any_cast<ParticleTechnique*>(obj->parent->context);
+ 			technique->setRenderer(mRenderer);
+diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseTechniqueTokens.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseTechniqueTokens.cpp
+index 1af113c..bce5fae 100644
+--- a/Plugins/ParticleUniverse/src/ParticleUniverseTechniqueTokens.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleUniverseTechniqueTokens.cpp
+@@ -54,7 +54,11 @@ namespace ParticleUniverse
+ 			return;
+ 		}
+ 
++#if OGRE_VERSION < 0xE0000
+ 		if (!obj->parent->context.isEmpty())
++#else // OGRE 14: Any::isEmpty is deprecated; has_value is its negation
++		if (obj->parent->context.has_value())
++#endif
+ 		{
+ 			ParticleSystem* system = any_cast<ParticleSystem*>(obj->parent->context);
+ 			system->addTechnique(mTechnique);

@@ -1,0 +1,319 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereSet.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereSet.h
+index 118e9ed..b3a1cc4 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereSet.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseSphereSet.h
+@@ -266,6 +266,7 @@ namespace ParticleUniverse
+ 
+ 			/** Sets whether spheres should be treated as being in world space. 
+ 			*/
++			// Torchlight: `SphereSet::setSpheresInWorldSpace`: the same as the library's.
+ 			void setSpheresInWorldSpace(bool ws) { mWorldSpace = ws; }
+ 	};
+ 
+@@ -278,6 +279,7 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			SphereSetFactory(void) {}
++			// Torchlight: `SphereSetFactory::~SphereSetFactory`: the same as the library's.
+ 			~SphereSetFactory(void) {}
+ 
+ 			static String PU_FACTORY_TYPE_NAME;
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereSet.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereSet.cpp
+index 24e0ef6..825a01c 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereSet.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseSphereSet.cpp
+@@ -36,7 +36,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`SphereSet::_GLOBAL__I_SphereSet`) sets
++	// SphereSetFactory::PU_FACTORY_TYPE_NAME to "SphereSet", the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::SphereSet`: the same as the library's (radius 20, 16 rings and segments).
+ 	SphereSet::SphereSet(void) :
+ 		PrimitiveShapeSet(),
+ 		mAutoExtendPool(true),
+@@ -56,6 +59,7 @@ namespace ParticleUniverse
+ 		setNumberOfSegments(16);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::SphereSet`, the library's: default radius 20, 16 rings and segments.
+ 	SphereSet::SphereSet(const String& name, unsigned int poolSize, bool externalData) :
+ 		PrimitiveShapeSet(name, poolSize, externalData),
+ 		mAutoExtendPool(true),
+@@ -76,6 +80,8 @@ namespace ParticleUniverse
+ 		setNumberOfSegments(16);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::~SphereSet`,
++	// the library's.
+ 	SphereSet::~SphereSet(void)
+ 	{
+ 		// Free pool items
+@@ -89,6 +95,7 @@ namespace ParticleUniverse
+ 		_destroyBuffers();
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::createSphere`, the library's.
+ 	Sphere* SphereSet::createSphere(const Vector3& position)
+     {
+ 		if(mFreeSpheres.empty())
+@@ -121,21 +128,25 @@ namespace ParticleUniverse
+ 		return newSphere;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::createSphere`: the same as the library's.
+ 	Sphere* SphereSet::createSphere(Real x, Real y, Real z)
+ 	{
+ 		return createSphere(Vector3( x, y, z ));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getNumSpheres`, the library's.
+ 	unsigned int SphereSet::getNumSpheres(void) const
+ 	{
+ 		return static_cast<int>(mActiveSpheres.size());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::clear`, the library's.
+ 	void SphereSet::clear(void)
+ 	{
+ 		mFreeSpheres.splice(mFreeSpheres.end(), mActiveSpheres);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getSphere`: the same as the library's.
+ 	Sphere* SphereSet::getSphere(unsigned int index) const
+ 	{
+ 		assert(index < mActiveSpheres.size() && "Sphere index out of bounds." );
+@@ -154,6 +165,7 @@ namespace ParticleUniverse
+ 		return *it;
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::removeSphere`: the same as the library's.
+ 	void SphereSet::removeSphere(unsigned int index)
+ 	{
+ 		assert(index < mActiveSpheres.size() && "Sphere index out of bounds." );
+@@ -172,6 +184,7 @@ namespace ParticleUniverse
+ 		mFreeSpheres.splice(mFreeSpheres.end(), mActiveSpheres, it);
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::removeSphere`: the same as the library's.
+ 	void SphereSet::removeSphere(Sphere* sphere)
+ 	{
+ 		ActiveSphereList::iterator it = std::find(mActiveSpheres.begin(), mActiveSpheres.end(), sphere);
+@@ -180,44 +193,52 @@ namespace ParticleUniverse
+ 		mFreeSpheres.splice(mFreeSpheres.end(), mActiveSpheres, it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setDefaultRadius`: the same as the library's.
+ 	void SphereSet::setDefaultRadius(Real radius)
+ 	{
+ 		mDefaultRadius = radius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getDefaultRadius`: the same as the library's.
+ 	Real SphereSet::getDefaultRadius(void) const
+ 	{
+ 		return mDefaultRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setNumberOfRings`, the library's.
+ 	void SphereSet::setNumberOfRings(unsigned int numberOfRings)
+ 	{
+ 		mNumberOfRings = numberOfRings;
+ 		_calculateVertexAndIndexPerSphere();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getNumberOfRings`: the same as the library's.
+ 	unsigned int SphereSet::getNumberOfRings(void) const
+ 	{
+ 		return mNumberOfRings;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setNumberOfSegments`, the library's.
+ 	void SphereSet::setNumberOfSegments(unsigned int numberOfSegments)
+ 	{
+ 		mNumberOfSegments = numberOfSegments;
+ 		_calculateVertexAndIndexPerSphere();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getNumberOfSegments`: the same as the library's.
+ 	unsigned int SphereSet::getNumberOfSegments(void) const
+ 	{
+ 		return mNumberOfSegments;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_calculateVertexAndIndexPerSphere`, the library's.
+ 	void SphereSet::_calculateVertexAndIndexPerSphere(void)
+ 	{
+ 		mVertexCountPerSphere = (mNumberOfRings + 1) * (mNumberOfSegments + 1);
+ 		mIndexCountPerSphere = 6 * mNumberOfRings * (mNumberOfSegments + 1);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::beginSpheres`, the library's: 0 locks both buffers whole.
+ 	void SphereSet::beginSpheres(size_t numSpheres)
+     {
+ 		// Create vertex / index buffers
+@@ -254,6 +275,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::injectSphere`, the library's.
+ 	void SphereSet::injectSphere(Sphere& sphere)
+ 	{
+ 		if (mNumVisibleSpheres == mPoolSize) return;
+@@ -266,18 +288,21 @@ namespace ParticleUniverse
+ 		mNumVisibleSpheres++;
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::endSpheres`, the library's.
+ 	void SphereSet::endSpheres(void)
+ 	{
+ 		mMainBuf->unlock();
+ 		mIndexData->indexBuffer->unlock();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setBounds`: the same as the library's.
+ 	void SphereSet::setBounds(const AxisAlignedBox& box, Real radius)
+ 	{
+ 		mAABB = box;
+ 		mBoundingRadius = radius;
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_updateBounds`, the library's.
+     void SphereSet::_updateBounds(void)
+     {
+         if (mActiveSpheres.empty())
+@@ -317,6 +342,7 @@ namespace ParticleUniverse
+ 
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_updateRenderQueue`, the library's.
+ 	void SphereSet::_updateRenderQueue(Ogre::RenderQueue* queue)
+     {
+ 		if (!mExternalData)
+@@ -341,6 +367,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getRenderOperation`, the library's.
+ 	void SphereSet::getRenderOperation(Ogre::RenderOperation& op)
+ 	{
+ 		op.vertexData = mVertexData;
+@@ -353,16 +380,19 @@ namespace ParticleUniverse
+ 		op.indexData->indexStart = 0;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setAutoextend`: the same as the library's.
+ 	void SphereSet::setAutoextend(bool autoextend)
+ 	{
+ 		mAutoExtendPool = autoextend;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::isAutoextend`: the same as the library's.
+ 	bool SphereSet::isAutoextend(void) const
+ 	{
+ 		return mAutoExtendPool;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::setPoolSize`, the library's.
+ 	void SphereSet::setPoolSize(size_t size)
+ 	{
+ 		if (!mExternalData)
+@@ -384,6 +414,7 @@ namespace ParticleUniverse
+ 		_destroyBuffers();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_createBuffers`, the library's: position, normal, colour, one uv; 16-bit indices.
+ 	void SphereSet::_createBuffers(void)
+ 	{
+ 		// Create vertex buffer
+@@ -426,6 +457,7 @@ namespace ParticleUniverse
+         mBuffersCreated = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_destroyBuffers`, the library's.
+ 	void SphereSet::_destroyBuffers(void)
+ 	{
+ 		if (mVertexData)
+@@ -444,6 +476,7 @@ namespace ParticleUniverse
+ 		mBuffersCreated = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getPoolSize`: the same as the library's.
+ 	unsigned int SphereSet::getPoolSize(void) const
+ 	{
+ 		return static_cast<unsigned int>(mSpherePool.size());
+@@ -472,6 +505,7 @@ namespace ParticleUniverse
+ 		return cam->isVisible(sph);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::increasePool`, the library's.
+ 	void SphereSet::increasePool(size_t size)
+ 	{
+ 		size_t oldSize = mSpherePool.size();
+@@ -485,10 +519,19 @@ namespace ParticleUniverse
+ 			mSpherePool[i] = PU_NEW Sphere();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::_genVertices`: the library's rings, segments, colour, uv and
++	// indices (from vertex 1, as `beginSpheres` starts it), but for the normal below.
+ 	void SphereSet::_genVertices(Sphere& sphere)
+ 	{
+ 		Ogre::RGBA colour;
++#if OGRE_VERSION < 0xE0000
+ 		Ogre::Root::getSingleton().convertColourValue(sphere.mColour, &colour);
++#else
++		// OGRE 14: Root::convertColourValue is deprecated and only forwards to ColourValue::getAsBYTE.
++		// Behaviour risk: OGRE 1.x packed the colour in the render system's own VET_COLOUR order (ARGB
++		// on D3D9, ABGR on GL); OGRE 14 always packs RGBA bytes, which is what its VET_COLOUR reads.
++		colour = sphere.mColour.getAsBYTE();
++#endif
+ 		Ogre::RGBA* pCol;
+ 		Real radius = getDefaultRadius();
+ 		if (sphere.mOwnRadius)
+@@ -515,8 +558,13 @@ namespace ParticleUniverse
+ 				*mLockPtr++ = (float) (orientedVertex.y + sphere.mPosition.y);
+ 				*mLockPtr++ = (float) (orientedVertex.z + sphere.mPosition.z);
+ 
+-				// Normal
+-				Vector3 vNormal = orientedVertex.normalisedCopy();
++				// Normal. Torchlight: OGRE 1.6's `normalisedCopy`, which leaves a vector no
++				// longer than 1e-08 (compared in double) as it is; OGRE 14's divides anything
++				// longer than 0.
++				Vector3 vNormal = orientedVertex;
++				const Real normalLength = vNormal.length();
++				if ((double)normalLength > 1e-08)
++					vNormal *= 1.0f / normalLength;
+ 				*mLockPtr++ = (float) vNormal.x;
+ 				*mLockPtr++ = (float) vNormal.y;
+ 				*mLockPtr++ = (float) vNormal.z;
+@@ -545,6 +593,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSet::getMovableType`: the same as the library's.
+ 	const String& SphereSet::getMovableType(void) const
+ 	{
+ 		return SphereSetFactory::PU_FACTORY_TYPE_NAME;
+@@ -552,11 +601,13 @@ namespace ParticleUniverse
+ 	//-----------------------------------------------------------------------
+ 	String SphereSetFactory::PU_FACTORY_TYPE_NAME = "SphereSet";
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSetFactory::getType`: the same as the library's.
+ 	const String& SphereSetFactory::getType(void) const
+ 	{
+ 		return PU_FACTORY_TYPE_NAME;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSetFactory::createInstanceImpl`: the same as the library's (a pool of 20 unless given).
+ 	Ogre::MovableObject* SphereSetFactory::createInstanceImpl(const String& name, const Ogre::NameValuePairList* params)
+ 	{
+ 		bool externalData = false;
+@@ -586,6 +637,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSetFactory::destroyInstance`: the same as the library's.
+ 	void SphereSetFactory::destroyInstance(Ogre::MovableObject* obj)
+ 	{
+ 		PU_DELETE obj;

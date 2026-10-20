@@ -1,0 +1,20 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
+index 1c92309..74f76df 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
+@@ -87,6 +87,15 @@ namespace ParticleUniverse
+ 							return dynAttr;
+ 						}
+ 						break;
++
++						// Torchlight: `DynamicAttributeFactory::cloneDynamicAttribute`, case 4.
++						case DynamicAttribute::DAT_RANDOM_CURVED:
++						{
++							DynamicAttributeRandomCurved* dynAttr = createDynamicAttribute<DynamicAttributeRandomCurved>();
++							dynamicAttribute->copyAttributesTo(dynAttr);
++							return dynAttr;
++						}
++						break;
+ 					}
+ 				}
+ 

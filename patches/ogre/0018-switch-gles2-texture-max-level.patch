@@ -1,0 +1,45 @@
+diff --git a/RenderSystems/GLES2/src/OgreGLES2Texture.cpp b/RenderSystems/GLES2/src/OgreGLES2Texture.cpp
+--- a/RenderSystems/GLES2/src/OgreGLES2Texture.cpp
++++ b/RenderSystems/GLES2/src/OgreGLES2Texture.cpp
+@@ -102,6 +102,9 @@ namespace Ogre {
+ 
+         // Generate texture name
+         OGRE_CHECK_GL_ERROR(glGenTextures(1, &mTextureID));
++#ifdef __SWITCH__
++        mAppliedSamplerKey = 0;
++#endif
+ 
+         // Set texture type
+         mRenderSystem->_getStateCacheManager()->bindGLTexture(texTarget, mTextureID);
+@@ -116,8 +119,21 @@ namespace Ogre {
+         if((mUsage & TU_AUTOMIPMAP) && mMipmapsHardwareGenerated && mNumRequestedMipmaps)
+             mNumMipmaps = getMaxMipmaps();
+ 
++#ifdef __SWITCH__
++        // GL_TEXTURE_MAX_LEVEL is the index of the last level, which is
++        // mNumMipmaps (GL3Plus sets exactly that). mNumMipmaps + 1 names a
++        // level that does not exist, and a texture whose chain stops short of
++        // 1x1 is then mip-incomplete and samples black under a mipmapped
++        // filter: Torchlight's default rim light (rimlight.dds, a 64x64 cube
++        // with two levels) added nothing to any character on the Switch, and
++        // four particle textures (LigboltRed, contrastSmoke, BloodStrike,
++        // fireb: 256-512 px with five levels) drew black.
++        if(mRenderSystem->hasMinGLVersion(3, 0) || mRenderSystem->checkExtension("GL_APPLE_texture_max_level"))
++            mRenderSystem->_getStateCacheManager()->setTexParameteri(texTarget, GL_TEXTURE_MAX_LEVEL_APPLE, mNumRequestedMipmaps ? mNumMipmaps : 0);
++#else
+         if(mRenderSystem->hasMinGLVersion(3, 0) || mRenderSystem->checkExtension("GL_APPLE_texture_max_level"))
+             mRenderSystem->_getStateCacheManager()->setTexParameteri(texTarget, GL_TEXTURE_MAX_LEVEL_APPLE, mNumRequestedMipmaps ? mNumMipmaps + 1 : 0);
++#endif
+ 
+         if(mTextureType == TEX_TYPE_EXTERNAL_OES && mNumRequestedMipmaps > 0) {
+             OGRE_EXCEPT(Exception::ERR_INVALIDPARAMS, "Mipmaps are not available for TEX_TYPE_EXTERNAL_OES", "GLES2Texture::_createGLTexResource");
+@@ -319,6 +335,9 @@ namespace Ogre {
+             stateCacheManager->invalidateStateForTexture(mTextureID);
+         }
+         mTextureID = 0;
++#ifdef __SWITCH__
++        mAppliedSamplerKey = 0;
++#endif
+     }
+     
+ #if OGRE_PLATFORM == OGRE_PLATFORM_ANDROID || OGRE_PLATFORM == OGRE_PLATFORM_EMSCRIPTEN

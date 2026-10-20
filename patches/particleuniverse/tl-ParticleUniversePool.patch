@@ -1,0 +1,20 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniversePool.h b/Plugins/ParticleUniverse/include/ParticleUniversePool.h
+index 2690fc5..00ccdbf 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniversePool.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniversePool.h
+@@ -187,12 +187,11 @@ namespace ParticleUniverse
+ 			inline void lockLatestElement (void)
+ 			{
+ 				// Move element pointed by mPoolIterator from released elements to locked elements
++				// Torchlight (inlined in `ParticlePool::lockLatestParticle`): the iterator is left
++				// on the next element, not stepped back, so the pool's next getNext passes over it (the
++				// particle after an expiring one misses that update).
+ 				mLocked.push_back(*mPoolIterator);
+ 				mPoolIterator = mReleased.erase(mPoolIterator);
+-				if (mPoolIterator != mReleased.begin() && mPoolIterator != mReleased.end())
+-				{
+-					mPoolIterator--;
+-				}
+ 			};
+ 			//-----------------------------------------------------------------------
+ 			/** Lock all elements in the pool.

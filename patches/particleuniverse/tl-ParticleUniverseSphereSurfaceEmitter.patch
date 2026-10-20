@@ -1,0 +1,98 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.h
+index 03394ee..b1ebb43 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.h
+@@ -44,6 +44,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_RADIUS;
+ 
+ 			SphereSurfaceEmitter(void);
++	        // Torchlight: `SphereSurfaceEmitter::~SphereSurfaceEmitter`: the same as the library's.
+ 	        virtual ~SphereSurfaceEmitter(void) {};
+ 
+ 			/** 
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.cpp
+index 29080f3..f729ec1 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseSphereSurfaceEmitter.cpp
+@@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`SphereSurfaceEmitter::_GLOBAL__I_getRadius`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Real SphereSurfaceEmitter::DEFAULT_RADIUS = 10.0f;
+ 
+@@ -42,36 +44,54 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSurfaceEmitter::getRadius`: the same as the library's.
+ 	const Real SphereSurfaceEmitter::getRadius(void) const
+ 	{
+ 		return mRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSurfaceEmitter::setRadius`: the same as the library's.
+ 	void SphereSurfaceEmitter::setRadius(const Real radius)
+ 	{
+ 		mRadius = radius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereSurfaceEmitter::_initParticlePosition`. The three draws are
++	// made z, y, x and the vector normalised when longer than 1e-8. Keep local: the scaled point on
++	// the sphere plus the emitter's own position, scaled (the particle stays in the technique's
++	// space). Otherwise the scaled point put at the emitter's derived position, *not* turned by the
++	// system (the library turns it). Torchlight's third particle vector is zeroed.
+ 	void SphereSurfaceEmitter::_initParticlePosition(Particle* particle)
+ 	{
+-		// Generate a random unit vector to calculate a point on the sphere. This unit vector is
+-		// also used as direction vector if mAutoDirection has been set.
+-		mRandomVector = Vector3(Math::RangeRandom(-1, 1), 
+-			Math::RangeRandom(-1, 1),
+-			Math::RangeRandom(-1, 1));
+-		mRandomVector.normalise();
+-		ParticleSystem* sys = mParentTechnique->getParentSystem();
+-		if (sys)
++		Real z = Math::RangeRandom(-1, 1);
++		Real y = Math::RangeRandom(-1, 1);
++		Real x = Math::RangeRandom(-1, 1);
++		mRandomVector = Vector3(x, y, z);
++		Real length = Math::Sqrt(x * x + y * y + z * z);
++		if (length > 1e-08f)
+ 		{
+-			particle->position = getDerivedPosition() + sys->getDerivedOrientation() * (_mEmitterScale * mRandomVector * mRadius);
++			Real inverse = 1.0f / length;
++			mRandomVector = Vector3(x * inverse, y * inverse, z * inverse);
++		}
++		if (!isKeepLocal())
++		{
++			const Vector3& at = getDerivedPosition();
++			particle->position.x = _mEmitterScale.x * mRandomVector.x * mRadius + at.x;
++			particle->position.y = _mEmitterScale.y * mRandomVector.y * mRadius + at.y;
++			particle->position.z = _mEmitterScale.z * mRandomVector.z * mRadius + at.z;
+ 		}
+ 		else
+ 		{
+-			particle->position = getDerivedPosition() + (_mEmitterScale * mRandomVector * mRadius);
++			particle->position.x = mRandomVector.x * _mEmitterScale.x * mRadius + _mEmitterScale.x * position.x;
++			particle->position.y = mRandomVector.y * _mEmitterScale.y * mRadius + _mEmitterScale.y * position.y;
++			particle->position.z = mRandomVector.z * _mEmitterScale.z * mRadius + _mEmitterScale.z * position.z;
+ 		}
++		particle->torchlightVector28 = Vector3::ZERO;
+ 		particle->originalPosition = particle->position;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `SphereSurfaceEmitter::_initParticleDirection`: the
++	// same, OGRE's `randomDeviant` (a zero up vector takes the random vector's perpendicular).
+     void SphereSurfaceEmitter::_initParticleDirection(Particle* particle)
+     {
+ 		if (mAutoDirection)
+@@ -98,6 +118,7 @@ namespace ParticleUniverse
+ 		}
+     }
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `SphereSurfaceEmitter::copyAttributesTo`: the radius.
+ 	void SphereSurfaceEmitter::copyAttributesTo (ParticleEmitter* emitter)
+ 	{
+ 		ParticleEmitter::copyAttributesTo(emitter);

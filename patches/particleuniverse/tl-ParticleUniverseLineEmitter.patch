@@ -1,0 +1,375 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitter.h
+index 55b13f0..db52d36 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitter.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitter.h
+@@ -56,6 +56,11 @@ namespace ParticleUniverse
+ 			Real _mScaledMaxIncrement;
+ 			Real _mScaledLength;
+ 
++			/* Torchlight's own (`LineEmitter::LineEmitter`, `_notifyRescaled`). */
++			bool mEvenlySpaced;                 // +0x2c4, no increments given: the rate's particles spread evenly
++			Real mTimeSinceStart;               // +0x2c8, advanced each frame, less a duration each wrap; read nowhere
++			unsigned short mParticlesPerLine;   // +0x2cc, a zero rate releases this many at once
++
+ 		public:
+ 			// Constants
+ 			static const Vector3 DEFAULT_END;
+@@ -64,6 +69,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_MAX_DEVIATION;
+ 
+ 			LineEmitter(void);
++	        // Torchlight: `LineEmitter::~LineEmitter`: the same as the library's.
+ 	        virtual ~LineEmitter(void) {};
+ 
+ 			/** 
+diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseLineEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseLineEmitter.cpp
+index d8a0124..521b68e 100644
+--- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseLineEmitter.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseLineEmitter.cpp
+@@ -28,9 +28,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleEmitters/ParticleUniverseLineEmitter.h"
++#include <climits>
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`LineEmitter::_GLOBAL__I_LineEmitter`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const Vector3 LineEmitter::DEFAULT_END(0, 0, 0);
+ 	const Real LineEmitter::DEFAULT_MIN_INCREMENT = 0.0f;
+@@ -38,7 +41,9 @@ namespace ParticleUniverse
+ 	const Real LineEmitter::DEFAULT_MAX_DEVIATION = 0.0f;
+ 
+ 	//-----------------------------------------------------------------------
+-	LineEmitter::LineEmitter(void) : 
++	// Checked against Torchlight's `LineEmitter::LineEmitter`: the same, plus its own
++	// three. The time is not set there (`_notifyStart` sets it); zero here.
++	LineEmitter::LineEmitter(void) :
+ 		ParticleEmitter(),
+ 		mEnd(DEFAULT_END),
+ 		mPerpendicular(Vector3::ZERO),
+@@ -53,157 +58,244 @@ namespace ParticleUniverse
+ 		_mScaledMaxDeviation(0.0f),
+ 		_mScaledMinIncrement(0.0f),
+ 		_mScaledMaxIncrement(0.0f),
+-		_mScaledLength(0.0f)
++		_mScaledLength(0.0f),
++		mEvenlySpaced(false),
++		mTimeSinceStart(0.0f),
++		mParticlesPerLine(0)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::_notifyStart`. Also clears the time and the even
++	// spacing, then works the scaled values out again.
+ 	void LineEmitter::_notifyStart (void)
+ 	{
+-		// Reset the incremental attributes to allow a restart.
+ 		ParticleEmitter::_notifyStart();
+-		mIncrement = 0.0f;
+ 		mIncrementsLeft = true;
+ 		mFirst = true;
++		mIncrement = 0.0f;
++		mTimeSinceStart = 0.0f;
++		mEvenlySpaced = false;
++		_notifyRescaled(_mEmitterScale);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::_notifyRescaled`. The scaled maximum increment is the
++	// maximum itself, not the library's maximum less the minimum. With no increments at all and
++	// a line of some length, the particles are spaced evenly: both increments become the length
++	// over the emission rate (read at 0; 1 when not positive). Otherwise, at an emission rate of
++	// 0 and with a maximum increment, a whole line is released at once (`mParticlesPerLine`):
++	// the length over the step, rounded up, where the step is the scaled maximum less the
++	// *unscaled* minimum when that is smaller, and not below 0.
+ 	void LineEmitter::_notifyRescaled(const Vector3& scale)
+ 	{
+-		// Scale the internal attributes and use them, otherwise this results in too many calculations per particle
+ 		ParticleEmitter::_notifyRescaled(scale);
+-		Real scaleLength = scale.length();
+-		_mScaledEnd = mEnd * scale;
++		Real scaleLength = Math::Sqrt(scale.x * scale.x + scale.y * scale.y + scale.z * scale.z);
++		_mScaledEnd = Vector3(mEnd.x * scale.x, mEnd.y * scale.y, mEnd.z * scale.z);
++		mParticlesPerLine = 0;
+ 		_mScaledMaxDeviation = mMaxDeviation * scaleLength;
+ 		_mScaledMinIncrement = mMinIncrement * scaleLength;
+-		_mScaledMaxIncrement = (mMaxIncrement - mMinIncrement) * scaleLength;
+-		_mScaledLength = _mScaledEnd.length();
++		_mScaledMaxIncrement = scaleLength * mMaxIncrement;
++		_mScaledLength = Math::Sqrt(_mScaledEnd.x * _mScaledEnd.x + _mScaledEnd.y * _mScaledEnd.y + _mScaledEnd.z * _mScaledEnd.z);
++		Real rate = mDynEmissionRate->getValue(0, 0.0f);
++		if (_mScaledMinIncrement == 0.0f && _mScaledMaxIncrement == 0.0f && _mScaledLength != 0.0f)
++		{
++			mEvenlySpaced = true;
++			Real increment = _mScaledLength / (rate > 0.0f ? rate : 1.0f);
++			_mScaledMaxIncrement = increment;
++			_mScaledMinIncrement = increment;
++			return;
++		}
++		if (rate <= 0.0f && _mScaledMaxIncrement > 0.0f && _mScaledLength != 0.0f)
++		{
++			Real step = _mScaledMaxIncrement - mMinIncrement;
++			if (!(step < _mScaledMaxIncrement))
++				step = _mScaledMaxIncrement;
++			if (step <= 0.0f)
++				step = 0.0f;
++			Real count = Math::Ceil(_mScaledLength / step);
++			// cvttss2si: a count too large for an int (the step 0 gives infinity) comes out as
++			// INT_MIN, whose low 16 bits are 0.
++			int whole = (count >= -2147483648.0f && count < 2147483648.0f) ? (int)count : INT_MIN;
++			mParticlesPerLine = (unsigned short)whole;
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::_calculateRequestedParticles`. A line released all at
++	// once asks for its whole line each time while enabled (none when the emitter was disabled on
++	// entry), and counts a loop off each time, disabling itself on the last. Nothing more once
++	// the increments have run out. The library's restart on a disabled emitter is not here.
+ 	unsigned short LineEmitter::_calculateRequestedParticles(Real timeElapsed)
+ 	{
++		bool wasEnabled = mEnabled;
+ 		unsigned short requested = ParticleEmitter::_calculateRequestedParticles(timeElapsed);
+-
+-		if (_mScaledMaxIncrement > 0)
++		if (mParticlesPerLine != 0)
+ 		{
+-			// Do not create particles if there are no increments left
+-			if (!mIncrementsLeft)
++			if (!wasEnabled)
+ 			{
+-				// Set back to 0 again
+ 				requested = 0;
+ 			}
+-
+-			// For duration + repeat/delay: Clear the particles and start all over again.
+-			if (!mEnabled)
++			else
+ 			{
+-				_notifyStart();
+-				mParentTechnique->lockAllParticles(); // Needed to set the first generated particle also first in the list with particles
++				requested = mParticlesPerLine;
++				if (mRemainingLoops < 1)
++				{
++					if (mRemainingLoops == 0)
++						setEnabled(false);
++				}
++				else
++				{
++					--mRemainingLoops;
++					if (mRemainingLoops == 0)
++						setEnabled(false);
++				}
+ 			}
+ 		}
+-
++		mTimeSinceStart = timeElapsed + mTimeSinceStart;
++		if (_mScaledMaxIncrement > 0.0f && !mIncrementsLeft)
++		{
++			requested = 0;
++		}
+ 		return requested;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::getEnd`: the same as the library's.
+ 	const Vector3& LineEmitter::getEnd(void) const
+ 	{
+ 		return mEnd;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::setEnd`. The length is not worked out here; the
++	// scaled values are, all of them.
+ 	void LineEmitter::setEnd(const Vector3& end)
+ 	{
+ 		mEnd = end;
+-		_mScaledEnd = mEnd * _mEmitterScale;
+-		mLength = mEnd.length();
++		_notifyRescaled(_mEmitterScale);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::getMaxIncrement`: the same as the library's.
+ 	Real LineEmitter::getMaxIncrement(void) const
+ 	{
+ 		return mMaxIncrement;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::setMaxIncrement`.
+ 	void LineEmitter::setMaxIncrement(Real maxIncrement)
+ 	{
+ 		mMaxIncrement = maxIncrement;
+-		_mScaledMaxIncrement = mMaxIncrement * _mEmitterScale.length();
++		_notifyRescaled(_mEmitterScale);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::getMinIncrement`: the same as the library's.
+ 	Real LineEmitter::getMinIncrement(void) const
+ 	{
+ 		return mMinIncrement;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::setMinIncrement`.
+ 	void LineEmitter::setMinIncrement(Real minIncrement)
+ 	{
+ 		mMinIncrement = minIncrement;
+-		_mScaledMinIncrement = mMinIncrement * _mEmitterScale.length();
++		_notifyRescaled(_mEmitterScale);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::getMaxDeviation`: the same as the library's.
+ 	Real LineEmitter::getMaxDeviation(void) const
+ 	{
+ 		return mMaxDeviation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::setMaxDeviation`.
+ 	void LineEmitter::setMaxDeviation(Real maxDeviation)
+ 	{
+ 		mMaxDeviation = maxDeviation;
+-		_mScaledMaxDeviation = mMaxDeviation * _mEmitterScale.length();
++		_notifyRescaled(_mEmitterScale);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::_initParticlePosition`. The perpendicular's draws
++	// are made z, y, x. Along the path, the increment is a draw between the two scaled
++	// increments; past the end, a looping emitter wraps back by the length (taking the duration
++	// off its time) where one that does not loop stops. A keep-local emitter measures from
++	// zero - not from its own position - and anything else from its derived position, not
++	// turned by the system. Torchlight's third particle vector is zeroed.
+ 	void LineEmitter::_initParticlePosition(Particle* particle)
+ 	{
+-		// Remark: Don´t take the orientation of the node into account. The mEnd position is leading.
+-		if (mAutoDirection || (_mScaledMaxDeviation > 0.0f && !mFirst))
++		if (mAutoDirection || (0.0f < _mScaledMaxDeviation && !mFirst))
+ 		{
+-			// Generate a random vector perpendicular on the line if this is required
+-			mPerpendicular = mEnd.crossProduct(Vector3(Math::RangeRandom(-1, 1), 
+-				Math::RangeRandom(-1, 1), 
+-				Math::RangeRandom(-1, 1)));
+-			mPerpendicular.normalise();
++			Real z = Math::RangeRandom(-1, 1);
++			Real y = Math::RangeRandom(-1, 1);
++			Real x = Math::RangeRandom(-1, 1);
++			Real px = z * mEnd.y - y * mEnd.z;
++			Real py = x * mEnd.z - mEnd.x * z;
++			Real pz = y * mEnd.x - x * mEnd.y;
++			mPerpendicular = Vector3(px, py, pz);
++			Real length = Math::Sqrt(px * px + py * py + pz * pz);
++			if (length > 1e-08f)
++			{
++				Real inverse = 1.0f / length;
++				mPerpendicular = Vector3(px * inverse, py * inverse, pz * inverse);
++			}
+ 		}
+ 
+-		// If mMaxIncrement has been set, the particle emission follows a trajectory path along the line
+-		Real fraction = 0.0f;
+-		if (_mScaledMaxIncrement > 0.0f)
++		Real fraction;
++		if (_mScaledMaxIncrement <= 0.0f)
++		{
++			fraction = Math::UnitRandom();
++		}
++		else
+ 		{
++			fraction = 0.0f;
+ 			if (!mFirst)
+ 			{
+-				mIncrement += (_mScaledMinIncrement + Math::UnitRandom() * _mScaledMaxIncrement);
+-				if (mIncrement >= _mScaledLength)
++				mIncrement = Math::UnitRandom() * (_mScaledMaxIncrement - _mScaledMinIncrement) + _mScaledMinIncrement + mIncrement;
++				if (_mScaledLength <= mIncrement)
+ 				{
+-					mIncrementsLeft = false;
++					if (mNumberOfLoops == 0)
++					{
++						mIncrementsLeft = false;
++					}
++					else
++					{
++						mIncrement = mIncrement - _mScaledLength;
++						mTimeSinceStart = mTimeSinceStart - mDynDuration->getValue(0, 0.0f);
++					}
+ 				}
+-				fraction = mIncrement / _mScaledLength;
++				fraction = mIncrement / (_mScaledLength != 0.0f ? _mScaledLength : 1.0f);
+ 			}
+ 		}
+-		else
++
++		Vector3 base = Vector3::ZERO;
++		if (!isKeepLocal())
+ 		{
+-			fraction = Math::UnitRandom();
++			base = getDerivedPosition();
+ 		}
+-
+-		// If the deviation has been set, generate a position with a certain distance from the line
+-		getDerivedPosition();
+-		if (_mScaledMaxDeviation > 0.0f && mIncrementsLeft)
++		if (_mScaledMaxDeviation <= 0.0f || !mIncrementsLeft)
+ 		{
+-			if (!mFirst)
+-			{
+-				Vector3 basePosition = mDerivedPosition + fraction * _mScaledEnd;
+-				particle->position = basePosition + _mScaledMaxDeviation * Math::UnitRandom() * mPerpendicular;
+-				particle->originalPosition = basePosition;	// Position is without deviation from the line,
+-															// to make affectors a bit faster/easier.
+-			}
+-			else
+-			{
+-				particle->position = mDerivedPosition;
+-				particle->originalPosition = particle->position;
+-			}
++			particle->position.x = fraction * _mScaledEnd.x + base.x;
++			particle->position.y = _mScaledEnd.y * fraction + base.y;
++			particle->position.z = _mScaledEnd.z * fraction + base.z;
++			particle->originalPosition = particle->position;
++		}
++		else if (!mFirst)
++		{
++			Vector3 onLine(fraction * _mScaledEnd.x + base.x,
++				_mScaledEnd.y * fraction + base.y,
++				_mScaledEnd.z * fraction + base.z);
++			Real deviation = Math::UnitRandom() * _mScaledMaxDeviation;
++			particle->originalPosition = onLine;
++			particle->position.x = deviation * mPerpendicular.x + onLine.x;
++			particle->position.y = mPerpendicular.y * deviation + onLine.y;
++			particle->position.z = mPerpendicular.z * deviation + onLine.z;
+ 		}
+ 		else
+ 		{
+-			particle->position = mDerivedPosition + fraction * _mScaledEnd;
+-			particle->originalPosition = particle->position;
++			particle->position = base;
++			particle->originalPosition = base;
+ 		}
+-
++		particle->torchlightVector28 = Vector3::ZERO;
+ 		mFirst = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LineEmitter::_initParticleDirection`: the same,
++	// OGRE's `randomDeviant` about the perpendicular (a zero up vector takes its perpendicular).
+     void LineEmitter::_initParticleDirection(Particle* particle)
+     {
+ 		if (mAutoDirection)
+@@ -228,12 +320,15 @@ namespace ParticleUniverse
+ 		}
+     }
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `LineEmitter::copyAttributesTo`: only onto another Line emitter (a
++	// dynamic cast); the length is copied as it stands, each setter works the scaled values out.
+ 	void LineEmitter::copyAttributesTo (ParticleEmitter* emitter)
+ 	{
+ 		ParticleEmitter::copyAttributesTo(emitter);
+-
+-		LineEmitter* lineEmitter = static_cast<LineEmitter*>(emitter);
+-		lineEmitter->setEnd(mEnd); // Force calculation of the length
++		LineEmitter* lineEmitter = emitter ? dynamic_cast<LineEmitter*>(emitter) : 0;
++		if (!lineEmitter)
++			return;
++		lineEmitter->setEnd(mEnd);
+ 		lineEmitter->mLength = mLength;
+ 		lineEmitter->setMinIncrement(mMinIncrement);
+ 		lineEmitter->setMaxIncrement(mMaxIncrement);

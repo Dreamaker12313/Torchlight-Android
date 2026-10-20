@@ -1,0 +1,76 @@
+diff --git a/OgreMain/src/OgreDDSCodec.cpp b/OgreMain/src/OgreDDSCodec.cpp
+index 0d439d0ac..7ebf8bcad 100644
+--- a/OgreMain/src/OgreDDSCodec.cpp
++++ b/OgreMain/src/OgreDDSCodec.cpp
+@@ -816,6 +816,16 @@ namespace {
+         }
+         // Pixel format
+         PixelFormat sourceFormat = PF_UNKNOWN;
++        // Torchlight: 16-bit X1R5G5B5 (masks 7c00/3e0/1f, no alpha). Not
++        // __SWITCH__-guarded: both targets need it. No OGRE format matches
++        // those masks (A1R5G5B5's alpha mask is 0x8000), so convertPixelFormat
++        // threw "Cannot determine pixel format" and the texture layer was
++        // blank - the Steam Pak.zip's media/particles/Textures/Vein/vein06.dds,
++        // the only one in the archive, drawn by Brink's quake as a solid
++        // yellow square. It is expanded to PF_BYTE_RGBA, opaque, rather than
++        // loaded as a 16-bit format: GLES2 maps PF_A1R5G5B5 to
++        // GL_UNSIGNED_SHORT_5_5_5_1 with the bits the other way round.
++        bool x1r5g5b5 = false;
+ 
+         if (header.pixelFormat.flags & DDPF_FOURCC)
+         {
+@@ -836,7 +846,12 @@ namespace {
+         }
+         else
+         {
+-            sourceFormat = convertPixelFormat(header.pixelFormat.rgbBits, 
++            x1r5g5b5 = header.pixelFormat.rgbBits == 16 &&
++                header.pixelFormat.redMask == 0x7c00 &&
++                header.pixelFormat.greenMask == 0x3e0 &&
++                header.pixelFormat.blueMask == 0x1f &&
++                !(header.pixelFormat.flags & DDPF_ALPHAPIXELS);
++            sourceFormat = x1r5g5b5 ? PF_A1R5G5B5 : convertPixelFormat(header.pixelFormat.rgbBits, 
+                 header.pixelFormat.redMask, header.pixelFormat.greenMask, 
+                 header.pixelFormat.blueMask, 
+                 header.pixelFormat.flags & DDPF_ALPHAPIXELS ? 
+@@ -900,7 +915,7 @@ namespace {
+         {
+             // Don't test against DDPF_RGB since greyscale DDS doesn't set this
+             // just derive any other kind of format
+-            format = sourceFormat;
++            format = x1r5g5b5 ? PF_BYTE_RGBA : sourceFormat;
+         }
+ 
+         // Calculate total size from number of mipmaps, faces and size
+@@ -1022,6 +1037,31 @@ namespace {
+                     }
+ 
+                 }
++                else if (x1r5g5b5)
++                {
++                    // Torchlight: each X1R5G5B5 row expanded to R, G, B, 255.
++                    std::vector<uint16> row(width);
++                    for (size_t z = 0; z < depth; ++z)
++                    {
++                        for (size_t y = 0; y < height; ++y)
++                        {
++                            stream->read(row.data(), width * sizeof(uint16));
++                            uchar* out = static_cast<uchar*>(destPtr);
++                            for (size_t x = 0; x < width; ++x)
++                            {
++                                const uint16 p = row[x];
++                                const uint32 r = (p >> 10) & 0x1f;
++                                const uint32 g = (p >> 5) & 0x1f;
++                                const uint32 b = p & 0x1f;
++                                out[x * 4 + 0] = static_cast<uchar>((r << 3) | (r >> 2));
++                                out[x * 4 + 1] = static_cast<uchar>((g << 3) | (g >> 2));
++                                out[x * 4 + 2] = static_cast<uchar>((b << 3) | (b >> 2));
++                                out[x * 4 + 3] = 0xff;
++                            }
++                            destPtr = static_cast<void*>(static_cast<uchar*>(destPtr) + dstPitch);
++                        }
++                    }
++                }
+                 else
+                 {
+                     // Note: We assume the source and destination have the same pitch

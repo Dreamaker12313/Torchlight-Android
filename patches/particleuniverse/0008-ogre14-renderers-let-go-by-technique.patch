@@ -1,0 +1,74 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBeamRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBeamRenderer.h
+index 8ed0f8a..79cd4fe 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBeamRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBeamRenderer.h
+@@ -189,6 +189,13 @@ namespace ParticleUniverse
+ 		protected:
+ 
+ 			String mBillboardChainName;
++#if OGRE_VERSION >= 0xE0000
++			/** The technique this renderer was prepared for (the OGRE 14 port's fork). Torchlight's
++				technique lets go of its renderer before destroying it (`ParticleTechnique::destroyRenderer`
++				), and this library renderer needs a technique to destroy what it made.
++			*/
++			ParticleTechnique* mPreparedTechnique;
++#endif
+ 			Ogre::BillboardChain* mBillboardChain;
+ 			vector<BeamRendererVisualData*> mAllVisualData;
+ 			vector<BeamRendererVisualData*> mVisualData;
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseLightRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseLightRenderer.h
+index ea4b774..6e0dc51 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseLightRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseLightRenderer.h
+@@ -66,6 +66,13 @@ namespace ParticleUniverse
+ 
+ 		protected:
+ 			String mLightName; // Used for random light name prefix
++#if OGRE_VERSION >= 0xE0000
++			/** The technique this renderer was prepared for (the OGRE 14 port's fork). Torchlight's
++				technique lets go of its renderer before destroying it (`ParticleTechnique::destroyRenderer`
++				), and this library renderer needs a technique to destroy what it made.
++			*/
++			ParticleTechnique* mPreparedTechnique;
++#endif
+ 			vector<LightRendererVisualData*> mAllVisualData;
+ 			vector<LightRendererVisualData*> mVisualData;
+ 			vector<Ogre::Light*> mLights;
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseLightRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseLightRenderer.cpp
+index c8e7c93..7ae965d 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseLightRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseLightRenderer.cpp
+@@ -63,12 +63,23 @@ namespace ParticleUniverse
+ 		mFlashFrequency(0.0f),
+ 		mFlashLength(0.0f),
+ 		mFlashRandom(false)
++#if OGRE_VERSION >= 0xE0000
++		, mPreparedTechnique(0)
++#endif
+ 	{
+ 		autoRotate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	LightRenderer::~LightRenderer(void)
+ 	{
++#if OGRE_VERSION >= 0xE0000
++		// Torchlight's technique clears the parent before destroying its renderer
++		// (`ParticleTechnique::destroyRenderer`); the technique this renderer was prepared
++		// for is the one destroying it, so it is still there to tear down with. The game uses no
++		// light renderer; this only keeps the library's working with the fork's technique.
++		if (!mParentTechnique)
++			mParentTechnique = mPreparedTechnique;
++#endif
+ 		if (!mParentTechnique)
+ 			return;
+ 		
+@@ -251,6 +262,9 @@ namespace ParticleUniverse
+ 	{
+ 		if (!technique || mRendererInitialised)
+ 			return;
++#if OGRE_VERSION >= 0xE0000
++		mPreparedTechnique = technique;
++#endif
+ 
+ 		std::stringstream ss; 
+ 		ss << this;

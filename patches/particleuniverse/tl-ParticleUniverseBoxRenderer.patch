@@ -1,0 +1,143 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp
+index 95bc2ac..66bf96b 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp
+@@ -32,7 +32,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`BoxRenderer::_GLOBAL__I_BoxRenderer`)
++	// sets only HALFSCALE, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::BoxRenderer` makes the set with no name, no pool and
++	// external data, and puts its boxes in world space. (`autoRotate` is the library's field;
++	// Torchlight's renderer has none to write.)
+ 	BoxRenderer::BoxRenderer(void) : ParticleRenderer()
+ 	{
+ 		// Create Box set
+@@ -44,6 +49,8 @@ namespace ParticleUniverse
+ 		autoRotate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::~BoxRenderer`, the
++	// library's: deletes the set.
+ 	BoxRenderer::~BoxRenderer(void)
+ 	{
+ 		if (mBoxSet)
+@@ -53,14 +60,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_prepare`. The library's, less its `setQueryFlags(0)`:
++	// Torchlight's set keeps OGRE's default query flags.
+ 	void BoxRenderer::_prepare(ParticleTechnique* technique)
+ 	{
+ 		// Use the given technique, although it should be the same as mParentTechnique (must be set already)
+ 		if (!technique || mRendererInitialised)
+ 			return;
+ 
+-		// By default, make this transparent to query requests
+-		mBoxSet->setQueryFlags(0);
+ 		_notifyParticleQuota(technique->getVisualParticleQuota());
+ 
+ 		// Notify attached, but only if the parentnode exists
+@@ -77,26 +84,26 @@ namespace ParticleUniverse
+ 		mRendererInitialised = true;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight's renderer has no `_unprepare` (nor has its `ParticleRenderer`); the library's is
++	// kept for the library's own callers - it only lets go of the node.
+ 	void BoxRenderer::_unprepare(ParticleTechnique* technique)
+ 	{
+ 		_notifyAttached(0); // Bugfix V1.5: If detached from scenenode, do not use the pointer to it
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_updateRenderQueue`. Unlike the library's, no base call
++	// (its only work is soft particles) and no test of the renderer's visible flag; the set's
++	// buffers are locked whole (`beginBoxes(0)`). Each box stands at the particle's position alone -
++	// not plus Torchlight's third particle vector (+0x28), as the sphere renderer places its spheres.
+ 	void BoxRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
+ 	{
+-		// Always perform this one
+-		ParticleRenderer::_updateRenderQueue(queue, pool);
+-
+-		if (!mVisible)
+-			return;
+-
+ 		// Fast check to determine whether there are visual particles
+ 		if (pool->isEmpty(Particle::PT_VISUAL))
+ 			return;
+ 
+ 		mBoxSet->setCullIndividually(mCullIndividual);
+ 
+-		mBoxSet->beginBoxes(pool->getSize(Particle::PT_VISUAL));
++		mBoxSet->beginBoxes(0);
+ 		Box box;
+ 		
+ 		VisualParticle* particle = static_cast<VisualParticle*>(pool->getFirst(Particle::PT_VISUAL));
+@@ -136,41 +143,49 @@ namespace ParticleUniverse
+ 		mBoxSet->_updateRenderQueue(queue);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_notifyAttached`, the library's: forwards to the set.
+ 	void BoxRenderer::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+ 		mBoxSet->_notifyAttached(parent, isTagPoint);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_setMaterialName`, the library's: forwards to the set.
+ 	void BoxRenderer::_setMaterialName(const String& materialName)
+ 	{
+ 		mBoxSet->setMaterialName(materialName);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::notifyCurrentCamera`, the library's: forwards to the set.
+ 	void BoxRenderer::_notifyCurrentCamera(Camera* cam)
+ 	{
+ 		mBoxSet->_notifyCurrentCamera(cam);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_notifyParticleQuota`, the library's: the set's pool.
+ 	void BoxRenderer::_notifyParticleQuota(size_t quota)
+ 	{
+ 		mBoxSet->setPoolSize(static_cast<unsigned int>(quota));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_notifyDefaultDimensions`, the library's: forwards to the set.
+ 	void BoxRenderer::_notifyDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+ 		mBoxSet->setDefaultDimensions(width, height, depth);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_notifyParticleResized`, the library's: forwards to the set.
+ 	void BoxRenderer::_notifyParticleResized(void)
+ 	{
+ 		mBoxSet->_notifyResized();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::_notifyParticleZRotated`, the library's: forwards to the set.
+ 	void BoxRenderer::_notifyParticleZRotated(void)
+ 	{
+ 		mBoxSet->_notifyZRotated();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::setRenderQueueGroup`, the library's: stored and forwarded.
+ 	void BoxRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
+ 		mQueueId = queueId;
+@@ -180,12 +195,14 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::setVisible` only hides or shows the set; the renderer's
++	// own flag is not written (and `_updateRenderQueue` reads neither).
+ 	void BoxRenderer::setVisible(bool visible)
+ 	{
+-		ParticleRenderer::setVisible(visible);
+ 		mBoxSet->setVisible(visible);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BoxRenderer::copyAttributesTo`, the library's: the base's attributes only.
+ 	void BoxRenderer::copyAttributesTo (ParticleRenderer* renderer)
+ 	{
+ 		// First copy parent attributes

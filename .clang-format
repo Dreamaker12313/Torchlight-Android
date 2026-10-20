@@ -1,0 +1,26 @@
+# The port's C++ style, for clang-format 18 (`pip install clang-format==18.1.8`;
+# other versions lay some lines out differently).
+#
+# Google's layout with four-space indents and 100 columns: what the code was
+# already written in. Short `if`s, loops and case labels stay on one line, the
+# way the code reads against its reference.
+BasedOnStyle: Google
+IndentWidth: 4
+AccessModifierOffset: -4
+ColumnLimit: 100
+IndentCaseLabels: true
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+DerivePointerAlignment: false
+PointerAlignment: Left
+# The include groups (own header, project, OGRE, standard library) are kept
+# as written and sorted within each.
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+# Comments carry addresses, offsets and small tables laid out by hand;
+# clang-format does not rewrap them.
+ReflowComments: false

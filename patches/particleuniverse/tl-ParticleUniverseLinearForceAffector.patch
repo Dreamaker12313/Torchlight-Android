@@ -1,0 +1,42 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffector.h
+index 413c443..c76b8fe 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffector.h
+@@ -38,6 +38,7 @@ namespace ParticleUniverse
+ 				BaseForceAffector()
+ 			{
+ 			};
++	        // Torchlight: `LinearForceAffector::~LinearForceAffector`: the same as the library's.
+ 	        virtual ~LinearForceAffector(void) {};
+ 
+ 			/** 
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLinearForceAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLinearForceAffector.cpp
+index 42edac7..2a3b8a6 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLinearForceAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLinearForceAffector.cpp
+@@ -31,18 +31,25 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`LinearForceAffector::_GLOBAL__I_copyAttributesTo`)
++	// sets up only the stream library, the same as the library's.
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LinearForceAffector::copyAttributesTo`, which is
++	// `ForceAffector::copyAttributesTo`: force and application.
+ 	void LinearForceAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		BaseForceAffector::copyAttributesTo(affector);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LinearForceAffector::_preProcessParticles`: the same.
+ 	void LinearForceAffector::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+ 		// Scale force
+ 		mScaledVector = mForceVector * timeElapsed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `LinearForceAffector::_affect`: `Add` adds the scaled
++	// force times the specialisation factor, `Average` halves the sum with the unscaled force.
+ 	void LinearForceAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+ 		// Affect the direction and take the specialisation into account

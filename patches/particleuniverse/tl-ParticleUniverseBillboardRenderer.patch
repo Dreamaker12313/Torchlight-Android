@@ -1,0 +1,515 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRenderer.h
+index f457107..27a2e5c 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRenderer.h
+@@ -44,6 +44,9 @@ namespace ParticleUniverse
+ 				which basicly means that the billboard orientation is derived from the particle 
+ 				orientation.
+ 			*/
++			/** Torchlight's ten types (`BillboardRenderer::setBillboardType`): its
++				own 5-8 sit between the library's, and PERPENDICULAR_SELF is 9.
++			*/
+ 			enum BillboardType
+ 			{
+ 				BBT_POINT,
+@@ -51,6 +54,10 @@ namespace ParticleUniverse
+ 				BBT_ORIENTED_SELF,
+ 				BBT_ORIENTED_SHAPE,
+ 				BBT_PERPENDICULAR_COMMON,
++				BBT_TL_UP,
++				BBT_TL_FORWARD,
++				BBT_TL_FORWARD_CAMERA,
++				BBT_TL_UP_CAMERA,
+ 				BBT_PERPENDICULAR_SELF
+ 			};
+ 
+@@ -178,11 +185,29 @@ namespace ParticleUniverse
+ 			/** @copydoc ParticleRenderer::setVisible */
+ 			virtual void setVisible(bool visible);
+ 
++			/** Torchlight: the sprite sheet, cells across and down. */
++			void setFlipbookWidthHeight(int width, int height);
++			virtual void _notifyFlipbookWidthHeight(int width, int height);
++
+ 		protected:
+ 			/** 
+ 			*/
+ 			Ogre::BillboardSet* mBillboardSet;
+ 
++			/** Torchlight (+0x94, +0x98, +0x9c, +0xa0): the sheet's cell count, its cells
++				across and down, and the billboard set's pool size.
++			*/
++			int mFlipbookFrames;
++			int mFlipbookWidth;
++			int mFlipbookHeight;
++			int mPoolSize;
++
++			/** Torchlight: the common direction and up of the Up/Forward types, turned into
++				the node's frame for a keep-local technique (shared by _prepare and
++				_updateRenderQueue).
++			*/
++			void _orientCommonVectors(bool always);
++
+ 			/** 
+ 			*/
+ 			BillboardType mBillboardType;
+diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
+index 95acc0a..9b9da2f 100644
+--- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
+@@ -29,9 +29,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ #include "ParticleRenderers/ParticleUniverseBillboardRenderer.h"
+ #include "ParticleRenderers/ParticleUniverseBillboard.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`BillboardRenderer::_GLOBAL__I_BillboardRenderer`)
++	// builds the context strings (ParticleUniverseContext.h) and HALFSCALE, the same as the
++	// library's.
+ 	// Constants
+ 	const BillboardRenderer::BillboardType BillboardRenderer::DEFAULT_BILLBOARD_TYPE = BillboardRenderer::BBT_POINT;
+ 	const bool BillboardRenderer::DEFAULT_ACCURATE_FACING = false;
+@@ -42,15 +46,24 @@ namespace ParticleUniverse
+ 	const bool BillboardRenderer::DEFAULT_POINT_RENDERING = false;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::BillboardRenderer`: a pool of one, and the set
++	// hidden until it has something to draw.
+ 	BillboardRenderer::BillboardRenderer(void) : 
+ 		ParticleRenderer(),
+-		mBillboardType(DEFAULT_BILLBOARD_TYPE)
++		mBillboardType(DEFAULT_BILLBOARD_TYPE),
++		mFlipbookFrames(0),
++		mFlipbookWidth(0),
++		mFlipbookHeight(0),
++		mPoolSize(1)
+ 	{
+ 		mBillboardSet = PU_NEW Ogre::BillboardSet("", 0, true);
+ 		mBillboardSet->setBillboardsInWorldSpace(true);
++		mBillboardSet->setPoolSize(1);
++		mBillboardSet->setVisible(false);
+ 		autoRotate = false;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::~BillboardRenderer`: the same as the library's.
+ 	BillboardRenderer::~BillboardRenderer(void)
+ 	{
+ 		if (mBillboardSet)
+@@ -60,39 +73,89 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_prepare`. A keep-local technique's billboards
++	// are drawn in the node's space. No quota and no texture coordinates here (the sheet comes
++	// from the technique's flipbook); individual culling off; then the common vectors of the
++	// Up/Forward types.
+ 	void BillboardRenderer::_prepare(ParticleTechnique* technique)
+ 	{
+-		// Use the given technique, although it should be the same as mParentTechnique (must be set already)
+ 		if (!technique || mRendererInitialised)
+ 			return;
+ 
+-		// By default, make this transparent to query requests
+-		mBillboardSet->setQueryFlags(0);
+-		_notifyParticleQuota(technique->getVisualParticleQuota());
++		mParentTechnique = technique;
++		mBillboardSet->setBillboardsInWorldSpace(!technique->isKeepLocal());
+ 
+-		// Notify attached, but only if the parentnode exists
+-		if (technique->getParentSystem()->getParentNode())
+-		{		
+-			_notifyAttached(technique->getParentSystem()->getParentNode(), 
+-							technique->getParentSystem()->isParentIsTagPoint());
++		if (technique->getParentSystem() && technique->getParentSystem()->getParentNode())
++		{
++			_notifyAttached(technique->getParentSystem()->getParentNode(),
++				technique->getParentSystem()->isParentIsTagPoint());
+ 		}
+ 		_notifyDefaultDimensions(_mRendererScale.x * technique->getDefaultWidth(),
+ 								_mRendererScale.y * technique->getDefaultHeight(),
+ 								_mRendererScale.z * technique->getDefaultDepth());
+ 		_setMaterialName(technique->getMaterialName());
+ 		mBillboardSet->setRenderQueueGroup(mQueueId);
+-		
+-		// Set the texture coordinates (if used)
+-		if (mTextureCoordsSet)
++		mBillboardSet->setCullIndividually(false);
++
++		_orientCommonVectors(true);
++		mRendererInitialised = true;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: the switch shared by `_prepare` and `_updateRenderQueue`.
++	// Forward Camera faces the camera (direction the way to it, up world Y); Up Camera lies along
++	// world Y pointing at it; Forward follows the system's z and y axes; Up and Perpendicular
++	// Common use fixed axes, which only _prepare sets unless the technique keeps local. For a
++	// keep-local technique every vector is turned by the inverse of the system's orientation.
++	void BillboardRenderer::_orientCommonVectors(bool always)
++	{
++		bool keepLocal = mParentTechnique->isKeepLocal();
++		Quaternion toLocal = Quaternion::IDENTITY;
++		if (keepLocal)
+ 		{
+-			mBillboardSet->setTextureCoords(*mUVList.begin(), static_cast<uint16>(mUVList.size()));
++			toLocal = mParentTechnique->getParentSystem()->getDerivedOrientation().Inverse();
+ 		}
+-		else if (mTextureCoordsRowsAndColumnsSet)
++
++		switch (mBillboardType)
+ 		{
+-			mBillboardSet->setTextureStacksAndSlices(mTextureCoordsRows, mTextureCoordsColumns);
++			case BBT_TL_FORWARD_CAMERA:
++			{
++				Vector3 toCamera = mCameraDirection;
++				toCamera.normalise();
++				toCamera = -toCamera;
++				mBillboardSet->setCommonDirection(toLocal * toCamera);
++				mBillboardSet->setCommonUpVector(toLocal * Vector3::UNIT_Y);
++				break;
++			}
++			case BBT_TL_UP_CAMERA:
++			{
++				Vector3 toCamera = mCameraDirection;
++				toCamera.normalise();
++				toCamera = -toCamera;
++				mBillboardSet->setCommonDirection(toLocal * Vector3::UNIT_Y);
++				mBillboardSet->setCommonUpVector(toLocal * toCamera);
++				break;
++			}
++			case BBT_TL_UP:
++				if (always || keepLocal)
++				{
++					mBillboardSet->setCommonDirection(toLocal * Vector3::UNIT_Y);
++					mBillboardSet->setCommonUpVector(toLocal * Vector3::UNIT_Z);
++				}
++				break;
++			case BBT_TL_FORWARD:
++				mBillboardSet->setCommonDirection(toLocal * mCommonDirection);
++				mBillboardSet->setCommonUpVector(toLocal * mCommonUp);
++				break;
++			case BBT_PERPENDICULAR_COMMON:
++				if (always || keepLocal)
++				{
++					mBillboardSet->setCommonDirection(toLocal * Vector3::UNIT_Z);
++					mBillboardSet->setCommonUpVector(toLocal * Vector3::UNIT_Y);
++				}
++				break;
++			default:
++				break;
+ 		}
+-		
+-		mRendererInitialised = true;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void BillboardRenderer::_unprepare(ParticleTechnique* technique)
+@@ -100,205 +163,258 @@ namespace ParticleUniverse
+ 		_notifyAttached(0); // Bugfix V1.5: If detached from scenenode, do not use the pointer to it
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setBillboardType`. World space follows the
++	// technique's keep local; Torchlight's own types 5-8 are OGRE's perpendicular common.
+ 	void BillboardRenderer::setBillboardType(BillboardType bbt)
+ 	{
++		mBillboardSet->setBillboardsInWorldSpace(!(mParentTechnique && mParentTechnique->isKeepLocal()));
+ 		mBillboardType = bbt;
+-
+-		// Because BBT_ORIENTED_SHAPE is unknown to Ogre, this switch is needed
+ 		switch (bbt)
+ 		{
+ 			case BBT_POINT:
+ 				mBillboardSet->setBillboardType(Ogre::BBT_POINT);
+ 				break;
+-
+ 			case BBT_ORIENTED_COMMON:
+ 				mBillboardSet->setBillboardType(Ogre::BBT_ORIENTED_COMMON);
+ 				break;
+-
+ 			case BBT_ORIENTED_SELF:
+-				mBillboardSet->setBillboardType(Ogre::BBT_ORIENTED_SELF);
+-				break;
+-
+ 			case BBT_ORIENTED_SHAPE:
+ 				mBillboardSet->setBillboardType(Ogre::BBT_ORIENTED_SELF);
+ 				break;
+-
+ 			case BBT_PERPENDICULAR_COMMON:
++			case BBT_TL_UP:
++			case BBT_TL_FORWARD:
++			case BBT_TL_FORWARD_CAMERA:
++			case BBT_TL_UP_CAMERA:
+ 				mBillboardSet->setBillboardType(Ogre::BBT_PERPENDICULAR_COMMON);
+ 				break;
+-
+ 			case BBT_PERPENDICULAR_SELF:
+ 				mBillboardSet->setBillboardType(Ogre::BBT_PERPENDICULAR_SELF);
+ 				break;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::getBillboardType`: the same as the library's.
+ 	BillboardRenderer::BillboardType BillboardRenderer::getBillboardType(void) const
+ 	{
+ 		return mBillboardType;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setUseAccurateFacing`: the same as the library's.
+ 	void BillboardRenderer::setUseAccurateFacing(bool acc)
+ 	{
+ 		mBillboardSet->setUseAccurateFacing(acc);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::isUseAccurateFacing`: the same as the library's.
+ 	bool BillboardRenderer::isUseAccurateFacing(void) const
+ 	{
+ 		return mBillboardSet->getUseAccurateFacing();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setBillboardRotationType`: the same as the library's.
+ 	void BillboardRenderer::setBillboardRotationType(Ogre::BillboardRotationType rotationType)
+ 	{
+ 		mBillboardSet->setBillboardRotationType(rotationType);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::getBillboardRotationType`: the same as the library's.
+ 	Ogre::BillboardRotationType BillboardRenderer::getBillboardRotationType(void) const
+ 	{
+ 		return mBillboardSet->getBillboardRotationType();
+ 	}
+     //-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setCommonDirection`: the set's, and the renderer's
++	// own common direction (which `ParticleSystem::notifyCurrentCamera` also writes).
+ 	void BillboardRenderer::setCommonDirection(const Vector3& vec)
+ 	{
+ 		mBillboardSet->setCommonDirection(vec);
++		mCommonDirection = vec;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::getCommonDirection`: the same as the library's.
+ 	const Vector3& BillboardRenderer::getCommonDirection(void) const
+ 	{
+ 		return mBillboardSet->getCommonDirection();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setCommonUpVector`: the set's, and the renderer's
++	// own common up vector.
+ 	void BillboardRenderer::setCommonUpVector(const Vector3& vec)
+ 	{
+ 		mBillboardSet->setCommonUpVector(vec);
++		mCommonUp = vec;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::getCommonUpVector`: the same as the library's.
+ 	const Vector3& BillboardRenderer::getCommonUpVector(void) const
+ 	{
+ 		return mBillboardSet->getCommonUpVector();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setPointRenderingEnabled`: the same as the library's.
+ 	void BillboardRenderer::setPointRenderingEnabled(bool enabled)
+ 	{
+ 		mBillboardSet->setPointRenderingEnabled(enabled);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::isPointRenderingEnabled`: the same as the library's.
+ 	bool BillboardRenderer::isPointRenderingEnabled(void) const
+ 	{
+ 		return mBillboardSet->isPointRenderingEnabled();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_updateRenderQueue`. No base call and no
++	// visibility test: an empty pool hides the set, anything else shows it. The common vectors are
++	// refreshed, the set's pool grows to the particles alive (the quota caps nothing), and each
++	// particle is drawn at its position plus Torchlight's offset. A particle with an animation
++	// speed on a sheet of more than one cell shows its frame, wrapped in place; otherwise the
++	// billboard keeps the previous particle's cell (one billboard is reused, quirk kept).
+ 	void BillboardRenderer::_updateRenderQueue(Ogre::RenderQueue* queue, ParticlePool* pool)
+ 	{
+-		// Always perform this one
+-		ParticleRenderer::_updateRenderQueue(queue, pool);
+-
+-		if (!mVisible)
+-			return;
+-
+-		// Fast check to determine whether there are visual particles
+ 		if (pool->isEmpty(Particle::PT_VISUAL))
++		{
++			mBillboardSet->setVisible(false);
+ 			return;
++		}
+ 
+-		mBillboardSet->setCullIndividually(mCullIndividual);
++		_orientCommonVectors(false);
++		_notifyParticleQuota(pool->getSize(Particle::PT_VISUAL));
+ 
+-		mBillboardSet->beginBillboards(pool->getSize(Particle::PT_VISUAL));
++		mBillboardSet->beginBillboards(0);
+ 		Billboard bb; // This is the Particle Universe Billboard and not the Ogre Billboard
+-		
++		bool injected = false;
+ 		VisualParticle* particle = static_cast<VisualParticle*>(pool->getFirst(Particle::PT_VISUAL));
+ 		while (!pool->end(Particle::PT_VISUAL))
+ 		{
+ 			if (particle)
+ 			{
+-				bb.mPosition = particle->position;
+-
+-				if (mBillboardType == BBT_ORIENTED_SELF || mBillboardType == BBT_PERPENDICULAR_SELF)
++				bb.mPosition = particle->position + particle->torchlightVector28;
++				if (mBillboardType == BBT_PERPENDICULAR_SELF || mBillboardType == BBT_ORIENTED_SELF)
+ 				{
+-					// Normalise direction vector
+ 					bb.mDirection = particle->direction;
+ 					bb.mDirection.normalise();
+ 				}
+ 				else if (mBillboardType == BBT_ORIENTED_SHAPE)
+ 				{
+-					// Normalise orientation vector
+ 					bb.mDirection = Vector3(particle->orientation.x, particle->orientation.y, particle->orientation.z);
+ 					bb.mDirection.normalise();
+ 				}
+-					
+ 				bb.setColour(particle->colour);
+-				bb.mRotation = particle->zRotation; // Use rotation around the Z-axis (2D rotation)
++				bb.mRotation = particle->zRotation;
++
++				if (particle->animationSpeed != 0.0f && mFlipbookFrames > 1)
++				{
++					while ((Real)mFlipbookFrames <= particle->animationFrame)
++					{
++						particle->animationFrame -= (Real)mFlipbookFrames;
++					}
++					bb.setTexcoordIndex((uint16)x86FloatToInt32(std::floor(particle->animationFrame))); // portable: x86's answer on every CPU
++				}
+ 
+ 				if (particle->ownDimensions)
+ 				{
+ 					bb.setDimensions(particle->width, particle->height);
+ 				}
+-
+-				// PU 1.4: No validation on max. texture coordinate because of performance reasons.
+-				bb.setTexcoordIndex(particle->textureCoordsCurrent);
+-					
+ 				mBillboardSet->injectBillboard(bb);
++				injected = true;
+ 			}
+-			
+ 			particle = static_cast<VisualParticle*>(pool->getNext(Particle::PT_VISUAL));
+ 		}
++		mBillboardSet->endBillboards();
+ 
+-        mBillboardSet->endBillboards();
+-
+-		// Update the queue
+-		mBillboardSet->_updateRenderQueue(queue);
++		if (injected)
++		{
++			mBillboardSet->setVisible(true);
++			mBillboardSet->_updateRenderQueue(queue);
++			// The original also adds the particle count to a statistic in the manager
++			// (+0x4f4) that nothing reads.
++		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_notifyAttached`: the same as the library's.
+ 	void BillboardRenderer::_notifyAttached(Ogre::Node* parent, bool isTagPoint)
+ 	{
+ 		mBillboardSet->_notifyAttached(parent, isTagPoint);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_setMaterialName`: the same as the library's.
+ 	void BillboardRenderer::_setMaterialName(const String& materialName)
+ 	{
+ 		mBillboardSet->setMaterialName(materialName);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::notifyCurrentCamera`: the same as the library's.
+ 	void BillboardRenderer::_notifyCurrentCamera(Camera* cam)
+ 	{
+ 		mBillboardSet->_notifyCurrentCamera(cam);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_notifyParticleQuota`: the set only grows, to
++	// 25 more than asked.
+ 	void BillboardRenderer::_notifyParticleQuota(size_t quota)
+ 	{
+-		mBillboardSet->setPoolSize(static_cast<unsigned int>(quota));
++		if ((int)quota < mPoolSize)
++			return;
++		mPoolSize = (int)quota + 25;
++		mBillboardSet->setPoolSize((size_t)mPoolSize);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_notifyDefaultDimensions`: the same as the library's.
+ 	void BillboardRenderer::_notifyDefaultDimensions(Real width, Real height, Real depth)
+ 	{
+ 		// Ignore the depth, because the billboard is flat.
+ 		mBillboardSet->setDefaultDimensions(width, height);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_notifyParticleResized` tells the set
++	// (`_notifyBillboardResized`), which in OGRE 1.6 only turns off the set's all-default-size
++	// shortcut. OGRE 14's set has no such shortcut (each billboard knows whether it has its own
++	// size), so there is nothing to do.
+ 	void BillboardRenderer::_notifyParticleResized(void)
+ 	{
+ 		
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_notifyParticleZRotated`: likewise
++	// (`_notifyBillboardRotated`, OGRE 1.6's all-default-rotation shortcut).
+ 	void BillboardRenderer::_notifyParticleZRotated(void)
+ 	{
+ 		
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setRenderQueueGroup`: the same as the library's.
+ 	void BillboardRenderer::setRenderQueueGroup(uint8 queueId)
+ 	{
+ 		mQueueId = queueId;
+ 		mBillboardSet->setRenderQueueGroup(mQueueId);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::_getSortMode`: the same as the library's.
+ 	SortMode BillboardRenderer::_getSortMode(void) const
+ 	{
+ 		return mBillboardSet->_getSortMode();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setVisible` does nothing; the set's visibility
++	// follows whether it has particles (_updateRenderQueue).
+ 	void BillboardRenderer::setVisible(bool visible)
+ 	{
+-		ParticleRenderer::setVisible(visible);
+-		mBillboardSet->setVisible(visible);
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `BillboardRenderer::setFlipbookWidthHeight` and
++	// `_notifyFlipbookWidthHeight`, the same body: OGRE's stacks are the rows.
++	void BillboardRenderer::setFlipbookWidthHeight(int width, int height)
++	{
++		mFlipbookWidth = width;
++		mFlipbookHeight = height;
++		mFlipbookFrames = height * width;
++		mBillboardSet->setTextureStacksAndSlices((uchar)height, (uchar)width);
++	}
++	//-----------------------------------------------------------------------
++	void BillboardRenderer::_notifyFlipbookWidthHeight(int width, int height)
++	{
++		setFlipbookWidthHeight(width, height);
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	void BillboardRenderer::copyAttributesTo (ParticleRenderer* renderer)
+@@ -320,6 +436,11 @@ namespace ParticleUniverse
+ 		billboardRenderer->setCommonUpVector(getCommonUpVector());
+ 		billboardRenderer->setPointRenderingEnabled(isPointRenderingEnabled());
+ 		billboardRenderer->setUseAccurateFacing(isUseAccurateFacing());
++
++		// Torchlight (`BillboardRenderer::copyAttributesTo`): the sheet too, and the
++		// copy's pool starts over.
++		billboardRenderer->setFlipbookWidthHeight(mFlipbookWidth, mFlipbookHeight);
++		billboardRenderer->mPoolSize = 0;
+ 	}
+ 
+ }

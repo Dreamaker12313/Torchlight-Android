@@ -1,0 +1,149 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffector.h
+index 11571a8..50d06d7 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffector.h
+@@ -39,6 +39,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_FREQ_MAX;
+ 
+ 			SineForceAffector(void);
++	        // Torchlight: `SineForceAffector::~SineForceAffector`: the same as the library's.
+ 	        virtual ~SineForceAffector(void) {};
+ 
+ 			/** @copydoc ParticleAffector::copyAttributesTo */
+@@ -53,6 +54,12 @@ namespace ParticleUniverse
+ 			virtual void _affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed);
+ 
+ 			/** 
++	        */
++			/** Torchlight: the angle the sine is at, read by the ribbon renderer's beam.
++	        */
++			Real getAngle(void) const;
++
++			/**
+ 	        */
+ 			const Real getFrequencyMin(void) const;
+ 			void setFrequencyMin(const Real frequencyMin);
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
+index 389b7b6..2b0ea87 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
+@@ -28,23 +28,28 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ #endif
+ 
+ #include "ParticleAffectors/ParticleUniverseSineForceAffector.h"
++#include "ParticleUniverseFloatConvert.h"
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`SineForceAffector::_GLOBAL__I_copyAttributesTo`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
+ 	const Real SineForceAffector::DEFAULT_FREQ_MIN = 1.0f;
+ 	const Real SineForceAffector::DEFAULT_FREQ_MAX = 1.0f;
+ 
+ 	//-----------------------------------------------------------------------
+-	SineForceAffector::SineForceAffector(void) : 
++	// Torchlight (`SineForceAffectorFactory::createAffector`): the angle starts at 0.
++	SineForceAffector::SineForceAffector(void) :
+ 		BaseForceAffector(),
+-		mAngle(361),
++		mAngle(0),
+ 		mFrequencyMin(DEFAULT_FREQ_MIN),
+ 		mFrequencyMax(DEFAULT_FREQ_MAX),
+ 		mFrequency(1.0f)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::copyAttributesTo`: the same as the library's.
+ 	void SineForceAffector::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		BaseForceAffector::copyAttributesTo(affector);
+@@ -56,29 +61,43 @@ namespace ParticleUniverse
+ 		sineForceAffector->mAngle = mAngle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::_preProcessParticles`. The angle wraps at 1000
++	// before it moves; the frequency is drawn again every frame; the force this frame is the
++	// force vector x time x the sine.
+ 	void SineForceAffector::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Scale by time
+-		mAngle += mFrequency * timeElapsed;
+-		Real sineValue = Math::Sin(Radian(mAngle));
+-		mScaledVector = mForceVector * timeElapsed * sineValue;
+-
+-		if (mAngle > Math::TWO_PI)
++		if (mAngle > 1000.0f)
+ 		{
+-			mAngle = 0.0f;
+-
+-			if (mFrequencyMin != mFrequencyMax)
+-			{
+-				mFrequency = Math::RangeRandom(mFrequencyMin, mFrequencyMax);
+-			}
++			mAngle = (Real)x86FloatToInt32(mAngle / 1000.0f) * -1000.0f + mAngle; // portable: x86's answer on every CPU
++		}
++		if (mFrequencyMin == mFrequencyMax)
++		{
++			mFrequency = mFrequencyMin;
++		}
++		else
++		{
++			mFrequency = Math::RangeRandom(mFrequencyMin, mFrequencyMax);
+ 		}
++		mAngle = mFrequency * timeElapsed + mAngle;
++		Real sineValue = sinf(mAngle);
++		mScaledVector.z = mForceVector.z * timeElapsed * sineValue;
++		mScaledVector.y = mForceVector.y * timeElapsed * sineValue;
++		mScaledVector.x = timeElapsed * mForceVector.x * sineValue;
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::getAngle`.
++	Real SineForceAffector::getAngle(void) const
++	{
++		return mAngle;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::getFrequencyMin`: the same as the library's.
+ 	const Real SineForceAffector::getFrequencyMin(void) const
+ 	{
+ 		return mFrequencyMin;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::setFrequencyMin`: the same as the library's.
+ 	void SineForceAffector::setFrequencyMin(const Real frequencyMin)
+ 	{
+ 		mFrequencyMin = frequencyMin;
+@@ -88,27 +107,30 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::getFrequencyMax`: the same as the library's.
+ 	const Real SineForceAffector::getFrequencyMax(void) const
+ 	{
+ 		return mFrequencyMax;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::setFrequencyMax`: the same as the library's.
+ 	void SineForceAffector::setFrequencyMax(const Real frequencyMax)
+ 	{
+ 		mFrequencyMax = frequencyMax;
+ 		mFrequency = frequencyMax;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SineForceAffector::_affect`. `Add` adds this frame's force to the
++	// direction; `Average` does not average - the direction becomes this frame's force.
+ 	void SineForceAffector::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		// Affect the direction
+ 		if (mForceApplication == FA_ADD)
+ 		{
+ 			particle->direction += mScaledVector;
+ 		}
+ 		else
+ 		{
+-			particle->direction = (particle->direction + mForceVector) / 2;
++			particle->direction = mScaledVector;
+ 		}
+ 	}
+ 

@@ -1,0 +1,110 @@
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureRotator.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureRotator.cpp
+index 2128189..9ae5625 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureRotator.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureRotator.cpp
+@@ -31,12 +31,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`TextureRotator::_GLOBAL__I_TextureRotator`)
++	// sets only HALFSCALE, the same as the library's.
+ 	// Constants
+ 	const bool TextureRotator::DEFAULT_USE_OWN_SPEED = false;
+ 	const Real TextureRotator::DEFAULT_ROTATION_SPEED = 10.0f;
+ 	const Real TextureRotator::DEFAULT_ROTATION = 0.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::TextureRotator`: the same as the library's (rotation fixed 0, speed fixed 10).
+ 	TextureRotator::TextureRotator(void) : 
+ 		ParticleAffector(),
+ 		mUseOwnRotationSpeed(DEFAULT_USE_OWN_SPEED),
+@@ -49,6 +52,7 @@ namespace ParticleUniverse
+ 		(static_cast<DynamicAttributeFixed*>(mDynRotationSpeed))->setValue(DEFAULT_ROTATION_SPEED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::~TextureRotator`: the same as the library's.
+ 	TextureRotator::~TextureRotator(void)
+ 	{
+ 		if (mDynRotation)
+@@ -64,21 +68,25 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::useOwnRotationSpeed`: the same as the library's.
+ 	bool TextureRotator::useOwnRotationSpeed (void) const
+ 	{
+ 		return mUseOwnRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::setUseOwnRotationSpeed`: the same as the library's.
+ 	void TextureRotator::setUseOwnRotationSpeed (bool useOwnRotationSpeed)
+ 	{
+ 		mUseOwnRotationSpeed = useOwnRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::getRotation`: the same as the library's.
+ 	DynamicAttribute* TextureRotator::getRotation(void) const
+ 	{
+ 		return mDynRotation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::setRotation`: the same as the library's.
+ 	void TextureRotator::setRotation(DynamicAttribute* dynRotation)
+ 	{
+ 		if (mDynRotation)
+@@ -87,11 +95,13 @@ namespace ParticleUniverse
+ 		mDynRotation = dynRotation;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::getRotationSpeed`: the same as the library's.
+ 	DynamicAttribute* TextureRotator::getRotationSpeed(void) const
+ 	{
+ 		return mDynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::setRotationSpeed`: the same as the library's.
+ 	void TextureRotator::setRotationSpeed(DynamicAttribute* dynRotationSpeed)
+ 	{
+ 		if (mDynRotationSpeed)
+@@ -100,16 +110,23 @@ namespace ParticleUniverse
+ 		mDynRotationSpeed = dynRotationSpeed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::_calculateRotation`: read at the system's age with no
++	// particle, so a random starting rotation is a fresh draw every time; taken as radians.
+ 	Radian TextureRotator::_calculateRotation(void)
+ 	{
+-		return Radian(mDynamicAttributeHelper.calculate(mDynRotation, mParentTechnique->getParentSystem()->getTimeElapsedSinceStart()));
++		return Radian(mDynamicAttributeHelper.calculate(0, mDynRotation,
++			mParentTechnique->getParentSystem()->getTimeElapsedSinceStart(), 0.0f));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::_calculateRotationSpeed`: the particle's own draw at
++	// its age, authored in OGRE's angle unit (degrees) and turned into radians.
+ 	Radian TextureRotator::_calculateRotationSpeed(Particle* particle)
+ 	{
+-		return Radian(mDynamicAttributeHelper.calculate(mDynRotationSpeed, particle->timeFraction));
++		return Radian(Math::AngleUnitsToRadians(mDynamicAttributeHelper.calculate(particle, mDynRotationSpeed,
++			particle->timeFraction, 0.0f)));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `TextureRotator::_initParticleForEmission`: the same.
+ 	void TextureRotator::_initParticleForEmission(Particle* particle)
+ 	{
+ 		// Only continue if the particle is a visual particle
+@@ -129,6 +146,7 @@ namespace ParticleUniverse
+ 		visualParticle->zRotationSpeed = _calculateRotationSpeed(particle);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `TextureRotator::_affect`: the same (wraps at 2 pi).
+ 	void TextureRotator::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+ 		// Only continue if the particle is a visual particle
+@@ -155,6 +173,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `TextureRotator::copyAttributesTo`: the same as the library's.
+ 	void TextureRotator::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		ParticleAffector::copyAttributesTo(affector);

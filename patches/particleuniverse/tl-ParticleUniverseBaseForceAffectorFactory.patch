@@ -1,0 +1,12 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
+index f652b45..4b284ab 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
+@@ -50,6 +50,7 @@ namespace ParticleUniverse
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `ForceAffectorFactory::createAffector`: the same as the library's (a dummy factory; Torchlight's message names ForceAffectorFactory).
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				EXCEPT(Exception::ERR_NOT_IMPLEMENTED, "PU: BaseForceAffectorFactory is a dummy factory.", 

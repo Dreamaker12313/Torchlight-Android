@@ -1,0 +1,59 @@
+diff --git a/Components/RTShaderSystem/src/OgreShaderGenerator.cpp b/Components/RTShaderSystem/src/OgreShaderGenerator.cpp
+--- a/Components/RTShaderSystem/src/OgreShaderGenerator.cpp
++++ b/Components/RTShaderSystem/src/OgreShaderGenerator.cpp
+@@ -109,7 +109,22 @@ protected:
+     ShaderGenerator* mOwner;
+ };
+ 
+-String ShaderGenerator::DEFAULT_SCHEME_NAME     = MSN_SHADERGEN;
++// Was `= MSN_SHADERGEN`, which is a global std::string defined in OgreMain -
++// a different static library. Nothing orders static initialisation across
++// translation units, so on a static link this copy-constructs from a string
++// whose data pointer is still null and faults inside __libc_init_array, before
++// main() and therefore before any logging exists.
++//
++// On the Switch that is exactly what happened: a Data Abort reading address 0
++// in _GLOBAL__sub_I_OgreShaderGenerator.cpp. Desktop survived only because the
++// link order happened to initialise OgreMain first, which is luck, not a
++// guarantee.
++//
++// Deliberately NOT __SWITCH__-guarded, unlike the other patches here: this is
++// the same string literal MSN_SHADERGEN is defined as, so no platform changes
++// behaviour, and guarding it would leave desktop depending on link order for
++// no benefit.
++String ShaderGenerator::DEFAULT_SCHEME_NAME     = "ShaderGeneratorDefaultScheme";
+ String ShaderGenerator::SGTechnique::UserKey    = "SGTechnique";
+ 
+ //-----------------------------------------------------------------------
+@@ -1000,15 +1015,31 @@ void ShaderGenerator::removeAllShaderBasedTechniques()
+ {
+     if (mActiveViewportValid)
+     {
++#ifdef __SWITCH__
++        // Called for every draw. The key is a const char* and the lookup takes
++        // a String, so each call built a 17-character string on the heap and
++        // freed it, then copied the shared_ptr out of the Any (two atomic
++        // operations): about 1.5% of the console's main thread in the town.
++        // The key is built once and the pointer read in place.
++        static const String key(TargetRenderState::UserKey);
++        const Any& passUserData = pass->getUserObjectBindings().getUserAny(key);
++#else
+         const Any& passUserData = pass->getUserObjectBindings().getUserAny(TargetRenderState::UserKey);
++#endif
+ 
+         if (!passUserData.has_value() || suppressRenderStateChanges)
+             return;
+ 
+         OGRE_LOCK_AUTO_MUTEX;
+ 
++#ifdef __SWITCH__
++        const TargetRenderStatePtr* renderState = any_cast<TargetRenderStatePtr>(&passUserData);
++        if (renderState && *renderState)
++            (*renderState)->updateGpuProgramsParams(rend, pass, source, pLightList);
++#else
+         auto renderState = any_cast<TargetRenderStatePtr>(passUserData);
+         renderState->updateGpuProgramsParams(rend, pass, source, pLightList);
++#endif
+     }
+ }
+ 

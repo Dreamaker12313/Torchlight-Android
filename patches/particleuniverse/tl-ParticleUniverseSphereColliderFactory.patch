@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereColliderFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereColliderFactory.h
+index 19241b4..244050c 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereColliderFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereColliderFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			SphereColliderFactory(void){};
++	        // Torchlight: `SphereColliderFactory::~SphereColliderFactory`: the same as the library's. Torchlight's `setupTokenDefinitions` is the older token parser's hook, which the library's translators replace (script input only).
+ 	        virtual ~SphereColliderFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `SphereColliderFactory::getAffectorType`: the same as the library's.
+ 			String getAffectorType(void) const
+ 			{
+ 				return "SphereCollider";

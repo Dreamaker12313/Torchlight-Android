@@ -1,0 +1,285 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereCollider.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereCollider.h
+index 19c7bdc..b501c65 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereCollider.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSphereCollider.h
+@@ -39,6 +39,7 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_RADIUS;
+ 
+ 			SphereCollider(void);
++	        // Torchlight: `SphereCollider::~SphereCollider`: the same as the library's.
+ 	        virtual ~SphereCollider(void){};
+ 
+ 			/** Returns the radius of the sphere
+diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSphereCollider.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSphereCollider.cpp
+index 1fb0748..a7ab710 100644
+--- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSphereCollider.cpp
++++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSphereCollider.cpp
+@@ -31,11 +31,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ namespace ParticleUniverse
+ {
++	// Torchlight: this file's static initialiser (`SphereCollider::_GLOBAL__I_getRadius`)
++	// sets up only the stream library, the same as the library's.
+ 	// Constants
+-	const Real SphereCollider::DEFAULT_RADIUS = 100.0f;
++	// Torchlight: `SphereColliderFactory::createAffector` starts the radius at 0 (the
++	// library's is 100) and the sphere at OGRE's default, radius 1 at the origin.
++	const Real SphereCollider::DEFAULT_RADIUS = 0.0f;
+ 
+ 	//-----------------------------------------------------------------------
+-	SphereCollider::SphereCollider(void) : 
++	SphereCollider::SphereCollider(void) :
+ 		BaseCollider(),
+ 		mPredictedPosition(Vector3::ZERO),
+ 		mRadius(DEFAULT_RADIUS),
+@@ -43,17 +47,22 @@ namespace ParticleUniverse
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereCollider::getRadius`: the same as the library's.
+ 	const Real SphereCollider::getRadius(void) const
+ 	{
+ 		return mRadius;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `SphereCollider::setRadius`: the radius and the
++	// sphere's.
+ 	void SphereCollider::setRadius(const Real radius)
+ 	{
+ 		mRadius = radius;
+ 		mSphere.setRadius(mRadius);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight's collider has no inner collision: a particle collides on entering the sphere. The
++	// flag is kept for the library's other users and read nowhere here.
+ 	bool SphereCollider::isInnerCollision(void) const
+ 	{
+ 		return mInnerCollision;
+@@ -64,133 +73,146 @@ namespace ParticleUniverse
+ 		mInnerCollision = innerCollision;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereCollider::_preProcessParticles`: the sphere centred on the
++	// derived position; the library's base (a velocity scale) is not called.
+ 	void SphereCollider::_preProcessParticles(ParticleTechnique* particleTechnique, Real timeElapsed)
+ 	{
+-		// Call parent
+-		BaseCollider::_preProcessParticles(particleTechnique, timeElapsed);
+-
+-		// Calculate the affectors' center position.
+ 		mSphere.setCenter(getDerivedPosition());
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereCollider::_affect`. Different from the library's: the prediction
++	// is position + dt x direction (no velocity scale), the radius is not scaled by the affector's
++	// scale, and there is no inner collision - `Fast` (point) collides a particle within the radius
++	// (stepped back by dt x direction) or one that will be; `Box` as the library's.
+ 	void SphereCollider::_affect(ParticleTechnique* particleTechnique, Particle* particle, Real timeElapsed)
+ 	{
+-		mPredictedPosition = particle->position + mVelocityScale * particle->direction;
+-		bool collision = false;
++		mPredictedPosition.x = particle->direction.x * timeElapsed + particle->position.x;
++		mPredictedPosition.y = particle->direction.y * timeElapsed + particle->position.y;
++		mPredictedPosition.z = particle->direction.z * timeElapsed + particle->position.z;
+ 		Vector3 distance = particle->position - mDerivedPosition;
+-		Real distanceLength = distance.length();
+-		Real scaledRadius = 0.3333f * (_mAffectorScale.x + _mAffectorScale.y + _mAffectorScale.z) * mRadius; // Scaling changed in V 1.3.1
++		Real distanceLength = Math::Sqrt(distance.x * distance.x + distance.y * distance.y + distance.z * distance.z);
++		bool collision = false;
+ 
+ 		switch(mIntersectionType)
+ 		{
+ 			case BaseCollider::IT_POINT:
+ 			{
+-				// Validate for a point-sphere intersection
+-				//if (mInnerCollision == (distanceLength > mRadius))
+-				if (mInnerCollision == (distanceLength > scaledRadius))
++				if (!(mRadius >= distanceLength))
+ 				{
+-					// Collision detected (re-position the particle)
+-					particle->position -= mVelocityScale * particle->direction;
+-					collision = true;
++					distance = mPredictedPosition - mDerivedPosition;
++					distanceLength = Math::Sqrt(distance.x * distance.x + distance.y * distance.y + distance.z * distance.z);
++					if (!(mRadius >= distanceLength))
++						return;
+ 				}
+ 				else
+ 				{
+-					distance = mPredictedPosition - mDerivedPosition;
+-					distanceLength = distance.length();
+-					//if (mInnerCollision == (distanceLength > mRadius))
+-					if (mInnerCollision == (distanceLength > scaledRadius))
+-					{
+-						// Collision detected
+-						collision = true;
+-					}
++					particle->position.z -= timeElapsed * particle->direction.z;
++					particle->position.y -= timeElapsed * particle->direction.y;
++					particle->position.x -= timeElapsed * particle->direction.x;
+ 				}
++				collision = true;
+ 			}
+ 			break;
+ 
+ 			case BaseCollider::IT_BOX:
+ 			{
+-				// Validate for a box-sphere intersection
+ 				if (particle->particleType != Particle::PT_VISUAL)
+-					break;
++					return;
+ 
+ 				VisualParticle* visualParticle = static_cast<VisualParticle*>(particle);
+ 				AxisAlignedBox box;
+ 				populateAlignedBox(box,
+-					visualParticle->position, 
+-					visualParticle->width, 
++					visualParticle->position,
++					visualParticle->width,
+ 					visualParticle->height,
+ 					visualParticle->depth);
+-
+-					if (mInnerCollision != box.intersects(mSphere))
+-					{
+-						// Collision detected (re-position the particle)
+-						particle->position -= mVelocityScale * particle->direction;
+-						collision = true;
+-					}
+-					else
+-					{
+-						AxisAlignedBox box;
+-						populateAlignedBox(box,
+-							mPredictedPosition, 
+-							visualParticle->width, 
+-							visualParticle->height,
+-							visualParticle->depth);
+-						if (mInnerCollision != box.intersects(mSphere))
+-						{
+-							// Collision detected
+-							collision = true;
+-						}
+-					}
++				if (Math::intersects(mSphere, box))
++				{
++					particle->position.x -= timeElapsed * particle->direction.x;
++					particle->position.y -= timeElapsed * particle->direction.y;
++					particle->position.z -= timeElapsed * particle->direction.z;
++					collision = true;
++				}
++				else
++				{
++					AxisAlignedBox predicted;
++					populateAlignedBox(predicted,
++						mPredictedPosition,
++						visualParticle->width,
++						visualParticle->height,
++						visualParticle->depth);
++					collision = Math::intersects(mSphere, predicted);
++				}
+ 			}
+ 			break;
+-		}
+ 
+-		if (collision)
+-		{
+-			calculateDirectionAfterCollision(particle, distance, distanceLength);
+-			calculateRotationSpeedAfterCollision(particle);
+-			particle->addEventFlags(Particle::PEF_COLLIDED);
++			default:
++				return;
+ 		}
++
++		if (!collision)
++			return;
++
++		calculateDirectionAfterCollision(particle, distance, distanceLength);
++		calculateRotationSpeedAfterCollision(particle);
++		particle->addEventFlags(Particle::PEF_COLLIDED);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `SphereCollider::calculateDirectionAfterCollision`. `Bounce` reflects as
++	// the library's, but both normalisations are OGRE 1.6's (only longer than 1e-08, in double);
++	// `Flow` puts the particle on the unscaled radius; `Stop` changes nothing.
+ 	void SphereCollider::calculateDirectionAfterCollision(Particle* particle, Vector3 distance, Real distanceLength)
+ 	{
+ 		switch (mCollisionType)
+ 		{
+ 			case BaseCollider::CT_BOUNCE:
+ 			{
+-				/** If the particle is on the surface (or just inside the sphere); bounce it
+-					Make use of formula R = 2 * (-I dot N) * N + I, where
+-					R = the new direction vector
+-					I = the old (unit) direction vector before the collision
+-					N = the Normal at the collision point
+-				*/
+-				Real directionLength = particle->direction.length();
+-				particle->direction.normalise();
+-				distance.normalise();
+-				particle->direction = 2 * (-particle->direction.dotProduct(distance)) * distance + particle->direction;
+-
+-				// Adjust to original speed
+-				particle->direction *= directionLength;
+-
+-				// Accelerate/slow down, using the bounce value
++				Real x = particle->direction.x;
++				Real y = particle->direction.y;
++				Real z = particle->direction.z;
++				Real directionLength = Math::Sqrt(x * x + y * y + z * z);
++				if ((double)directionLength > 1e-08)
++				{
++					Real inverse = 1.0f / directionLength;
++					x *= inverse;
++					y *= inverse;
++					z *= inverse;
++					particle->direction.x = x;
++					particle->direction.y = y;
++					particle->direction.z = z;
++				}
++				Real length = Math::Sqrt(distance.x * distance.x + distance.y * distance.y + distance.z * distance.z);
++				if ((double)length > 1e-08)
++				{
++					Real inverse = 1.0f / length;
++					distance.x *= inverse;
++					distance.y *= inverse;
++					distance.z *= inverse;
++				}
++				Real dot = (x * distance.x + y * distance.y + z * distance.z) * -2.0f;
++				particle->direction.x = (distance.x * dot + x) * directionLength;
++				particle->direction.y = (distance.y * dot + y) * directionLength;
++				particle->direction.z = (dot * distance.z + z) * directionLength;
+ 				particle->direction *= mBouncyness;
+ 			}
+ 			break;
++
+ 			case BaseCollider::CT_FLOW:
+ 			{
+-				/** Reset the position (on the sphere), but keep the direction.
+-					This doesn't really work good for box-type collisions, because it doesn't take the particle
+-					dimensions into account.
+-				*/
+-				//particle->position = mDerivedPosition + distance * (mRadius / distanceLength);
+-				Real scaledRadius = 0.3333f * (_mAffectorScale.x + _mAffectorScale.y + _mAffectorScale.z) * mRadius;
+-				particle->position = mDerivedPosition + distance * (scaledRadius / distanceLength);
++				Real ratio = mRadius / distanceLength;
++				particle->position.z = distance.z * ratio + mDerivedPosition.z;
++				particle->position.y = distance.y * ratio + mDerivedPosition.y;
++				particle->position.x = distance.x * ratio + mDerivedPosition.x;
+ 			}
+ 			break;
++
++			default:
++			break;
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Checked against Torchlight's `SphereCollider::copyAttributesTo`: the radius and the
++	// sphere (Torchlight has no inner-collision flag to copy).
+ 	void SphereCollider::copyAttributesTo (ParticleAffector* affector)
+ 	{
+ 		BaseCollider::copyAttributesTo(affector);
+@@ -200,4 +222,5 @@ namespace ParticleUniverse
+ 		sphereCollider->mSphere = mSphere;
+ 		sphereCollider->mInnerCollision = mInnerCollision;
+ 	}
++
+ }

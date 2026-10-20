@@ -1,0 +1,23 @@
+Torchlight: RTSS fog colours a fragment and leaves its alpha alone, as the
+fixed-function fog of OGRE 1.6 (which Torchlight ran on) does. Not
+__SWITCH__-guarded (a GLSL library file; both targets need it). FFP_PixelFog
+mixed all four channels towards the fog colour, whose alpha is 1, so a far
+alpha-blended surface became opaque: the caves' POSTWATER fog plane
+(media/skyboxes/cavern/fog.MESH, fog_mat, past FOG END) drew as hard-edged
+fog-coloured blotches cut by its alpha_rejection over the sky dome. Only the
+per-pixel path is patched: the port sets calc_mode per_pixel (renderer.cpp).
+
+diff --git a/Media/RTShaderLib/FFPLib_Fog.glsl b/Media/RTShaderLib/FFPLib_Fog.glsl
+index b57c3241c..7ce3c86f8 100644
+--- a/Media/RTShaderLib/FFPLib_Fog.glsl
++++ b/Media/RTShaderLib/FFPLib_Fog.glsl
+@@ -88,5 +88,7 @@ void FFP_PixelFog(in float depth,
+ {
+ 	float fogFactor = 0.0;
+ 	FFP_FogFactor(depth, fogParams, fogFactor);
+-	oColor = mix(fogColor, baseColor, fogFactor);
++	// Torchlight port: fixed-function fog colours a fragment and leaves its
++	// alpha alone; mixing all four channels made a far blended surface opaque.
++	oColor = vec4(mix(fogColor.rgb, baseColor.rgb, fogFactor), baseColor.a);
+ }
+\ No newline at end of file
