@@ -29,6 +29,16 @@ the owners of the Torchlight trademark.
 PC, so the Windows and Linux builds have only been tested on a laptop with a
 gamepad connected. Reports from handheld PCs are welcome.
 
+## Screenshots
+
+**Nintendo Switch**: the town of Torchlight at night.
+
+<img src="switch.jpg" alt="Torchlight Rekindled on the Nintendo Switch: the Destroyer and his wolf by the burning shrine in the town of Torchlight" width="100%">
+
+**Android**: Orden Mines, floor 1, with the on-screen controls (a Galaxy Z Fold6, 120 fps).
+
+<img src="android.jpg" alt="Torchlight Rekindled on Android: the Destroyer in the Orden Mines with the on-screen gamepad" width="100%">
+
 ## Why
 
 The PC and Xbox 360 versions of Torchlight both received their last update in
