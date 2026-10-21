@@ -1,0 +1,53 @@
+diff --git a/RenderSystems/GLES2/src/EAGL/OgreEAGL2Window.mm b/RenderSystems/GLES2/src/EAGL/OgreEAGL2Window.mm
+index bf6c9cf..f1f46fd 100644
+--- a/RenderSystems/GLES2/src/EAGL/OgreEAGL2Window.mm
++++ b/RenderSystems/GLES2/src/EAGL/OgreEAGL2Window.mm
+@@ -38,6 +38,7 @@ of this software and associated documentation files (the "Software"), to deal
+ 
+ #import <UIKit/UIWindow.h>
+ #import <UIKit/UIGraphics.h>
++#import <dispatch/dispatch.h>
+ #include "ARCMacros.h"
+ #include "OgreDepthBuffer.h"
+ 
+@@ -252,7 +253,13 @@ of this software and associated documentation files (the "Software"), to deal
+         mWidth = _getPixelFromPoint(sz.width);
+         mHeight = _getPixelFromPoint(sz.height);
+ 
+-        mContext->createFramebuffer();
++        // This runs on UIKit's main thread; the EAGL context was created here
++        // and is current for drawable storage and framebuffer setup.
++        if (!mContext->createFramebuffer())
++        {
++            OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                        "Failed to create the iOS drawable framebuffer");
++        }
+ 
+         // If content scaling is supported, the window size will be smaller than the GL pixel buffer
+         // used to render.  Report the buffer size for reference.
+@@ -342,7 +349,24 @@ of this software and associated documentation files (the "Software"), to deal
+             }
+ 		}
+ 
+-        createNativeWindow(widthPt, heightPt, miscParams);
++        // UIKit owns all of the view, controller, and CAEAGLLayer state used
++        // by createNativeWindow. Build the drawable on main, then transfer its
++        // EAGL context back to OGRE's render thread.
++        if ([NSThread isMainThread])
++        {
++            createNativeWindow(widthPt, heightPt, miscParams);
++        }
++        else
++        {
++            dispatch_sync(dispatch_get_main_queue(), ^{
++                createNativeWindow(widthPt, heightPt, miscParams);
++            });
++            if (mContext && ![EAGLContext setCurrentContext:mContext->getContext()])
++            {
++                OGRE_EXCEPT(Exception::ERR_RENDERINGAPI_ERROR,
++                            "Unable to activate the iOS EAGL context on the render thread");
++            }
++        }
+ 
+         left = top = 0;
+         mLeft = left;

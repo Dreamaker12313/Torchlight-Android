@@ -47,6 +47,7 @@ save/
 !src/logo_wide.png
 !src/logo.jpg
 !src/logo_icon.jpg
+!src/platform/ios/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 
 # Fetched, not committed: stb_vorbis.c (scripts/fetch_stb.py)
 external/stb/

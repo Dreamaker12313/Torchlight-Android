@@ -2254,7 +2254,7 @@ bool Renderer::init(const RendererConfig& config) {
         m.root->installPlugin(m.gles2_plugin.get());
     }
     const char* const kPreferredRenderSystem = gl3plus ? "OpenGL 3+" : "OpenGL ES 2";
-#elif defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#elif defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     m.gles2_plugin = std::make_unique<Ogre::GLES2Plugin>();
     m.root->installPlugin(m.gles2_plugin.get());
     constexpr const char* kPreferredRenderSystem = "OpenGL ES 2";

@@ -22,6 +22,7 @@ the owners of the Torchlight trademark.
 | --- | --- |
 | Nintendo Switch | homebrew (hbmenu) |
 | Android | arm64, Android 12 or newer |
+| iOS | iPhone and iPad (unsigned build; sign before installing) |
 | Windows | desktop build |
 | Linux | desktop build |
 
@@ -191,6 +192,34 @@ the system's folder picker:
 The launcher remembers the folder and checks it on every start. If `pak.zip` is
 missing it asks again, and if `music/` is missing it offers to play without
 music. Android 12 (API 31) or newer is required, on an arm64 device.
+
+### iOS
+
+The Xcode app bundle contains the engine and OGRE's shader library. If game data
+is bundled with a local build, the app copies `pak.zip`, `music/`, and
+`console_ui/` into its Documents folder on first launch. Otherwise, in Files,
+open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there.
+The app reads and writes its saves and settings in that same Documents folder.
+Touch controls appear on screen when first touched.
+
+Build on macOS with Xcode and its iOS SDK installed:
+
+```bash
+python3 scripts/fetch_stb.py
+python3 scripts/apply_patches.py
+python3 scripts/build_ogre.py --platform ios
+cmake -S . -B build-ios -G Xcode \
+  -DTL_OGRE_BUILD_DIR="$PWD/build-ogre-ios-xcode" \
+  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+cmake --build build-ios --config Release --target torchlight
+```
+
+The unsigned app is `build-ios/Release-iphoneos/torchlight.app`; select a
+development team in Xcode to install it on a device.
+
+For an Apple Silicon Simulator build, use
+`python3 scripts/build_ogre.py --platform ios --ios-simulator` and set
+`TL_OGRE_BUILD_DIR` to `build-ogre-ios-simulator-xcode` when configuring CMake.
 
 ### Windows
 

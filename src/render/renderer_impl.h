@@ -169,7 +169,7 @@
 // Static plugin registration: no plugins.cfg and no dlopen (the Switch has no dynamic
 // loader). Only the render system differs: the console's OGRE has GLES2 alone, unless
 // built with TL_SWITCH_GL3PLUS (render/render_system_choice.h).
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
 #include <OgreGLES2Plugin.h>
 #if defined(TL_SWITCH_GL3PLUS)
 #include <OgreGL3PlusPlugin.h>
@@ -605,7 +605,7 @@ struct Renderer::Impl : tl::core::World {
     std::unique_ptr<OgreLogBridge> log_bridge;
 
     std::unique_ptr<Ogre::Root> root;
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     // One of the two per Root, never both: each makes its own EGL display.
     std::unique_ptr<Ogre::GLES2Plugin> gles2_plugin;
 #if defined(TL_SWITCH_GL3PLUS)

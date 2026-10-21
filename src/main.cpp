@@ -70,7 +70,7 @@ constexpr const char* kMenuLayout =
 
 // Builds for a device with no terminal (Switch, Android) start at the main menu and
 // play; what they read and write beside the game is under the platform's data root.
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
 #define TL_DEVICE_BUILD 1
 #endif
 
@@ -1325,6 +1325,8 @@ void open_log() {
 constexpr const char* kBuildName = "switch";
 #elif defined(TL_PLATFORM_ANDROID)
 constexpr const char* kBuildName = "android";
+#elif defined(TL_PLATFORM_IOS)
+constexpr const char* kBuildName = "ios";
 #else
 constexpr const char* kBuildName = "desktop";
 #endif
@@ -1433,6 +1435,9 @@ constexpr float kWalkRouteTimeout = 60.0f;
 // Called by android_main(), which turns the activity and its args.txt into a
 // command line; a shared library has no main().
 #define main tl_main
+#endif
+#if defined(TL_PLATFORM_IOS)
+#define main tl_engine_main
 #endif
 int main(int argc, char** argv) {
     const Options opts = with_run_config(parse_args(argc, argv));

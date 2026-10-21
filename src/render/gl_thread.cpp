@@ -33,7 +33,7 @@ __attribute__((weak)) extern struct mesa_switch_glthread_stats mesa_switch_glthr
 }
 #endif
 
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
 // The OGRE GLES2 render system's shader totals from the port's OGRE patch (the layout must stay
 // the same). Weak, so an OGRE built without it still links.
 extern "C" {
@@ -141,7 +141,7 @@ bool GlThread::take_costs(Costs& out) {
 
 // PORT: the shader compile and link costs the OGRE patch keeps, by log window.
 bool GlThread::take_shader_costs(ShaderCosts& out) {
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     if (&ogre_gles2_shader_stats == nullptr) return false;
     // Read and reset: the worst figures are per window.
     ogre_gles2_shader_stats_t& s = ogre_gles2_shader_stats;

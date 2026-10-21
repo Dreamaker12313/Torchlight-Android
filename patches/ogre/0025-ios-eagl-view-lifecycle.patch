@@ -1,0 +1,29 @@
+diff --git a/RenderSystems/GLES2/src/EAGL/OgreEAGL2View.mm b/RenderSystems/GLES2/src/EAGL/OgreEAGL2View.mm
+index 070f258bd..e14161b65 100644
+--- a/RenderSystems/GLES2/src/EAGL/OgreEAGL2View.mm
++++ b/RenderSystems/GLES2/src/EAGL/OgreEAGL2View.mm
+@@ -61,8 +61,12 @@ - (void)layoutSubviews
+ {
+     [super layoutSubviews];
+ 
+-    // Get the window using the name that we saved
+-    RenderWindow *window = static_cast<RenderWindow *>(Root::getSingleton().getRenderSystem()->getRenderTarget(mWindowName));
++    // UIKit lays out this view before OGRE has created its singleton and can
++    // invoke this again during scene transitions. Guard both stages.
++    Root *root = Root::getSingletonPtr();
++    if (root == NULL || root->getRenderSystem() == NULL)
++        return;
++    RenderWindow *window = static_cast<RenderWindow *>(root->getRenderSystem()->getRenderTarget(mWindowName));
+ 
+     if(window != NULL)
+     {
+@@ -77,7 +81,8 @@ - (void)layoutSubviews
+             unsigned int height = (uint)self.bounds.size.height;
+ 
+             Ogre::Viewport *viewPort = window->getViewport(0);
+-            viewPort->getCamera()->setAspectRatio((Real) width / (Real) height);
++            if (viewPort != NULL && viewPort->getCamera() != NULL)
++                viewPort->getCamera()->setAspectRatio((Real) width / (Real) height);
+         }
+     }
+ }
