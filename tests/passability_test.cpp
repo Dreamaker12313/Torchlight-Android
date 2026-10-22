@@ -145,7 +145,8 @@ TL_TEST(passability_erosion_closes_a_one_cell_column_it_counted) {
     TL_CHECK(grid.passable_cells() >= open_cells(grid) + static_cast<size_t>(grid.height() - 2));
 }
 
-// With room boxes, only the boxes are cast; everything else ends blocked.
+// With room boxes, only the boxes are cast; everything else ends blocked. After the rooms,
+// each room's four 4-wide edge strips are cast again from open.
 TL_TEST(passability_casts_only_inside_the_room_boxes) {
     CollisionWorld world;
     add_floor(world, -10.0f, -10.0f, 10.0f, 10.0f, 0.0f);
@@ -158,13 +159,16 @@ TL_TEST(passability_casts_only_inside_the_room_boxes) {
 
     PassabilityMap grid;
     grid.bake(world, &rooms);
-    TL_CHECK_EQ(grid.passes().size(), size_t{2});
+    TL_CHECK_EQ(grid.passes().size(), size_t{2 + 2 * 4});
     TL_CHECK(grid.map_passable(Vec3{-3.0f, 0.0f, 0.0f}));
     TL_CHECK(!grid.map_passable(Vec3{5.0f, 0.0f, 0.0f}));
     // The second box lies inside the first: its open cells are cast and counted
     // again.
     TL_CHECK(grid.passes()[1].passable > 0);
-    TL_CHECK_EQ(grid.passable_cells(), grid.passes()[0].passable + grid.passes()[1].passable);
+    uint32_t counted = 0;
+    for (const PassabilityMap::Pass& pass : grid.passes()) counted += pass.passable;
+    TL_CHECK_EQ(grid.passable_cells(), counted);
+    TL_CHECK(grid.passes()[2].passable > 0);
 }
 
 // CBaseUnit::addToAvoidanceMap's circle on the map grid:

@@ -284,7 +284,45 @@ MenuArtSet* CharacterCreate::art_named(const std::string& set) {
     if (set == "widgets") return &widgets_art_;
     if (set == "widgets1") return &widgets1_art_;
     if (set == "widgets2") return &widgets2_art_;
+    if (logo_art_.ok && set == logo_art_.set.name) return &logo_art_;
+    if (gui_art_.ok && set == gui_art_.set.name) return &gui_art_;
     return nullptr;
+}
+
+// PORT: the set an image of the console screen is drawn from.
+MenuArtSet* CharacterCreate::art_for(const std::string& set, const std::string& image) {
+    MenuArtSet* named = art_named(set);
+    if (named != nullptr && named->ok && named->set.find(image) != nullptr) return named;
+    for (MenuArtSet* art : {&widgets_art_, &widgets1_art_, &widgets2_art_, &gui_art_, &logo_art_}) {
+        if (art->ok && art->set.find(image) != nullptr) return art;
+    }
+    return nullptr;
+}
+
+// PORT: the PC's `Logo` and `GuiLook` as two more sets of the console screen, on a PC pak (the
+// Xbox's carries neither): the port's pack draws the console screen and leaves the logo bars,
+// the buttons, the class portraits and the panel looks to them.
+bool CharacterCreate::load_pc_art(const std::string& group) {
+    if (console_game_data() || !load_pc_imagesets(group)) return false;
+    try {
+        if (!load_pc_textures(group)) return false;
+        const struct {
+            const tl::formats::Imageset* set;
+            const Ogre::TexturePtr* texture;
+            MenuArtSet* art;
+        } pcs[] = {{&logo_set_, &logo_texture_, &logo_art_}, {&gui_set_, &gui_texture_, &gui_art_}};
+        for (const auto& pc : pcs) {
+            pc.art->set = *pc.set;
+            pc.art->texture = *pc.texture;
+            pc.art->material = build_menu_material("tl/create/pc/" + pc.set->name, *pc.texture);
+            pc.art->dim_material = build_menu_material("tl/create/pc/" + pc.set->name + "/dim",
+                                                       *pc.texture, kUnfocusedAlpha);
+            pc.art->ok = static_cast<bool>(pc.art->material);
+        }
+    } catch (const Ogre::Exception&) {
+        return false;
+    }
+    return logo_art_.ok && gui_art_.ok;
 }
 
 namespace {
@@ -424,8 +462,8 @@ void CharacterCreate::add_console_widget(const char* window_name, std::vector<Wi
         hover_set = normal_set;
         hover = normal;
     }
-    MenuArtSet* normal_art = art_named(normal_set);
-    MenuArtSet* hover_art = art_named(hover_set);
+    MenuArtSet* normal_art = art_for(normal_set, normal);
+    MenuArtSet* hover_art = art_for(hover_set, hover);
     if (normal_art == nullptr || !normal_art->ok || hover_art == nullptr || !hover_art->ok) return;
 
     Widget widget;
@@ -464,14 +502,14 @@ void CharacterCreate::add_console_frame(const char* window_name, bool item_frame
     if (!origin_of(console_, window_name, origin) || !window_area(*window, area)) return;
     const FrameLook& look = item_frame ? kItemFrame : kPanelFrame;
 
-    MenuArtSet* corner_art = art_named(look.set[0]);
+    MenuArtSet* corner_art = art_for(look.set[0], look.image[0]);
     const tl::formats::ImagesetImage* corner =
         corner_art != nullptr ? corner_art->set.find(look.image[0]) : nullptr;
     if (corner == nullptr) return;
 
     for (int slice = 0; slice < 9; ++slice) {
-        MenuArtSet* art = art_named(look.set[slice]);
-        if (art == nullptr || !art->ok || art->set.find(look.image[slice]) == nullptr) continue;
+        MenuArtSet* art = art_for(look.set[slice], look.image[slice]);
+        if (art == nullptr) continue;
         Widget piece;
         piece.window = window_name;
         piece.dims_with = dims_with;
@@ -547,6 +585,7 @@ bool CharacterCreate::create(const std::string& group, unsigned width, unsigned 
     // `console_ui`); only the PC screen needs `logo.imageset` and `hud.imageset`.
     const bool console_screen = load_console_screen(group);
     if (!console_screen && !load_pc_imagesets(group)) return false;
+    if (console_screen) load_pc_art(group);
     if (!ensure_menu_font()) return false;
 
     try {
@@ -696,8 +735,8 @@ void CharacterCreate::build_console_screen() {
                                                 image)) {
             continue;
         }
-        MenuArtSet* art = art_named(set);
-        if (art == nullptr || !art->ok || art->set.find(image) == nullptr) continue;
+        MenuArtSet* art = art_for(set, image);
+        if (art == nullptr) continue;
         Widget piece;
         piece.window = want.window;
         piece.wide = area.wide();
@@ -833,6 +872,8 @@ void CharacterCreate::destroy() {
     widgets_art_ = MenuArtSet{};
     widgets1_art_ = MenuArtSet{};
     widgets2_art_ = MenuArtSet{};
+    logo_art_ = MenuArtSet{};
+    gui_art_ = MenuArtSet{};
     header_ = nullptr;
     class_name_ = nullptr;
     description_ = nullptr;

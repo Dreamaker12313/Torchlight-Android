@@ -19,9 +19,28 @@ extern "C" void userAppInit(void) { (void)romfsInit(); }
 
 extern "C" void userAppExit(void) { romfsExit(); }
 
-// The homebrew's own directory on the SD card, beside the .nro.
+// libnx's copy of the arguments the loader started the .nro with.
+extern "C" {
+extern int __system_argc;
+extern char** __system_argv;
+}
+
+// The homebrew's own directory on the SD card: the folder the .nro was started from
+// (hbmenu passes its path as argv[0]), so copies in two folders keep two games, saves
+// and logs apart. `sdmc:/switch/torchlight/` when the loader does not say.
 const std::string& platform_data_root() {
-    static const std::string root = "sdmc:/switch/torchlight/";
+    static const std::string root = [] {
+        std::string path =
+            __system_argc > 0 && __system_argv != nullptr && __system_argv[0] != nullptr
+                ? __system_argv[0]
+                : "";
+        if (path.rfind('/', 0) == 0) path = "sdmc:" + path;
+        const size_t slash = path.find_last_of('/');
+        if (path.rfind("sdmc:/", 0) != 0 || slash == std::string::npos) {
+            return std::string("sdmc:/switch/torchlight/");
+        }
+        return path.substr(0, slash + 1);
+    }();
     return root;
 }
 

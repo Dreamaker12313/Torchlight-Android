@@ -1,6 +1,7 @@
 // The renderer's implementation: camera follow, stepping and driving the player, script events.
 // Split from renderer.cpp; the shared
 // declarations are in renderer_impl.h.
+#include "core/section_profile.h"
 #include "render/renderer_impl.h"
 #include "render/unit_opacity.h"
 
@@ -249,23 +250,6 @@ void Renderer::Impl::update_unit_lights(const Ogre::Vector3& focus) {
     }
 }
 
-/// One step of the player controller against a given stick state; the scripted walk
-/// drives the same code.
-bool Renderer::Impl::player_motion_held() {
-    // A swing with more than 0.2 s to run: setDestination
-    // takes no new destination. DIVERGENCE: the port steers straight, so the
-    // character stops at once rather than walking out its old point.
-    if (swing.active && (swing.length - swing.elapsed) / swing_rate() > 0.2f) return true;
-    if (player_active_skill.empty()) return false;
-    const std::string& name = player_active_skill.skill;
-    const tl::core::SkillRunState* state = player_skill_runner.state(name);
-    const tl::core::KnownSkill* known = player_skills.find_by_name(name);
-    const bool moves = known != nullptr && known->def != nullptr && known->def->moves_to_target;
-    return tl::core::skill_halts_motion(
-        player_active_skill, state != nullptr ? state->animations : tl::core::SkillAnimations{},
-        player_skill_runner.is_running(name), moves);
-}
-
 void Renderer::Impl::step_player(float delta, const tl::core::InputState& stick) {
     if (!subject_node) return;
 
@@ -387,31 +371,6 @@ void Renderer::Impl::step_attack_button(float delta, bool down, bool pressed, fl
         }
         set_player_destination_held(x, z);
     }
-}
-
-void Renderer::Impl::set_player_destination_held(float x, float z) {
-    // Its two early exits do not arise here.
-    //
-    // (0, 0) is the point aimed at (`+0x1c0`).
-    if (x == 0.0f && z == 0.0f) {
-        x = player_turn_point.x;
-        z = player_turn_point.z;
-    }
-    // the hold does not count while a skill that
-    // `MOVES_TO_TARGET` is being performed. The route `setDestination` then
-    // asks for is not carried: the port's player routes no stick point.
-    const tl::core::KnownSkill* known = player_skills.find_by_name(player_active_skill.skill);
-    const bool moves = known != nullptr && known->def != nullptr && known->def->moves_to_target;
-    const bool hold = attack_button.hold && !(moves && player_performing_skill());
-    if (hold) {
-        // stopped, and `CCharacter::attack()`,
-        // which under the hold swings
-        // with no target.
-        player.stop_following();
-        begin_swing(player_target_node);
-    }
-    // (and on the walking path): the point kept.
-    player_turn_point = {x, 0.0f, z};
 }
 
 /// The player has walked over to somebody they chose: say what they say. Called every
@@ -1435,82 +1394,6 @@ int Renderer::Impl::unit_machine(const std::string& unit, int64_t& node) const {
     return script.has_character(node) ? kLevelMachine : kNoMachine;
 }
 
-bool Renderer::Impl::node_targetable(int64_t node, const Ogre::SceneNode* where) const {
-    if (node == 0) return true;
-    for (const NestedScript& machine : nested_scripts) {
-        if (!machine.script.has_character(node)) continue;
-        const auto range = machine.nodes.equal_range(node);
-        for (auto n = range.first; n != range.second; ++n) {
-            // A mimic lying in wait is nobody's target
-            // (`CLevel::findCharacterWithinView`).
-            if (n->second == where) {
-                return machine.script.node_targetable(node) &&
-                       !machine.script.unit_mimic_idle(node);
-            }
-        }
-    }
-    return script.node_targetable(node) && !script.unit_mimic_idle(node);
-}
-
-// PORT: one of the port's machines by index.
-tl::core::LevelScript* Renderer::Impl::machine_script(int machine) {
-    if (machine == kLevelMachine) return &script;
-    if (machine >= 0 && static_cast<size_t>(machine) < nested_scripts.size()) {
-        return &nested_scripts[static_cast<size_t>(machine)].script;
-    }
-    return nullptr;
-}
-
-// PORT: the machine whose dialog is open.
-int Renderer::Impl::dialog_machine() const {
-    if (script.dialog_open()) return kLevelMachine;
-    for (size_t i = 0; i < nested_scripts.size(); ++i) {
-        if (nested_scripts[i].script.dialog_open()) return static_cast<int>(i);
-    }
-    return kNoMachine;
-}
-
-void Renderer::Impl::apply_machine_events(int machine,
-                                          const std::vector<tl::core::ScriptEvent>& events) {
-    if (events.empty()) return;
-    if (machine == kLevelMachine) {
-        apply_script_events(events, scripted_nodes);
-    } else if (machine >= 0 && static_cast<size_t>(machine) < nested_scripts.size()) {
-        NestedScript& owner = nested_scripts[static_cast<size_t>(machine)];
-        apply_script_events(events, owner.nodes);
-    }
-}
-
-// PORT: an `INTERACTIVE CHARACTER` the player talks to made its machine's player
-// target (`LevelScript::set_player_target`, which holds the rule).
-void Renderer::Impl::set_talk_target(const std::string& unit) {
-    clear_talk_target();
-    load_unit_types();
-    const tl::core::UnitStats stats = stats_for_unit(unit);
-    if (!unit_types.isa(unit_types.id_of(stats.unittype),
-                        tl::core::unit_type::kInteractiveCharacter)) {
-        return;
-    }
-    int64_t node = 0;
-    const int machine = unit_machine(unit, node);
-    tl::core::LevelScript* owner = machine_script(machine);
-    if (owner == nullptr) return;
-    talk_target_node = node;
-    talk_target_machine = machine;
-    owner->set_player_target(node);
-}
-
-// PORT: the talk target let go (`LevelScript::release_player_target`).
-void Renderer::Impl::clear_talk_target() {
-    if (tl::core::LevelScript* owner = machine_script(talk_target_machine)) {
-        std::vector<tl::core::ScriptEvent> events;
-        owner->release_player_target(events);
-        apply_machine_events(talk_target_machine, events);
-    }
-    talk_target_node = 0;
-    talk_target_machine = kNoMachine;
-}
-
 // CQuestDialogMenu::updateDialogTags, end of setNPC:
 // each `<LOOKAT=NAME>` makes the speaker
 // target PLAYER or the level's unit of that data group
@@ -1543,48 +1426,10 @@ void Renderer::Impl::update_dialog_tags(const std::string& unit, const std::stri
     apply_machine_events(machine, events);
 }
 
-// PORT: the speaker turned to the player (`LevelScript::target_player`).
-void Renderer::Impl::speaker_looks_at_player(const std::string& unit) {
-    int64_t node = 0;
-    const int machine = unit_machine(unit, node);
-    tl::core::LevelScript* owner = machine_script(machine);
-    if (owner == nullptr) return;
-    std::vector<tl::core::ScriptEvent> events;
-    owner->target_player(node, events);
-    apply_machine_events(machine, events);
-}
-
-// The unit's collidable flag (`+0x18d`) and `CBaseUnit::addToAvoidanceMap`
-// or `removeFromAvoidanceMap`
-// on the collision group of a placed item.
-void Renderer::Impl::set_trigger_collidable(int64_t key, bool on) {
-    if (!collision.has_group(key)) return;
-    if (on) {
-        trigger_not_collidable.erase(key);
-        collision.set_group_enabled(key, true);
-        tl::core::Vec3 low, high;
-        if (passability.ready() && door_avoidance_added.insert(key).second &&
-            collision.group_bounds(key, low, high)) {
-            passability.increment_map_passability_collision(low, high, collision, key);
-            nav.refresh(passability, low, high);
-        }
-        return;
-    }
-    // The map grid while the faces can be probed: decrement_map_passability_collision's
-    // probe ignores whether collision is on.
-    if (trigger_range_off.erase(key) > 0) collision.set_group_enabled(key, true);
-    tl::core::Vec3 low, high;
-    if (door_avoidance_added.erase(key) > 0 && collision.group_bounds(key, low, high)) {
-        passability.decrement_map_passability_collision(low, high, collision, key);
-        nav.refresh(passability, low, high);
-    }
-    collision.set_group_enabled(key, false);
-    trigger_not_collidable.insert(key);
-}
-
 void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent>& events,
                                          NodeMap& nodes) {
     using tl::core::ScriptAction;
+    const tl::core::SectionScope timed(tl::core::Section::ScriptEvents);
 
     for (const tl::core::ScriptEvent& event : events) {
         const auto range = nodes.equal_range(event.node_id);
@@ -1596,33 +1441,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 }
                 // And the particle systems this node placed: a Layout Link Particle's
                 // content is a nested layout, not in scripted_nodes.
-                size_t systems = 0;
-                std::set<uint32_t> started;
-                for (ParticleSystem& system : particle_systems) {
-                    // A `Particle` node of the level's own: `CParticleWrapper::
-                    // setVisible`, its node and its system.
-                    if (system.wrapper && system.node == event.node_id &&
-                        system.node_owner == &nodes) {
-                        set_torchlight_wrapper_visible(system.pu, event.on);
-                        continue;
-                    }
-                    if (system.owner != event.node_id) continue;
-                    // The link's own `CParticle`, not that of another copy of
-                    // its file (`CLayout::callFunctionOnObjects`
-                    // on the link's layout,
-                    // `+0x1f0`).
-                    if (system.owner_nodes != nullptr && system.owner_nodes != &nodes) continue;
-                    // Start/Stop Particle: CParticle::Start, CParticle::Stop(false); Show
-                    // and Hide via CLayout::setVisible.
-                    if (event.on) {
-                        restart_particle_system(system);
-                        if (system.cparticle != 0) started.insert(system.cparticle);
-                    } else {
-                        stop_particle_emission(system);
-                    }
-                    ++systems;
-                }
-                for (const uint32_t id : started) cparticle_started(id);
+                const size_t systems = show_node_particles(event, nodes);
                 // How far from the player, on the ground, a unit is shown or
                 // hidden: what a report of pop-in is checked against (the near
                 // list's ranges, the update's camera test).
@@ -1655,7 +1474,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // (`+0x81`) pauses each of its systems (`+0x108`). The link's
                 // own, not another copy of its file's.
                 size_t systems = 0;
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : link_or_free_systems(nodes, event.node_id)) {
                     if (system.owner != event.node_id || system.pu.system == nullptr) continue;
                     if (system.owner_nodes != nullptr && system.owner_nodes != &nodes) continue;
                     if (pause_torchlight_particle(system.pu)) ++systems;
@@ -1670,7 +1489,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // / stop
                 // on this machine's copy.
                 size_t systems = 0;
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : node_wrappers(nodes, event.node_id)) {
                     if (!system.wrapper || system.node != event.node_id ||
                         system.node_owner != &nodes) {
                         continue;
@@ -1690,7 +1509,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
             }
 
             case ScriptAction::EmitterEnabled: {
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : map_wrappers(nodes)) {
                     if (!system.wrapper || system.node_owner != &nodes) continue;
                     if (set_torchlight_emitter_enabled(system.pu, event.node_id, event.on)) {
                         TL_LOG_INFO("script: emitter '%s' %s", event.name.c_str(),
@@ -1704,7 +1523,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // `CAffectorWrapper::setEnabled`, on a wrapper's
                 // affector only (see ParticleNode). A track sets its value
                 // every frame its timeline moves; the log has the changes.
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : map_wrappers(nodes)) {
                     if (!system.wrapper || system.node_owner != &nodes) continue;
                     bool changed = false;
                     if (set_torchlight_affector_enabled(system.pu, event.node_id, event.on,
@@ -1726,7 +1545,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 }
                 // A `Layout Link Particle` has no node of its own here: its
                 // file's systems move with it.
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : link_systems(nodes, event.node_id)) {
                     if (system.owner != event.node_id || system.owner_nodes != &nodes) continue;
                     Ogre::SceneNode* holder = system.holder();
                     if (holder == nullptr) continue;
@@ -1783,7 +1602,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                     it->second->setOrientation(turned);
                 }
                 // ... and a `Layout Link Particle`'s systems turn with it.
-                for (ParticleSystem& system : particle_systems) {
+                for (ParticleSystem& system : link_systems(nodes, event.node_id)) {
                     if (system.owner != event.node_id || system.owner_nodes != &nodes) continue;
                     Ogre::SceneNode* holder = system.holder();
                     if (holder == nullptr) continue;
@@ -2973,7 +2792,7 @@ void Renderer::Impl::reset_script() {
     if (have_player_start && player_control) {
         player.place(tl::core::Vec3{player_start.x, player_start.y, player_start.z},
                      player.facing());
-        subject_node->setPosition(player_start);
+        subject_node->setPosition(to_ogre(player_start));
         follow_subject();
     }
     TL_LOG_INFO("level script reset: triggers unspent, camera released");
@@ -2990,40 +2809,6 @@ void Renderer::Impl::set_interactive_menu_visible(bool on) {
         if (!hud.letterboxed()) hud.set_letterboxed(true);
     } else if (interactive_menus == 0 && hud.letterboxed()) {
         hud.set_letterboxed(false);
-    }
-}
-
-// `CQuestDialogMenu::setOpen` ->
-// `setInteractiveMenuVisible`.
-void Renderer::Impl::set_quest_dialog_interactive(bool on) {
-    if (quest_dialog_interactive == on) return;
-    quest_dialog_interactive = on;
-    set_interactive_menu_visible(on);
-}
-
-// `CGameStateController::doActualGameState`,
-// the interface's half: nothing without the player's character (the client's
-// `+0x58`).
-void Renderer::Impl::game_state_interface(uint32_t type, bool on) {
-    if (subject_node == nullptr) return;
-    switch (type) {
-        case 1:
-            // `stopPathing`, after the level's `setEnabled(!on)`.
-            player.stop_following();
-            break;
-        case 3:
-            set_interactive_menu_visible(on);
-            // Coming out, after the level's `setEnabled(true)`.
-            if (!on) attempt_to_stop_player_skill(true);
-            // `+0x38` is set before the first frame in the original; here the
-            // first frame sets it, so a scene that starts with the level
-            // starts from the same far end.
-            if (!(camera_dolly > 0.0f)) camera_dolly = kDefaultCameraDistance * camera_mult;
-            tl::core::set_cinematic_mode(camera_cinematic, camera_dolly, on, camera_mult);
-            update_npc_icons();
-            break;
-        case 6: close_ingame_ui(); break;
-        default: break;
     }
 }
 
@@ -3071,16 +2856,6 @@ void Renderer::Impl::set_player_mesh_visible(bool visible) {
     player_mesh_hidden = !visible;
     subject_node->setVisible(visible, true);
     TL_LOG_INFO("script: the player is %s", visible ? "shown" : "hidden");
-}
-
-// `CGameStateController::healPlayer`:
-// `modifyHP(maxHP())` on the player's
-// character, which adds it and holds the health to `maxHP()`, an integer. At 0
-// health a heal smaller than `maxHP()` does nothing; this one never is.
-void Renderer::Impl::heal_player() {
-    if (subject_node == nullptr || !(player_health.max > 0.0f)) return;
-    const float ceiling = static_cast<float>(static_cast<int>(player_health.max));
-    player_health.current = std::min(ceiling, player_health.current + ceiling);
 }
 
 }  // namespace tl::render

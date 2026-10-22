@@ -361,6 +361,10 @@ private:
         std::string image;
         /// A text node's authored colour, which an alpha scales.
         Ogre::ColourValue colour = Ogre::ColourValue::White;
+        /// The window's own `ALPHA` (clamped to 0..1), and that times its parent's: CEGUI's
+        /// effective alpha, which a window inherits by default.
+        float own_alpha = 1.0f;
+        float alpha = 1.0f;
         float points = 0.0f;
         int h_text = 0;
         int v_text = 0;
@@ -403,6 +407,10 @@ private:
     /// A panel drawn at `alpha` (a CEGUI window's `Alpha`), from a variant of
     /// its sprite's material.
     void set_widget_alpha(const std::string& widget_name, float alpha);
+    /// The material `sprite` draws with at `alpha`: its own at 1, else a faded variant.
+    std::string material_for(const Sprite& sprite, float alpha);
+    /// A node's effective alpha; 1 for no node (a root's parent).
+    float alpha_of(int node) const;
     /// Lay a run-coloured string over a text node, wrapped to its frame and
     /// clipped to it, from `pool` (grown on demand).
     void draw_rich_text(const std::string& text_widget, const std::string& frame_widget,

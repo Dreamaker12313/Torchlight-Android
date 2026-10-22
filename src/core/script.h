@@ -840,6 +840,8 @@ public:
         /// (`layout_adds_sound_sample`), which a skill made for a unit does to
         /// `g_Rand` (`roll_skill_construction`).
         std::function<bool(const std::string& file)> layout_adds_sample;
+        /// A skill event's `FILE` loaded as the skill is made (`load_event_file`).
+        std::function<void(const std::string& file)> load_event_file;
         /// `CCharacter::executeProcs(type, target)`
         /// on the unit: the target as
         /// `caster` takes one.

@@ -125,6 +125,60 @@ bool MainMenu::load_console_menu(const std::string& group) {
     return true;
 }
 
+// PORT: an image of the console screen, from the sheet its reference names or, where that sheet
+// leaves it out, the PC's own sets.
+MainMenu::ArtRef MainMenu::resolve_art(const std::string& set_name,
+                                       const std::string& image) const {
+    const ArtSet* sheets[] = {&widgets_art_, &widgets1_art_, &widgets2_art_};
+    for (const ArtSet* art : sheets) {
+        if (art->ok && art->set.name == set_name && art->set.find(image) != nullptr) {
+            return {&art->set, art->material};
+        }
+    }
+    if (pc_art_) {
+        if (logo_set_.name == set_name && logo_set_.find(image) != nullptr) {
+            return {&logo_set_, logo_material_};
+        }
+        if (gui_set_.name == set_name && gui_set_.find(image) != nullptr) {
+            return {&gui_set_, gui_material_};
+        }
+    }
+    // Not where the reference says: a look's fixed image (`tooltiptopleft`), which the pack
+    // leaves to the PC's `GuiLook` (`TooltipTopLeft`).
+    for (const ArtSet* art : sheets) {
+        if (art->ok && art->set.find(image) != nullptr) return {&art->set, art->material};
+    }
+    if (pc_art_) {
+        if (gui_set_.find(image) != nullptr) return {&gui_set_, gui_material_};
+        if (logo_set_.find(image) != nullptr) return {&logo_set_, logo_material_};
+    }
+    return {};
+}
+
+// PORT: the console column's button images, as its first button names them.
+void MainMenu::resolve_console_buttons() {
+    console_normal_ = "gem_button";
+    console_hover_ = "gem_button_rollover";
+    std::string set_name = widgets1_art_.set.name;
+    if (const tl::formats::GuiWindow* first = console_.find("ContinueLast")) {
+        std::string normal_set, normal, hover_set, hover;
+        if (tl::formats::parse_image_reference(first->property("NormalImage", std::string()),
+                                               normal_set, normal) &&
+            tl::formats::parse_image_reference(first->property("HoverImage", std::string()),
+                                               hover_set, hover)) {
+            set_name = normal_set;
+            console_normal_ = normal;
+            console_hover_ = hover;
+        }
+    }
+    console_button_art_ = resolve_art(set_name, console_normal_);
+    if (console_button_art_.set == nullptr) {
+        console_button_art_ = {&widgets1_art_.set, widgets1_art_.material};
+    }
+    // The difficulty screen's `ceguiWidget/Checkbox`, whose look names `widgets2`.
+    checkbox_art_ = {&widgets2_art_.set, widgets2_art_.material};
+}
+
 bool MainMenu::load_imagesets(const std::string& group) {
     std::vector<uint8_t> bytes;
 
@@ -274,34 +328,49 @@ void MainMenu::build_console_frame() {
         float width, height;
         int corner;  ///< 0 centred strip, 1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right
         bool bottom;
+        /// The PC frame's piece in the same place (`logo.imageset`, drawn at its own size) when
+        /// the console sheet leaves this one out.
+        const char* pc_image;
     };
     const FramePiece frame[] = {
-        {"main_topborder", &widgets_art_, 1024.0f, 141.0f, 0, false},
-        {"main_topborderleft", &widgets1_art_, 215.0f, 87.0f, 1, false},
-        {"main_topborderright", &widgets1_art_, 215.0f, 87.0f, 2, false},
-        {"main_bottomborder", &widgets_art_, 1024.0f, 93.0f, 0, true},
-        {"main_bottomborderleft", &widgets1_art_, 215.0f, 93.0f, 3, true},
-        {"main_bottomborderright", &widgets1_art_, 215.0f, 93.0f, 4, true},
+        {"main_topborder", &widgets_art_, 1024.0f, 141.0f, 0, false, "topbar"},
+        {"main_topborderleft", &widgets1_art_, 215.0f, 87.0f, 1, false, "topbarleft"},
+        {"main_topborderright", &widgets1_art_, 215.0f, 87.0f, 2, false, "topbarright"},
+        {"main_bottomborder", &widgets_art_, 1024.0f, 93.0f, 0, true, "bottombar"},
+        {"main_bottomborderleft", &widgets1_art_, 215.0f, 93.0f, 3, true, "bottombarleft"},
+        {"main_bottomborderright", &widgets1_art_, 215.0f, 93.0f, 4, true, "bottombarright"},
     };
     int serial = 0;
     for (const FramePiece& want : frame) {
-        if (!want.art->ok || want.art->set.find(want.image) == nullptr) continue;
         Piece piece;
-        piece.set = &want.art->set;
-        piece.material = want.art->material;
-        piece.image = want.image;
+        float width = want.width;
+        float height = want.height;
+        if (want.art->ok && want.art->set.find(want.image) != nullptr) {
+            piece.set = &want.art->set;
+            piece.material = want.art->material;
+            piece.image = want.image;
+        } else if (const tl::formats::ImagesetImage* pc =
+                       pc_art_ ? logo_set_.find(want.pc_image) : nullptr) {
+            piece.set = &logo_set_;
+            piece.material = logo_material_;
+            piece.image = want.pc_image;
+            width = static_cast<float>(pc->width);
+            height = static_cast<float>(pc->height);
+        } else {
+            continue;
+        }
         piece.centred = want.corner == 0;
-        piece.size.x.offset = want.width;
-        piece.size.y.offset = want.height;
+        piece.size.x.offset = width;
+        piece.size.y.offset = height;
         // The corners are anchored to their own edge; the strips are centred
         // and sit against the top or the bottom.
         if (want.corner == 2 || want.corner == 4) {
             piece.position.x.scale = 1.0f;
-            piece.position.x.offset = -want.width;
+            piece.position.x.offset = -width;
         }
         if (want.bottom) {
             piece.position.y.scale = 1.0f;
-            piece.position.y.offset = -want.height;
+            piece.position.y.offset = -height;
         }
         piece.panel = make_panel("tl/menu/console/" + std::to_string(serial++), frame_);
         piece.panel->setMaterial(piece.material);
@@ -358,11 +427,9 @@ void MainMenu::build_bar(const tl::formats::GuiLayout& layout, const std::string
             if (child.name == group.glyph &&
                 tl::formats::parse_image_reference(child.property("Image", std::string()), set_name,
                                                    image_name)) {
-                ArtSet& art = (set_name == widgets2_art_.set.name)  ? widgets2_art_
-                              : (set_name == widgets_art_.set.name) ? widgets_art_
-                                                                    : widgets1_art_;
-                if (!art.ok || art.set.find(image_name) == nullptr) continue;
-                item.glyph.set = &art.set;
+                const ArtRef art = resolve_art(set_name, image_name);
+                if (art.set == nullptr) continue;
+                item.glyph.set = art.set;
                 item.glyph.material = art.material;
                 item.glyph.image = image_name;
                 item.glyph_x = child_top_left.x.offset;
@@ -492,12 +559,12 @@ void MainMenu::add_console_button(const char* window_name, const std::string& te
     button.col_y = top_left.y.offset;
     button.col_w = bottom_right.x.offset - top_left.x.offset;
     button.col_h = bottom_right.y.offset - top_left.y.offset;
-    // `gem_button`, and `gem_button_rollover` under the pointer - the two the
-    // layout names on every one of these windows.
-    button.piece.set = &widgets1_art_.set;
-    button.piece.material = widgets1_art_.material;
-    button.piece.image = "gem_button";
-    if (button.piece.panel != nullptr) button.piece.panel->setMaterial(widgets1_art_.material);
+    // The column's Normal and Hover images, as the layout names them on every one of these
+    // windows (`resolve_console_buttons`).
+    button.piece.set = console_button_art_.set;
+    button.piece.material = console_button_art_.material;
+    button.piece.image = console_normal_;
+    if (button.piece.panel != nullptr) button.piece.panel->setMaterial(button.piece.material);
 }
 
 // The Choose Level lists and the wardrobe editor are this engine's own screens, with no window
@@ -541,10 +608,10 @@ void MainMenu::stack_console_list() {
         button.col_w = w;
         button.col_h = h;
         button.caption_scale = authored_h > 0.0f ? std::min(1.0f, h / authored_h) : 1.0f;
-        button.piece.set = &widgets1_art_.set;
-        button.piece.material = widgets1_art_.material;
-        button.piece.image = "gem_button";
-        if (button.piece.panel != nullptr) button.piece.panel->setMaterial(widgets1_art_.material);
+        button.piece.set = console_button_art_.set;
+        button.piece.material = console_button_art_.material;
+        button.piece.image = console_normal_;
+        if (button.piece.panel != nullptr) button.piece.panel->setMaterial(button.piece.material);
     }
 }
 
@@ -838,6 +905,15 @@ bool MainMenu::create(const std::string& group, unsigned width, unsigned height)
     // `console_ui`); only the PC row needs `logo.imageset`, `hud.imageset` and
     // `mainmenuframe.layout`.
     console_mode_ = load_console_menu(group);
+    // A PC pak drawing the console screen from the port's pack: the PC's own sets are mounted
+    // too, and supply what the pack leaves out (the logo bars, the buttons, the panel looks).
+    pc_art_ = false;
+    if (console_mode_ && !console_game_data() && load_imagesets(group)) {
+        logo_material_ = material_for(logo_set_, group, logo_texture_);
+        gui_material_ = material_for(gui_set_, group, gui_texture_);
+        pc_art_ = logo_material_ && gui_material_;
+    }
+    if (console_mode_) resolve_console_buttons();
     std::vector<uint8_t> bytes;
     if (read_menu_resource(kMenuLayoutFile, group, bytes)) {
         menu_ = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
@@ -1075,6 +1151,9 @@ void MainMenu::destroy() {
     widgets_art_ = ArtSet{};
     widgets1_art_ = ArtSet{};
     widgets2_art_ = ArtSet{};
+    pc_art_ = false;
+    console_button_art_ = ArtRef{};
+    checkbox_art_ = ArtRef{};
     copyright_ = nullptr;
     editor_info_ = nullptr;
     editor_info_shadow_ = nullptr;
@@ -1287,11 +1366,10 @@ void MainMenu::apply_button_look() {
             continue;
         }
         if (console_mode_) {
-            // `gem_button` and `gem_button_rollover`, which is what every one of
-            // the console layout's buttons names for Normal and Hover.
+            // The column's Normal and Hover, as the console layout's buttons name them.
             button.piece.image =
-                (static_cast<int>(i) == selected_) ? "gem_button_rollover" : "gem_button";
-            set_uv(button.piece.panel, widgets1_art_.set, button.piece.image);
+                (static_cast<int>(i) == selected_) ? console_hover_ : console_normal_;
+            set_uv(button.piece.panel, *console_button_art_.set, button.piece.image);
             continue;
         }
         button.piece.image = (static_cast<int>(i) == selected_) ? button_hover_ : button_normal_;
@@ -1513,6 +1591,13 @@ const tl::formats::GuiWindow* find_image_window(const tl::formats::GuiWindow& wi
     return nullptr;
 }
 
+/// The bottom strip a screen's prompt bar sits in: the console's `main_bottomborder`, or the PC's
+/// `bottombar` where the port's interface pack draws the console screen in the PC's art.
+const tl::formats::GuiWindow* find_bar_strip(const tl::formats::GuiWindow& root) {
+    const tl::formats::GuiWindow* strip = find_image_window(root, "main_bottomborder");
+    return strip != nullptr ? strip : find_image_window(root, "bottombar");
+}
+
 }  // namespace
 
 bool MainMenu::load_difficulty_layout() {
@@ -1564,25 +1649,18 @@ void MainMenu::build_difficulty_extras() {
     const std::string empty;
     const tl::formats::GuiWindow* frame = difficulty_column_path_.back();
 
-    auto art_named = [&](const char* name) -> ArtSet* {
-        if (widgets_art_.set.name == name) return &widgets_art_;
-        if (widgets1_art_.set.name == name) return &widgets1_art_;
-        if (widgets2_art_.set.name == name) return &widgets2_art_;
-        return nullptr;
-    };
-
     // The panel: section `frame` of the look, nine images round the window.
     tl::formats::UVector2 top_left{};
     tl::formats::UVector2 bottom_right{};
     if (frame->type.find("ItemText") != std::string::npos &&
         parse_area(frame->property("UnifiedAreaRect", empty), top_left, bottom_right)) {
         const FrameLook& look = kPanelFrame;
-        ArtSet* corner_art = art_named(look.set[0]);
+        const ArtRef corner_art = resolve_art(look.set[0], look.image[0]);
         const tl::formats::ImagesetImage* corner =
-            corner_art != nullptr ? corner_art->set.find(look.image[0]) : nullptr;
+            corner_art.set != nullptr ? corner_art.set->find(look.image[0]) : nullptr;
         for (int slice = 0; corner != nullptr && slice < 9; ++slice) {
-            ArtSet* art = art_named(look.set[slice]);
-            if (art == nullptr || !art->ok || art->set.find(look.image[slice]) == nullptr) continue;
+            const ArtRef art = resolve_art(look.set[slice], look.image[slice]);
+            if (art.set == nullptr) continue;
             Extra extra;
             extra.slice = slice;
             extra.x = look.left;
@@ -1591,12 +1669,12 @@ void MainMenu::build_difficulty_extras() {
             extra.h = bottom_right.y.offset - top_left.y.offset + look.grow_h;
             extra.corner_w = static_cast<float>(corner->width);
             extra.corner_h = static_cast<float>(corner->height);
-            extra.piece.set = &art->set;
-            extra.piece.material = art->material;
+            extra.piece.set = art.set;
+            extra.piece.material = art.material;
             extra.piece.image = look.image[slice];
             extra.piece.panel =
                 make_panel("tl/menu/extra/" + std::to_string(button_serial_++), frame_);
-            extra.piece.panel->setMaterial(art->material);
+            extra.piece.panel->setMaterial(art.material);
             extras_.push_back(extra);
         }
     }
@@ -1818,10 +1896,10 @@ void MainMenu::show_difficulty(tl::core::DifficultyMenu& state) {
             button.col_w = bottom_right.x.offset - top_left.x.offset;
             button.col_h = bottom_right.y.offset - top_left.y.offset;
             button.checkbox = window->type.find("Checkbox") != std::string::npos;
-            ArtSet& art = button.checkbox ? widgets2_art_ : widgets1_art_;
-            button.piece.set = &art.set;
+            const ArtRef& art = button.checkbox ? checkbox_art_ : console_button_art_;
+            button.piece.set = art.set;
             button.piece.material = art.material;
-            button.piece.image = button.checkbox ? "checkbox_off" : "gem_button";
+            button.piece.image = button.checkbox ? "checkbox_off" : console_normal_;
             if (button.piece.panel != nullptr) button.piece.panel->setMaterial(art.material);
             difficulty_button_.push_back(buttons_.size() - 1);
         }
@@ -1835,8 +1913,7 @@ void MainMenu::show_difficulty(tl::core::DifficultyMenu& state) {
 
         // The bar: Select, Confirm and Back, in the container the bottom
         // strip holds.
-        if (const tl::formats::GuiWindow* strip =
-                find_image_window(difficulty_.root, "main_bottomborder");
+        if (const tl::formats::GuiWindow* strip = find_bar_strip(difficulty_.root);
             strip != nullptr && !strip->children.empty()) {
             const tl::formats::GuiWindow& bar = strip->children.front();
             std::vector<BarGroup> groups;

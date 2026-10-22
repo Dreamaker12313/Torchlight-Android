@@ -60,7 +60,8 @@ static_assert(static_cast<std::uint32_t>(kA) == TouchPad::kA &&
 /// not a resting stick's noise.
 constexpr float kPadInUse = 0.5f;
 
-/// The touch screen's events, to the on-screen pad, in window pixels.
+/// The touch screen's events, to the on-screen pad, in the frame's pixels: a
+/// render scale makes those fewer than the window's, where touches arrive.
 bool handle_touch(const AInputEvent* event) {
     if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION ||
         (AInputEvent_getSource(event) & AINPUT_SOURCE_TOUCHSCREEN) != AINPUT_SOURCE_TOUCHSCREEN) {
@@ -71,16 +72,23 @@ bool handle_touch(const AInputEvent* event) {
     const int32_t masked = action & AMOTION_EVENT_ACTION_MASK;
     const auto index = static_cast<size_t>((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
                                            AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+    const float sx = android::screen_width() > 0 ? static_cast<float>(android::render_width()) /
+                                                       static_cast<float>(android::screen_width())
+                                                 : 1.0f;
+    const float sy = android::screen_height() > 0 ? static_cast<float>(android::render_height()) /
+                                                        static_cast<float>(android::screen_height())
+                                                  : 1.0f;
     switch (masked) {
         case AMOTION_EVENT_ACTION_DOWN:
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
-            pad.touch_down(AMotionEvent_getPointerId(event, index), AMotionEvent_getX(event, index),
-                           AMotionEvent_getY(event, index));
+            pad.touch_down(AMotionEvent_getPointerId(event, index),
+                           AMotionEvent_getX(event, index) * sx,
+                           AMotionEvent_getY(event, index) * sy);
             break;
         case AMOTION_EVENT_ACTION_MOVE:
             for (size_t i = 0; i < AMotionEvent_getPointerCount(event); ++i) {
-                pad.touch_move(AMotionEvent_getPointerId(event, i), AMotionEvent_getX(event, i),
-                               AMotionEvent_getY(event, i));
+                pad.touch_move(AMotionEvent_getPointerId(event, i),
+                               AMotionEvent_getX(event, i) * sx, AMotionEvent_getY(event, i) * sy);
             }
             break;
         case AMOTION_EVENT_ACTION_UP:

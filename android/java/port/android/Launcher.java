@@ -4,12 +4,19 @@
 // The game's files are never in the APK. The player keeps `pak.zip` and
 // `music/` in a folder of their choosing; this asks for it once with the
 // system's folder picker, remembers it, checks it on every start, and says
-// plainly what is missing. The engine (NativeActivity, libtorchlight.so) then
+// plainly what is missing. The engine (GameActivity, libtorchlight.so) then
 // reads it by path, which is why it needs "All files access": a folder chosen
 // through the picker is otherwise a content URI, and the engine opens files.
 //
-// It also unpacks OGRE's shader library, which the APK does carry (it is part
-// of the program, not of the game), into the app's own files.
+// It also unpacks what the APK does carry, which is part of the program and
+// not of the game, into the app's own files: OGRE's shader library and the
+// port's own interface pack (`ui_pack/`, what a PC pak is drawn with when no
+// `console_ui/` is beside it).
+//
+// Last, before the game starts, its one setting the engine cannot change once
+// running: the resolution it renders at, as a share of the screen's (the
+// system scales the smaller frame up to the screen, its proportions kept).
+// The engine reads it from `render_scale.txt`, a percentage.
 package port.android;
 
 import android.app.Activity;
@@ -18,6 +25,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
@@ -28,12 +36,22 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Locale;
 
 public final class Launcher extends Activity {
     private static final int PICK_FOLDER = 1;
     private static final String PREFS = "launcher";
     private static final String KEY_FOLDER = "game_data";
     private static final String KEY_NO_MUSIC = "play_without_music";
+    private static final String KEY_SCALE = "render_scale";
+    /** The resolutions offered, in percent of the screen's width and height. */
+    private static final int[] SCALES = {100, 90, 80, 75, 70, 60, 50};
+
+    /**
+     * The game is running in this process (in the background, or this activity was started over
+     * it): it is brought back rather than started again. The process ends with the game.
+     */
+    private static boolean gameRunning;
 
     /** A dialog or a system screen is up; onResume() waits for it. */
     private boolean waiting;
@@ -43,6 +61,13 @@ public final class Launcher extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (gameRunning) {
+            started = true;
+            startActivity(new Intent(this, GameActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            finish();
+            return;
+        }
         if (!waiting) next();
     }
 
@@ -77,7 +102,53 @@ public final class Launcher extends Activity {
             askAboutMusic(folder);
             return;
         }
-        start(folder);
+        askForResolution(folder);
+    }
+
+    /** The screen's size in landscape, which is how the game is played. */
+    private int[] screenSize() {
+        Rect bounds = getWindowManager().getMaximumWindowMetrics().getBounds();
+        int w = bounds.width();
+        int h = bounds.height();
+        return new int[] {Math.max(w, h), Math.min(w, h)};
+    }
+
+    /**
+     * What the engine renders at for a percentage: the screen's size times 1/factor, the factor
+     * written and read back as the engine gives it to OGRE, so the figure shown is the frame's.
+     */
+    private static int scaled(int size, int percent) {
+        if (percent >= 100) return size;
+        float factor = (float) Double.parseDouble(String.format(Locale.ROOT, "%.6f", 100.0 / percent));
+        return (int) (size * (1.0f / factor));
+    }
+
+    private void askForResolution(String folder) {
+        waiting = true;
+        int[] screen = screenSize();
+        int chosen = prefs().getInt(KEY_SCALE, 100);
+        String[] items = new String[SCALES.length];
+        int checked = 0;
+        for (int i = 0; i < SCALES.length; ++i) {
+            int p = SCALES[i];
+            items[i] = p + "%   " + scaled(screen[0], p) + " x " + scaled(screen[1], p)
+                    + (p == 100 ? "   (the screen's own)" : "");
+            if (p == chosen) checked = i;
+        }
+        final int[] pick = {SCALES[checked]};
+        new AlertDialog.Builder(this)
+                .setTitle("Resolution")
+                .setSingleChoiceItems(items, checked, (d, which) -> pick[0] = SCALES[which])
+                .setCancelable(false)
+                .setPositiveButton("Play", (d, w) -> {
+                    prefs().edit().putInt(KEY_SCALE, pick[0]).apply();
+                    waiting = false;
+                    start(folder);
+                })
+                .setNeutralButton("Game folder", (d, w) ->
+                        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER))
+                .setNegativeButton("Quit", (d, w) -> finish())
+                .show();
     }
 
     private void askForStorage() {
@@ -176,14 +247,21 @@ public final class Launcher extends Activity {
         } catch (IOException e) {
             // The engine then reads the app's own folder, and says what it does not find there.
         }
+        try (OutputStream out = new FileOutputStream(new File(app, "render_scale.txt"))) {
+            out.write((prefs().getInt(KEY_SCALE, 100) + "\n").getBytes("UTF-8"));
+        } catch (IOException e) {
+            // The engine then renders at the screen's own resolution.
+        }
         started = true;
-        startActivity(new Intent(this, android.app.NativeActivity.class));
+        gameRunning = true;
+        startActivity(new Intent(this, GameActivity.class));
         finish();
     }
 
     /**
-     * OGRE's shader library, from the APK's assets into the app's files (`RTShaderLib/`, `Main/`
-     * inside it), once for each install or update of the program.
+     * OGRE's shader library (`RTShaderLib/`, `Main/` inside it) and the interface pack
+     * (`ui_pack/`), from the APK's assets into the app's files, once for each install or update
+     * of the program.
      */
     private void unpackShaderLibrary() throws IOException {
         long installed;
@@ -196,9 +274,21 @@ public final class Launcher extends Activity {
         String want = Long.toString(installed);
         if (stamp.isFile() && want.equals(read(stamp))) return;
         copyAssets(getAssets(), "RTShaderLib", new File(getFilesDir(), "RTShaderLib"));
+        // Replaced whole: a file of an older pack (or one spelt in another case) would stay.
+        File pack = new File(getFilesDir(), "ui_pack");
+        delete(pack);
+        copyAssets(getAssets(), "ui_pack", pack);
         try (OutputStream out = new FileOutputStream(stamp)) {
             out.write(want.getBytes("UTF-8"));
         }
+    }
+
+    private static void delete(File file) {
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) delete(child);
+        }
+        file.delete();
     }
 
     private static void copyAssets(AssetManager assets, String from, File to) throws IOException {

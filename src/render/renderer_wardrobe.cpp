@@ -5,7 +5,10 @@
 #include "core/unit_types.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <sstream>
 #include <utility>
@@ -13,8 +16,13 @@
 namespace tl::render {
 namespace {
 
-/// The class the editor dresses.
-constexpr const char* kWardrobeClass = "Alchemist";
+/// A sweep's frame comes after this many rendered steps of this length, so the
+/// idle is half a second in: a piece that does not follow the body shows then.
+constexpr int kSettleSteps = 15;
+constexpr float kSettleStep = 1.0f / 30.0f;
+
+/// The classes `class=all` dresses.
+constexpr const char* kWardrobeClasses[] = {"Destroyer", "Alchemist", "Vanquisher"};
 
 /// The right stick: degrees a second the character turns at full deflection,
 /// and how fast (share of the backdrop's distance a second) and how close the
@@ -28,6 +36,21 @@ bool same_word(const std::string& a, const std::string& b) { return lowered(a) =
 std::string basename_of(const std::string& path) {
     const size_t slash = path.find_last_of("/\\");
     return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+/// A name as a file name's word: lower case, runs of anything else one `_`.
+std::string file_word(const std::string& name) {
+    std::string out;
+    for (const char c : name) {
+        const auto u = static_cast<unsigned char>(c);
+        if (std::isalnum(u) != 0) {
+            out.push_back(static_cast<char>(std::tolower(u)));
+        } else if (!out.empty() && out.back() != '_') {
+            out.push_back('_');
+        }
+    }
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    return out.empty() ? std::string("own") : out.substr(0, 40);
 }
 
 }  // namespace
@@ -155,7 +178,7 @@ std::string row_caption(const Row& row) {
 std::string Renderer::Impl::wardrobe_editor_text() const {
     const Impl& m = *this;
     std::ostringstream out;
-    out << "WARDROBE - " << kWardrobeClass << "\n";
+    out << "WARDROBE - " << m.wardrobe_editor.dress_class << "\n";
     for (const WardrobeRow& row : m.wardrobe_editor.rows) {
         const WardrobeLook& look = row.looks[static_cast<size_t>(row.index)];
         out << row.label << ": ";
@@ -215,10 +238,11 @@ void Renderer::open_wardrobe() {
     editor.had_weapon = m.has_weapon;
     editor.saved_weapon = m.weapon;
 
-    if (!same_word(m.player_class, kWardrobeClass)) show_player_class(kWardrobeClass);
+    const std::string dressed = editor.dress_class;
+    if (!same_word(m.player_class, dressed)) show_player_class(dressed);
     if (!m.wardrobe_ready) wear_base_outfit();
     if (m.subject == nullptr || !m.wardrobe_ready) {
-        TL_LOG_WARN("wardrobe editor: no %s to dress", kWardrobeClass);
+        TL_LOG_WARN("wardrobe editor: no %s to dress", dressed.c_str());
     }
     m.ensure_item_index();
     m.load_unit_types();
@@ -269,7 +293,7 @@ void Renderer::open_wardrobe() {
     m.menu.show_editor(captions);
     editor.open = true;
     m.redress_wardrobe_editor();
-    TL_LOG_INFO("wardrobe editor: %s; looks: %s", kWardrobeClass, counts.c_str());
+    TL_LOG_INFO("wardrobe editor: %s; looks: %s", dressed.c_str(), counts.c_str());
 }
 
 void Renderer::close_wardrobe() {
@@ -282,7 +306,7 @@ void Renderer::close_wardrobe() {
     if (m.subject_node != nullptr) m.subject_node->setOrientation(editor.subject_orientation);
 
     m.player_inventory = editor.saved_inventory;
-    if (!editor.previous_class.empty() && !same_word(editor.previous_class, kWardrobeClass)) {
+    if (!editor.previous_class.empty() && !same_word(editor.previous_class, editor.dress_class)) {
         show_player_class(editor.previous_class);
     } else {
         m.sync_equipped_weapon();
@@ -326,6 +350,93 @@ void Renderer::steer_wardrobe(const tl::core::InputState& input, float delta) {
     }
 }
 
+bool Renderer::sweep_wardrobe(const std::string& stem, const std::vector<std::string>& rows) {
+    Impl& m = *impl_;
+    Impl::WardrobeEditor& editor = m.wardrobe_editor;
+    int frames = 0;
+    bool ok = true;
+    for (size_t r = 0; r < editor.rows.size(); ++r) {
+        const std::string label = lowered(editor.rows[r].label);
+        if (std::find(rows.begin(), rows.end(), label) == rows.end()) continue;
+        const int was = editor.rows[r].index;
+        const int count = static_cast<int>(editor.rows[r].looks.size());
+        for (int i = 0; i < count; ++i) {
+            step_wardrobe(static_cast<int>(r), i - editor.rows[r].index);
+            // Rendered, not just stepped: the idle and the particles advance on frame events.
+            for (int k = 0; k < kSettleSteps; ++k) {
+                m.advance(kSettleStep);
+                if (!m.root->renderOneFrame(kSettleStep)) break;
+            }
+            const Impl::WardrobeLook& look = editor.rows[r].looks[static_cast<size_t>(i)];
+            char number[12];
+            std::snprintf(number, sizeof number, "%03d", i);
+            std::string path = stem;
+            path += "_" + label;
+            path += "_";
+            path += number;
+            path += "_" + file_word(look.item != nullptr ? look.item->display_name : "");
+            path += ".png";
+            ok = dump_frame(path) && ok;
+            ++frames;
+        }
+        step_wardrobe(static_cast<int>(r), was - editor.rows[r].index);
+    }
+    TL_LOG_INFO("wardrobe sweep: %s, %d frame(s)", editor.dress_class.c_str(), frames);
+    return ok;
+}
+
+namespace {
+
+/// What dump_wardrobe()'s picks ask: the classes, the camera, and the rows in order.
+struct WardrobePicks {
+    std::vector<std::string> classes;
+    std::vector<std::pair<std::string, std::string>> rows;
+    float zoom = 1.0f;
+};
+
+WardrobePicks read_wardrobe_picks(const std::string& picks) {
+    WardrobePicks out;
+    std::stringstream list(picks);
+    std::string pick;
+    while (std::getline(list, pick, ',')) {
+        const size_t eq = pick.find('=');
+        const std::string key = lowered(pick.substr(0, eq));
+        const std::string value = eq == std::string::npos ? std::string() : pick.substr(eq + 1);
+        if (key == "class" && same_word(value, "all")) {
+            out.classes.assign(std::begin(kWardrobeClasses), std::end(kWardrobeClasses));
+        } else if (key == "class") {
+            out.classes.push_back(value);
+        } else if (key == "zoom") {
+            out.zoom = std::clamp(static_cast<float>(std::strtod(value.c_str(), nullptr)),
+                                  kNearestZoom, 1.0f);
+        } else if (!key.empty()) {
+            out.rows.emplace_back(key, value);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<std::string> Renderer::pick_wardrobe_rows(
+    const std::vector<std::pair<std::string, std::string>>& rows) {
+    Impl& m = *impl_;
+    std::vector<std::string> sweep;
+    for (const auto& [word, value] : rows) {
+        for (size_t i = 0; i < m.wardrobe_editor.rows.size(); ++i) {
+            const Impl::WardrobeRow& row = m.wardrobe_editor.rows[i];
+            const bool named = same_word(row.label, word);
+            if ((word == "all" && row.slot >= 0) || (named && same_word(value, "all"))) {
+                sweep.push_back(lowered(row.label));
+            } else if (named) {
+                const auto wanted = static_cast<int>(std::strtol(value.c_str(), nullptr, 10));
+                step_wardrobe(static_cast<int>(i), wanted - row.index);
+            }
+        }
+    }
+    return sweep;
+}
+
 bool Renderer::dump_wardrobe(const std::string& png_path, const std::string& picks) {
     Impl& m = *impl_;
     if (!m.window) return false;
@@ -334,25 +445,24 @@ bool Renderer::dump_wardrobe(const std::string& png_path, const std::string& pic
         TL_LOG_WARN("the main menu could not be built; nothing to dump");
         return false;
     }
-    open_wardrobe();
-    // `<row>=<index>,...`, as the screen counts.
-    std::stringstream list(picks);
-    std::string pick;
-    while (std::getline(list, pick, ',')) {
-        const size_t eq = pick.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string word = pick.substr(0, eq);
-        const int wanted = std::atoi(pick.substr(eq + 1).c_str());
-        bool found = false;
-        for (size_t i = 0; i < m.wardrobe_editor.rows.size(); ++i) {
-            if (!same_word(m.wardrobe_editor.rows[i].label, word)) continue;
-            step_wardrobe(static_cast<int>(i), wanted - m.wardrobe_editor.rows[i].index);
-            found = true;
-        }
-        if (!found) TL_LOG_WARN("wardrobe editor: no row called '%s'", word.c_str());
+    WardrobePicks asked = read_wardrobe_picks(picks);
+    if (asked.classes.empty()) asked.classes.push_back(m.wardrobe_editor.dress_class);
+    const bool png = png_path.size() > 4 && lowered(png_path.substr(png_path.size() - 4)) == ".png";
+    const std::string stem = png ? png_path.substr(0, png_path.size() - 4) : png_path;
+
+    bool ok = true;
+    for (const std::string& dressed : asked.classes) {
+        m.wardrobe_editor.dress_class = dressed;
+        open_wardrobe();
+        m.wardrobe_editor.zoom = asked.zoom;
+        m.place_wardrobe_camera();
+        const std::vector<std::string> sweep = pick_wardrobe_rows(asked.rows);
+        // A sweep's frames always name the class; one frame only when there are several.
+        const bool named = asked.classes.size() > 1 || !sweep.empty();
+        const std::string own = stem + (named ? "_" + file_word(dressed) : "");
+        ok = (sweep.empty() ? dump_frame(own + ".png") : sweep_wardrobe(own, sweep)) && ok;
+        close_wardrobe();
     }
-    const bool ok = dump_frame(png_path);
-    close_wardrobe();
     m.menu.destroy();
     return ok;
 }

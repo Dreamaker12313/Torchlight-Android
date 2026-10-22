@@ -3,6 +3,11 @@
 
 #include "render/renderer.h"
 
+#include "core/layout_helpers.h"
+#include "core/layout_maths.h"
+#include "core/saved_orientation.h"
+#include "core/world.h"
+
 #include "core/attack_button.h"
 #include "core/camera_shake.h"
 #include "core/character.h"
@@ -30,6 +35,7 @@
 #include "render/inventory_menu.h"
 #include "render/layout_screen.h"
 #include "render/menu.h"
+#include "render/particle_systems.h"
 #include "render/particle_universe.h"
 #include "render/particle_wrappers.h"
 #include "render/quest_dialog.h"
@@ -184,6 +190,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -193,6 +200,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifndef TL_OGRE_MEDIA_DIR
@@ -202,11 +210,28 @@
 namespace tl::render {
 namespace renderer_detail {}
 using namespace renderer_detail;
+namespace ogre = tl::core::ogre;
+
+// PORT: the game's maths (core/ogre_types.h) and OGRE's, one to the other.
+inline Ogre::Vector3 to_ogre(const ogre::Vector3& v) { return Ogre::Vector3(v.x, v.y, v.z); }
+inline Ogre::Quaternion to_ogre(const ogre::Quaternion& q) {
+    return Ogre::Quaternion(q.w, q.x, q.y, q.z);
+}
+inline ogre::Vector3 from_ogre(const Ogre::Vector3& v) { return ogre::Vector3(v.x, v.y, v.z); }
+inline ogre::Quaternion from_ogre(const Ogre::Quaternion& q) {
+    return ogre::Quaternion(q.w, q.x, q.y, q.z);
+}
+// PORT: a save record's orientation (core/saved_orientation.h) in OGRE's maths.
+inline void save_orientation(const Ogre::Quaternion& turn, std::array<uint8_t, 64>& out) {
+    tl::core::save_orientation(from_ogre(turn), out);
+}
+inline Ogre::Quaternion saved_orientation(const std::array<uint8_t, 64>& in) {
+    return to_ogre(tl::core::saved_orientation(in));
+}
 namespace renderer_detail {
 class RenderBehindMaterials;  // the render-behind outline's materials, below
 
-/// The default when a level authors no `RIMLIGHT` (`CLevel::addCharacter`).
-constexpr const char* kDefaultRimLight = "media/sharedtextures/rimlight.dds";
+using tl::core::kDefaultRimLight;
 
 /// The game's own data, kept out of the default group so its scripts are not parsed
 /// (mount_resources()).
@@ -340,158 +365,241 @@ private:
 
 }  // namespace renderer_detail
 
-/// One thing a layout asks to be placed, with everything the layout says about it. Scale
-/// and brightness are apart from the transform: they come from named per-descriptor fields
-/// (tl::formats::cmp_field).
-struct MeshPlacement {
-    std::string mesh;
+using tl::core::MeshPlacement;
 
-    /// A `Unit Trigger`'s prop: its unit's `LAYOUT_STATE_1`, hung on it once
-    /// it stands (`Renderer::Impl::set_trigger_state_layout`).
-    std::string trigger_resting_layout;
+using tl::core::kUnitIdleAnimation;
 
-    /// The layout node this came from (its 64-bit id, how wires and timelines address it);
-    /// zero for anything not placed from a node.
-    int64_t node_id = 0;
+using tl::core::ParticleStart;
 
-    /// For a collision placement: its `CollisionWorld` group, so it can be switched off;
-    /// zero (the level) for all but a `Unit Trigger`'s prop.
-    int64_t collision_group = 0;
-    /// The unit's `BLOCK`, for a unit's own collision model
-    /// (`CollisionWorld::set_group_blocks`).
-    bool collision_blocks = false;
+using tl::core::kMissileParticleStopSeconds;
 
-    Ogre::Vector3 position = Ogre::Vector3::ZERO;
-    Ogre::Quaternion orientation = Ogre::Quaternion::IDENTITY;
-    Ogre::Vector3 scale = Ogre::Vector3::UNIT_SCALE;
-
-    /// What the layout asked this thing to play: a `.SKELETON` stem beside the mesh (empty
-    /// or `bind`: the bind pose). `unit` is a `Monster`'s `MONSTER` name, the join an
-    /// `Animation Controller` uses.
-    std::string animation;
-    std::string unit;
-    float animation_rate = 1.0f;
-    bool loops = true;
-
-    /// True when `animation` is the default idle rather than named: a mesh without
-    /// `Idle.SKELETON` is then no fault.
-    bool idle_fallback = false;
-
-    /// Whether this mesh is somebody rather than something: units are skipped by
-    /// `ground_under()`, so one placed on a marker is not ground for the next.
-    bool is_unit = false;
-
-    /// `VISIBLE:false` at placement: placed and registered, started invisible, so a later
-    /// `Show` finds a scene node.
-    bool start_hidden = false;
-
-    /// A `Room Piece`: its materials take the light map's `LIGHTPASS` (`CLevel::bake`
-    /// into `CLevel +0x290`; `CLevel::setProjectorPass`).
-    ///
-    bool room_piece = false;
-    /// The piece's `PRERENDER` (-1) or `POSTRENDER` (+1) in its tileset table, 0 for neither:
-    /// `CLevel::bake` batches them into `stgeompre_` on queue 0x30 and
-    /// `stgeompost_` on 0x59, the rest into `stgeom_` on 0x31.
-    int render_phase = 0;
-    /// A room piece's `BAKE` (`CRoomPieceDescriptor::Set_setIsBakeable`, X360 +0x14f):
-    /// whether `CLevel::bake` batches it; true by default (`CRoomPiece::CRoomPiece`).
-    bool bake = true;
-
-    /// A layout `Light`'s `LIGHT DENSITY` (`CLight +0x100`, 1 from the constructor),
-    /// else 0: drawn into the light map only, that many times over.
-    unsigned light_density = 0;
-};
-
-/// The animation a unit plays when the layout names nothing else (an engine name, not data).
-constexpr const char* kUnitIdleAnimation = "Idle";
-
-/// How `place_particle_layout()` places a file. In play every kind-1 `CLayout` is a
-/// `CParticle`: `CLayout::loadLayoutFile` hands it to
-/// `CParticlePreloader` once `CLevel::loadRoomLayout` set
-/// caching (`setCacheingParticlesForLevel`); also `createParticleSystemAt`
-/// and `unitInit`.
-enum class ParticleStart {
-    /// A `CParticle`, started now (`CParticle::Start`).
-    Now,
-    /// A `CParticle` placed for a later `Start`: `GetParticle`, or a
-    /// caller that starts its systems itself.
-    Held,
-    /// Not a `CParticle`: a live layout of its own, whose script runs (a kind-0
-    /// `CLayout`, or a kind-2 one with a timeline).
-    Live,
-};
-
-/// A particle system placed in the world: one `Particle` node of a layout (a `CParticle`),
-/// built by the glue (render/particle_wrappers.h), with the layout's timer
-/// (`CParticle::updateLevelObject`).
-struct ParticleSystem {
-    /// The `Layout Link Particle` node this came from, or 0: the only way back from the
-    /// linked file's systems to the link a wire names.
-    int64_t owner = 0;
-    /// The node map of the file holding that link, and the link's pose: a timeline key
-    /// moving the link carries the system.
-    const std::multimap<int64_t, Ogre::SceneNode*>* owner_nodes = nullptr;
-    /// Part of a `Unit Trigger`'s own layout (`CTriggerUnit +0x240`, its unit's
-    /// `LAYOUTFILE`, made by `unitInit`): `owner` is the trigger's node.
-    bool trigger_own_layout = false;
-    Ogre::Vector3 link_position = Ogre::Vector3::ZERO;
-    Ogre::Quaternion link_orientation = Ogre::Quaternion::IDENTITY;
-    Ogre::Vector3 offset_from_link = Ogre::Vector3::ZERO;
-    Ogre::Quaternion turn_from_link = Ogre::Quaternion::IDENTITY;
-
-    /// The `Particle` node it was built from, and the node map of the machine
-    /// whose events name that node (its own file's, of the copies sharing ids).
-    int64_t node = 0;
-    const std::multimap<int64_t, Ogre::SceneNode*>* node_owner = nullptr;
-    /// A live `CParticleTechWrapper` (its file part of the level via a `Layout Link`): its
-    /// node's `Start Particle` / `Stop Particle` and affectors' `ENABLE` act on it; prepared,
-    /// not started (`CParticleWrapper::createParticleSystem`).
-    /// Every other system is a template copy (`CParticlePreloader::createParticleCache`).
-    ///
-    bool wrapper = false;
-
-    /// What `CParticle::Start` reads for the stop timer:
-    /// `LIFE TIME` (`getFixedTimeout`), the longest finite emitter run, and whether any
-    /// emitter is `NO EXPIRATION`.
-    float fixed_timeout = 0.0f;
-    float finite_window = 0.0f;
-    bool non_expiring = false;
-    /// The layout's timer (`CParticle +0x120`, plus 0.1; none at first, `CParticle::CParticle`):
-    /// past it `updateLevelObject` calls
-    /// `Stop(true)`. Zero: no timer.
-    float stop_at = 0.0f;
-    /// Already given its layout's timer (an inner `Layout Link Particle` keeps its own).
-    bool timer_armed = false;
-    float elapsed = 0.0f;
-    bool finished = false;
-    /// Its holder already belongs to a holder list, which destroys the node; a placement's
-    /// range can hold what a script fired meanwhile, which must not be claimed twice.
-    bool claimed = false;
-    /// The `CParticle` this is a template copy for (`Impl::placed_particles`), or 0: its
-    /// `Start` also plays the file's sounds and camera shakes (`CParticleCache`).
-    uint32_t cparticle = 0;
-
-    /// The system itself.
-    TorchlightParticle pu;
-    /// `CParticle +0x128`: `Stop(false)` let it die out; stops for good once empty
-    /// (`CParticle::updateLevelObject`).
-    bool pu_dying = false;
-
-    /// What OGRE draws for this system.
-    Ogre::MovableObject* drawable() const { return pu.movable; }
-    /// The node it hangs from.
-    Ogre::SceneNode* holder() const {
-        const Ogre::MovableObject* object = drawable();
-        return object != nullptr ? object->getParentSceneNode() : nullptr;
+struct Renderer::Impl : tl::core::World {
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool add_map_portal(const ogre::Vector3& at, const std::string& warp, bool enabled) override {
+        const auto r = add_map_portal(to_ogre(at), warp, enabled);
+        return r;
     }
-};
-
-/// `CMissile::killMissile`: `+0x1b4`, how long a dead
-/// missile's particles keep releasing before `handleDeathOfMissile` stops them.
-inline constexpr float kMissileParticleStopSeconds = 1.0f;
-
-struct Renderer::Impl {
-    RendererConfig config;
+    using World::place_breakable;
+    // PORT: `World::place_breakable` (core/world.h) in OGRE's maths, for the renderer's callers.
+    bool place_breakable(const std::string& unit, const Ogre::Vector3& at,
+                         const Ogre::Quaternion& facing, int64_t id, const Ogre::Vector3* settle,
+                         const float* drawn_scale = nullptr) {
+        const ogre::Vector3 settle_c = settle != nullptr ? from_ogre(*settle) : ogre::Vector3::ZERO;
+        return World::place_breakable(unit, from_ogre(at), from_ogre(facing), id,
+                                      settle != nullptr ? &settle_c : nullptr, drawn_scale);
+    }
+    using World::cast_prop_trap;
+    // PORT: `World::cast_prop_trap` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void cast_prop_trap(const std::string& unit, const std::string& name, uint32_t level,
+                        const Ogre::Vector3& skill_at, const Ogre::Quaternion& facing,
+                        bool by_player) {
+        World::cast_prop_trap(unit, name, level, from_ogre(skill_at), from_ogre(facing), by_player);
+    }
+    using World::drop_item;
+    // PORT: `World::drop_item` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void drop_item(const tl::core::ItemStats& item, int count, const Ogre::Vector3& at) {
+        World::drop_item(item, count, from_ogre(at));
+    }
+    using World::dropped_to_ground;
+    // PORT: `World::dropped_to_ground` (core/world.h) in OGRE's maths, for the renderer's callers.
+    Ogre::Vector3 dropped_to_ground(const Ogre::Vector3& at) const {
+        const Ogre::Vector3 r = to_ogre(World::dropped_to_ground(from_ogre(at)));
+        return r;
+    }
+    using World::place_gold;
+    // PORT: `World::place_gold` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void place_gold(const tl::core::GoldPile& pile, const Ogre::Vector3& at,
+                    const tl::core::ItemStats* item = nullptr, bool drop_sound = true) {
+        World::place_gold(pile, from_ogre(at), item, drop_sound);
+    }
+    using World::place_ground_item;
+    // PORT: `World::place_ground_item` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void place_ground_item(const tl::core::ItemStats& item, int count, const Ogre::Vector3& at,
+                           const Ogre::Quaternion& orientation, const tl::core::QuestUnitTag& tag) {
+        World::place_ground_item(item, count, from_ogre(at), from_ogre(orientation), tag);
+    }
+    using World::snap_item_to_ground;
+    // PORT: `World::snap_item_to_ground` (core/world.h) in OGRE's maths, for the renderer's callers.
+    Ogre::Vector3 snap_item_to_ground(const Ogre::Vector3& at) {
+        const Ogre::Vector3 r = to_ogre(World::snap_item_to_ground(from_ogre(at)));
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    tl::core::QuestEventUnit quest_event_unit(const std::string& name, const std::string& unittype,
+                                              const ogre::Vector3& at,
+                                              const tl::core::QuestUnitTag& tag) override {
+        const auto r = quest_event_unit(name, unittype, to_ogre(at), tag);
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    Ogre::SceneNode* view_place_entity(Ogre::Entity* entity, const ogre::Vector3& at,
+                                       const ogre::Quaternion& turn) override {
+        auto* const r = view_place_entity(entity, to_ogre(at), to_ogre(turn));
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    std::vector<Ogre::SceneNode*> place_particle_layout(const std::string& reference,
+                                                        const ogre::Vector3& at,
+                                                        const ogre::Quaternion& facing,
+                                                        Ogre::SceneNode* parent,
+                                                        ParticleStart start) override {
+        const auto r =
+            place_particle_layout(reference, to_ogre(at), to_ogre(facing), parent, start);
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    void view_aim_node(Ogre::SceneNode* node, const ogre::Vector3& at,
+                       const ogre::Vector3& forward) override {
+        view_aim_node(node, to_ogre(at), to_ogre(forward));
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    Ogre::SceneNode* view_create_node(const ogre::Vector3& at) override {
+        auto* const r = view_create_node(to_ogre(at));
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool view_held_item(const Ogre::Entity* held, ogre::Vector3& hand,
+                        float& height) const override {
+        Ogre::Vector3 hand_o = to_ogre(hand);
+        const auto r = view_held_item(held, hand_o, height);
+        hand = from_ogre(hand_o);
+        return r;
+    }
+    using World::add_combat_text;
+    // PORT: `World::add_combat_text` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void add_combat_text(tl::core::CombatText what, const Ogre::Vector3& unit_at, int amount = 0) {
+        World::add_combat_text(what, from_ogre(unit_at), amount);
+    }
+    using World::loot_placement_at;
+    // PORT: `World::loot_placement_at` (core/world.h) in OGRE's maths, for the renderer's callers.
+    tl::core::LootPlacement loot_placement_at(const Ogre::Vector3& at) {
+        const auto r = World::loot_placement_at(from_ogre(at));
+        return r;
+    }
+    using World::play_death_particle;
+    // PORT: `World::play_death_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void play_death_particle(const tl::core::UnitStats& unit, const Ogre::Vector3& at) {
+        World::play_death_particle(unit, from_ogre(at));
+    }
+    using World::play_hit_particle;
+    // PORT: `World::play_hit_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void play_hit_particle(const tl::core::UnitStats& victim, const Ogre::Vector3& from,
+                           const Ogre::Vector3& at) {
+        World::play_hit_particle(victim, from_ogre(from), from_ogre(at));
+    }
+    using World::play_strike_particle;
+    // PORT: `World::play_strike_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void play_strike_particle(const tl::core::UnitStats& attacker, const Ogre::Vector3& from,
+                              const Ogre::Vector3& at, float radius, bool critical, bool blocked) {
+        World::play_strike_particle(attacker, from_ogre(from), from_ogre(at), radius, critical,
+                                    blocked);
+    }
+    using World::show_absorbed;
+    // PORT: `World::show_absorbed` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void show_absorbed(const Ogre::Vector3& at, const tl::core::UnitStats& stats) {
+        World::show_absorbed(from_ogre(at), stats);
+    }
+    using World::start_death_shake;
+    // PORT: `World::start_death_shake` (core/world.h) in OGRE's maths, for the renderer's callers.
+    void start_death_shake(const char* name, float duration, float magnitude,
+                           const Ogre::Vector3& centre) {
+        World::start_death_shake(name, duration, magnitude, from_ogre(centre));
+    }
+    using World::unit_node_position;
+    // PORT: `World::unit_node_position` (core/world.h) in OGRE's maths, for the renderer's callers.
+    bool unit_node_position(int64_t node, Ogre::Vector3& at) {
+        ogre::Vector3 at_c = from_ogre(at);
+        const auto r = World::unit_node_position(node, at_c);
+        at = to_ogre(at_c);
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool skill_bone_world(const ViewUnit& unit, int attachment, ogre::Vector3& out) override {
+        Ogre::Vector3 out_o = to_ogre(out);
+        const auto r = skill_bone_world(unit, attachment, out_o);
+        out = from_ogre(out_o);
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool skill_unit_forward(const ViewUnit& unit, ogre::Vector3& out) override {
+        Ogre::Vector3 out_o = to_ogre(out);
+        const auto r = skill_unit_forward(unit, out_o);
+        out = from_ogre(out_o);
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    void start_character_particle(const tl::core::UnitStats& unit, int slot,
+                                  const ogre::Vector3& at) override {
+        start_character_particle(unit, slot, to_ogre(at));
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    void view_stretch_lines(const std::vector<Ogre::SceneNode*>& line_holders,
+                            const ogre::Vector3& start, const ogre::Vector3& end) override {
+        view_stretch_lines(line_holders, to_ogre(start), to_ogre(end));
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    void view_translate(const std::vector<Ogre::SceneNode*>& holders,
+                        const ogre::Vector3& by) override {
+        view_translate(holders, to_ogre(by));
+    }
+    // PORT: the scene node hooks (core/world.h).
+    ogre::Vector3 view_position(const Ogre::SceneNode* node) const override {
+        return from_ogre(node->getPosition());
+    }
+    ogre::Quaternion view_orientation(const Ogre::SceneNode* node) const override {
+        return from_ogre(node->getOrientation());
+    }
+    ogre::Vector3 view_derived_position(const Ogre::SceneNode* node) const override {
+        return from_ogre(node->_getDerivedPosition());
+    }
+    ogre::Quaternion view_derived_orientation(const Ogre::SceneNode* node) const override {
+        return from_ogre(node->_getDerivedOrientation());
+    }
+    void view_set_position(Ogre::SceneNode* node, const ogre::Vector3& at) override {
+        node->setPosition(to_ogre(at));
+    }
+    void view_set_orientation(Ogre::SceneNode* node, const ogre::Quaternion& turn) override {
+        node->setOrientation(to_ogre(turn));
+    }
+    Ogre::SceneNode* view_parent_node(const Ogre::Entity* entity) const override {
+        return entity->getParentSceneNode();
+    }
+    tl::core::DungeonFiles archive_dungeon_files() const override;
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    void play_effect_fx(tl::core::EffectManager& effects, const ogre::Vector3& centre,
+                        const std::string& who) override {
+        play_effect_fx(effects, to_ogre(centre), who);
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool play_sound(const std::string& name, const ogre::Vector3& at) override {
+        const auto r = play_sound(name, to_ogre(at));
+        return r;
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool play_sound(const std::string& name, const ogre::Vector3& at, float volume_scale,
+                    float radius_if_none, const std::string& voice_key,
+                    bool volume_given) override {
+        const auto r =
+            play_sound(name, to_ogre(at), volume_scale, radius_if_none, voice_key, volume_given);
+        return r;
+    }
+    // PORT: the archive hooks (core/world.h), answered by the archive the renderer mounts.
+    std::vector<std::string> archive_paths_in_listing_order(const std::string& dir,
+                                                            const char* suffix) const override;
+    std::string resolve_archive_path_quiet(const std::string& reference) const override;
+    std::string class_unit_path(const std::string& class_name, bool* console) const override;
+    std::string archive_animation_in_dir(const std::string& dir, const std::string& state,
+                                         bool armed, int variation) const override;
+    std::string archive_path_in_dir(const std::string& basename,
+                                    const std::string& dir) const override;
+    std::string archive_path_unique(const std::string& basename) const override;
+    std::vector<std::string> archive_paths_under(const std::string& dir,
+                                                 const char* suffix) const override;
+    bool console_game_data() const override;
+    std::string dir_of_asset(const std::string& name) const override;
+    tl::core::DungeonManager& loaded_dungeon_manager() const override;
+    std::vector<uint8_t> read_resource(const std::string& path) const override;
+    std::string resolve_archive_path(const std::string& reference) const override;
 
     Ogre::LogManager* log_manager = nullptr;
     std::unique_ptr<OgreLogBridge> log_bridge;
@@ -512,6 +620,9 @@ struct Renderer::Impl {
     ParticleUniverseHost particle_universe;
 
     Ogre::RenderWindow* window = nullptr;
+    /// Android: the EGL surface let go in the background and remade, the context kept.
+    void watch_window_surface();
+    void fit_camera_to_window() const;  ///< to the window's first viewport, the world's
     Ogre::SceneManager* scene = nullptr;
     /// See `TransparentsWithScenery`.
     std::unique_ptr<Ogre::RenderQueueListener> transparents_listener;
@@ -523,13 +634,6 @@ struct Renderer::Impl {
     /// The template's `LEVELPARTICLE` layout (`CGameClient +0x1080`), put on the player
     /// every frame (`advance`).
     Ogre::SceneNode* level_particle_node = nullptr;
-
-    Ogre::SceneNode* subject_node = nullptr;
-    Ogre::Entity* subject = nullptr;
-
-    /// The archive directory the subject's mesh came from, with a trailing slash; the
-    /// mesh's references are qualified against it.
-    std::string subject_dir;
 
     /// Everything a layout placed, for the ground query below.
     std::vector<Ogre::Entity*> layout_meshes;
@@ -549,8 +653,6 @@ struct Renderer::Impl {
     std::vector<BakeablePiece> bakeable_room_pieces;
     /// Numbers the sets' names, which a scene manager keeps unique.
     unsigned baked_sets = 0;
-    /// The scene nodes a wire or a timeline can address; see place_layout().
-    std::set<const Ogre::SceneNode*> scripted_scene_nodes;
 
     /// The room pieces placed, whose materials take the light map's
     /// `LIGHTPASS` (see MeshPlacement::room_piece and add_light_pass()).
@@ -563,9 +665,19 @@ struct Renderer::Impl {
     /// The layout's particle systems; see ParticleSystem.
     std::vector<ParticleSystem> particle_systems;
 
-    /// The archive path of the layout whose `Particle` nodes are being placed,
-    /// for `RendererConfig::pu_particle_layouts` (`--pu-particles`).
-    std::string placing_layout_path;
+    ParticleIndex particle_index;
+    void particle_index_add(size_t i);
+    void particle_index_remove(size_t i);
+    /// The systems one of `keys` (by link) or `wrapper_keys` (wrappers by node) names, in
+    /// `particle_systems`' order, each once; then the lookups script events make.
+    ParticleRefs indexed_particles(std::initializer_list<ParticleIndex::Key> keys,
+                                   std::initializer_list<ParticleIndex::Key> wrapper_keys);
+    ParticleRefs map_wrappers(const NodeMap& nodes);
+    ParticleRefs link_systems(const NodeMap& nodes, int64_t node);
+    ParticleRefs link_or_free_systems(const NodeMap& nodes, int64_t node);
+    ParticleRefs node_wrappers(const NodeMap& nodes, int64_t node);
+    ParticleRefs shown_systems(const NodeMap& nodes, int64_t node);
+    size_t show_node_particles(const tl::core::ScriptEvent& event, NodeMap& nodes);
 
     /// Everything in the scene with an animation running: the level's NPCs and animated
     /// props. Apart from animated() (the subject), which runs at the player's pace.
@@ -583,30 +695,10 @@ struct Renderer::Impl {
     bool room_piece_in_view(const Ogre::Entity* entity) const;
     std::vector<SceneAnimation> scene_animations;
 
-    /// `CGenericModel`'s animation half (core/model_animation.h) per entity
-    /// `play_scene_animation()` drives; a track's index is this entity's own.
-    struct EntityAnimation {
-        tl::core::ModelAnimator animator;
-        std::vector<Ogre::AnimationState*> states;
-        /// What was last written to each state: only changes are written, so a state
-        /// another path switched off stays off.
-        std::vector<tl::core::ModelTrack> written;
-    };
-    std::map<Ogre::Entity*, EntityAnimation> entity_animations;
     /// The track of `state` on `entity`'s animator, added on first use.
     unsigned entity_track(EntityAnimation& animation, Ogre::AnimationState* state);
     /// Copy the animator's tracks onto the states, where they changed.
-    void write_entity_animation(EntityAnimation& animation);
-    /// `CGenericModel::updateAnimation` for an entity with an animator:
-    /// false when it has none, and the caller steps its states itself.
-    bool step_entity_animation(Ogre::Entity* entity, float delta);
-    /// Whether `state` is one of the entity's animator's tracks.
-    bool animator_owns(Ogre::Entity* entity, const Ogre::AnimationState* state) const;
-
-    /// Every quest under `media/Quests/` and the log the player carries; the log owns the
-    /// gate state (`QuestLog::state()` is what a `Group` node's gate tests).
-    tl::core::QuestBook quest_book;
-    tl::core::QuestLog quest_log;
+    void write_entity_animation(EntityAnimation& animation) override;
 
     /// The window an NPC offers a quest in (`questdialogmenu_xenon.layout`): a
     /// `CQuestDialogMenu`, apart from a `FLOATYTEXT` line's `CTextEvent`.
@@ -632,27 +724,10 @@ struct Renderer::Impl {
     /// `CModalMenu::CModalMenu`; no callbacks here.
     LayoutScreen modal_screen;
 
-    /// Which quest the open window is offering, and who is offering it.
-    const tl::core::QuestDefinition* offered_quest = nullptr;
-    std::string offered_by;
-    /// The speaker's node, and whether the offered line is
-    /// `MAKE_PET_ON_ACCEPT` (see accept_offered_quest()).
-    int64_t offered_by_node = 0;
-    bool offered_makes_pet = false;
-    /// The line the window shows (`CQuestDialogMenu +0x120`'s), for
-    /// `hand_dialog_items` when it closes.
-    const tl::core::DialogLine* offered_line = nullptr;
     /// `CQuestDialog::giveOrRemoveItems`: `[TAKEITEM]`s,
     /// then `[GIVEITEM]`s; false when already handed over (`+0x77`).
     bool hand_dialog_items(const tl::core::QuestDefinition& quest,
-                           const tl::core::DialogLine& line);
-    /// The offered line's section (`CQuestDialog +0x70`): `OK` on a
-    /// `[COMPLETE]` line is what completes its quest.
-    tl::core::QuestSection offered_section = tl::core::QuestSection::Intro;
-    /// The menu's unit (`CQuestDialogMenu +0xc0`) for a line the player's own
-    /// talk opened: the machine that runs it and its node.
-    int talk_menu_machine = kNoMachine;
-    int64_t talk_menu_node = 0;
+                           const tl::core::DialogLine& line) override;
     /// A floaty line the player's talk showed: `CQuestDialogMenu::update`
     /// calls `onClick(10)` on its next pass
     /// (`fresh` until then).
@@ -665,17 +740,6 @@ struct Renderer::Impl {
         std::string quest;
     };
     TalkFloatyClose talk_floaty_close;
-    /// `onClick` on the menu's unit for the
-    /// player's talk: its flag back and the broadcasts on it; `OK` on a
-    /// `[COMPLETE]` line completes the quest between them.
-    void talk_menu_closed(int machine, int64_t node, int32_t menu_event, bool complete_line,
-                          const std::string& quest);
-    /// The player's talk window closing with `menu_event` (2 `OK`, 3 `Accept`, 4 `Decline`):
-    /// put away, `onClick`'s broadcasts, and `OK` on `[COMPLETE]` completes the quest.
-    void finish_talk_window(int32_t menu_event);
-    /// The player's forward, gait and whether they are going anywhere, for a
-    /// machine whose characters include the player's pets.
-    void tell_player_motion(tl::core::LevelScript& machine);
     /// The placed or spawned unit called `unit` nearest the player, or 0.
     int64_t nearest_unit_node(const std::string& unit) const;
 
@@ -686,222 +750,34 @@ struct Renderer::Impl {
     /// `CGameUI::updateIngameUI` opens for it.
     void interact_with(const std::string& unit);
     void open_vendor_screen(const std::string& unit, VendorScreen screen);
-    void close_quest_offer();
+    void close_quest_offer() override;
     bool open_script_dialog(const tl::core::ScriptEvent& event, const std::string& text);
-    /// False when the log is full and the quest was not taken.
-    bool accept_offered_quest(const tl::core::QuestDefinition& quest);
     /// The quest window is showing a line a `Quest Controller` opened, and
     /// answering it answers the script.
     bool script_dialog_window = false;
 
-    /// Finish a quest the player is carrying and pay what it owes.
-    bool complete_quest(const std::string& name);
-    /// `completeQuest` as the dialogue's `OK` on a `[COMPLETE]` line runs it:
-    /// once more on a quest already complete (`QuestLog::complete_by_dialog`).
-    bool complete_quest_by_dialog(const std::string& name);
-    /// What follows any completion here: the payout, the gates, the icons.
-    void quest_completed(const std::string& name);
-
-    /// Carry out every queued `CQuestManager::completeQuest`:
-    /// journal, `[REWARD]` (`rewardPlayer`), "Quest Complete", take-backs.
-    void pay_quest_completions();
-    /// `QuestLog::take_notices` handed to every machine of the level
-    /// (`LevelScript::quest_notice`), their events applied.
-    void deliver_quest_notices();
     /// `CQuestDialog::cleanUp` for a completed quest's
     /// lines: the pets they made leave the player.
-    void release_quest_pets(const tl::core::QuestCompletion& done);
+    void release_quest_pets(const tl::core::QuestCompletion& done) override;
 
     /// `CQuestRewards::rewardPlayer` for one completion.
-    void reward_player(const tl::core::QuestCompletion& done);
+    void reward_player(const tl::core::QuestCompletion& done) override;
 
-    /// A quest's reward in `calculateRewards`' order:
-    /// `[UNITREWARD]` units, then `TREASURECLASS` (`tl::core::quest_treasure_roll`).
-    std::vector<std::string> quest_reward_items(const tl::core::QuestDefinition& quest, int level,
-                                                int32_t seed);
-
-    /// Raise the two-line banner and play the narrator, on accept or on completion.
-    void announce_quest(const tl::core::QuestDefinition& quest, bool complete);
-
-    /// The first item `quest_reward_items` hands over (what the windows draw); empty: none.
-    std::string quest_reward_item(const tl::core::QuestDefinition& quest, int level, int32_t seed);
-
-    /// A quest's seed from an NPC (`CQuest +0x1c`, drawn by `initializeQuestWithNPC`
-    /// on the volatile stream, `QuestLog::offered`).
-    /// INVENTED: a quest no NPC initialised gets a seed from its GUID.
-    int32_t offer_seed(const tl::core::QuestDefinition& quest) const {
-        const tl::core::QuestLog::Offered* rolled = quest_log.offered(quest);
-        if (rolled != nullptr && rolled->seed != -1) return rolled->seed;
-        return static_cast<int32_t>(static_cast<uint32_t>(quest.guid) ^ 0x9e3779b9u);
-    }
-    /// The level a quest's rewards are worked at (`CQuest +0x1ec`, `QuestLog::offer_level`),
-    /// else `quest_level_for_offer`.
-    int quest_level_of(const tl::core::QuestDefinition& quest) const {
-        return quest_log.offer_level(quest, quest_level_for_offer);
-    }
-    /// The quest given to the player unless its log is full for it.
-    bool take_quest(const tl::core::QuestDefinition& quest, int level, uint32_t seed) {
-        return !quest_log.log_full_for(quest) && quest_log.accept(quest, level, seed, stat_graphs);
-    }
-    /// What `reinitializeQuest`'s floor roll reads.
-    tl::core::QuestDungeonSource quest_dungeon_source();
-    tl::core::QuestPlayerSource quest_player_source();
-    /// What `CQuestRewards::calculateRewards` makes reward units with.
-    tl::core::QuestRewardWorld quest_reward_world();
-
-    /// Fill an accepted quest's `reward_item` / `reward_icon`.
-    void resolve_reward_item(tl::core::QuestEntry& entry);
-
-    /// Say so when a quest that a *gate in this level* was waiting on changes.
-    void report_gates_waiting_on(const std::string& quest);
-    std::set<std::string> reported_gates;
-
-    /// The `PORTRAIT` a unit authors (a name in `media/UI/itemicons/`); empty for none.
-    std::string portrait_of(const std::string& unit);
-    tl::core::LevelScript script;
-
-    /// Where a character can walk in this level and how to get anywhere (core/navigation.h).
-    tl::core::NavGrid nav;
-
-    /// Every scene node a layout node produced, by its 64-bit id: what `Hide` and
-    /// timelines act on.
-    using NodeMap = std::multimap<int64_t, Ogre::SceneNode*>;
-    NodeMap scripted_nodes;
-
-    /// One machine per placed nested layout with a script of its own (a wire never crosses
-    /// a file); each has its own node map, as copies share their layout's node ids.
-    struct NestedScript {
-        std::string reference;
-        int64_t owner = 0;  ///< the `Layout Link` node in the parent
-        std::string owner_name;
-        /// The node map of the file holding that link (`Play` on the link is
-        /// `CLayout::start` on its layout).
-        const NodeMap* owner_nodes = nullptr;
-        /// In the level's coordinates (`LevelScript::set_frame` before it is built); its
-        /// characters join the level's list (`set_level_machines`).
-        tl::core::LevelScript script;
-        NodeMap nodes;
-
-        bool running = false;
-
-        /// Where its nodes sit as `CLogicNodeState` records them: the room layout's index in
-        /// `CLevel+0x10` (+0x30) and the parent hierarchy hash (+0x40) (`placing_scene`).
-        uint32_t scene = 0;
-        int64_t hierarchy = 0;
-
-        /// Whether its first action has been logged (once, not every frame).
-        bool reported = false;
-    };
-    /// A deque: `node_sink` points into one while its layout is placed, and a push_back
-    /// part-way must not move it.
-    std::deque<NestedScript> nested_scripts;
-
-    /// The level's list of characters (`CLevel +0x98`) as their machines: the level's own,
-    /// then each room's in placing order (`LevelScript::set_level_machines`).
-    std::vector<tl::core::LevelScript*> level_machines{&script};
-
-    /// The level template's `ACTIVERANGEMOD` and unit active range, which every
-    /// machine's characters use (see apply_environment()).
-    float level_active_range_mod = 0.0f;
-    float level_unit_active_range = 16.0f;
-    /// `GLOBALS.DAT` `UNIT_NEAR_RANGE` (`CGameGlobals +0xac`, 24 by default).
-    float level_unit_near_range = 24.0f;
-    /// `GLOBALS.DAT` `UNIT_SHADOW_RANGE` (`CGameGlobals +0xa8`, 10 by default).
-    float level_unit_shadow_range = 10.0f;
-    /// What an item's range is chosen from (`CItem::calculateActiveRange`):
-    /// `UNIT_LIGHT_FADE`, the active ranges, `TRIGGER_NEAR_RANGE` (40).
-    bool level_light_fade = true;
     /// The template's UNIT_FADE_DISTANCE and UNIT_FADE_START: where a unit's
     /// light falls to 0 and where it starts to (update_unit_lights()).
     float level_unit_fade_distance = 14.5f;
     float level_unit_fade_start = 7.0f;
-    float level_indoor_range = 16.0f;
-    float level_outdoor_range = 24.0f;
-    float level_trigger_near_range = 40.0f;
     /// `KSETTINGS_F_AVERAGE_FPS`, kept as `CGame::update`
     /// keeps it.
     tl::core::AverageFps average_fps;
     /// The camera test `CCharacter::update` makes on the
     /// culling bounds (`culling_box`); no bounds counts as in view.
-    bool unit_in_view(const tl::core::LevelScript& machine, int64_t node);
+    bool unit_in_view(const tl::core::LevelScript& machine, int64_t node) override;
     /// A unit's culling bounds in the world (`CBaseUnit +0x1c0`, a
     /// `CCullingBounds`), sized from its model or the constructor's default.
     Ogre::AxisAlignedBox culling_box(Ogre::SceneNode* node, bool from_model) const;
-    /// What every machine of the level is told about its characters' ranges
-    /// and the camera (`set_unit_*_range`, `set_view_test`).
-    void configure_unit_ranges(tl::core::LevelScript& machine);
-
-    /// Where place_mesh() registers what it places while a scripted nested layout is
-    /// placed; null: the level's own map.
-    NodeMap* node_sink = nullptr;
-
-    /// The `Layout Link` node whose file is currently being placed, and its
-    /// name. Saved and restored around the recursive call, like `particle_owner`.
-    int64_t nested_link = 0;
-    std::string nested_link_name;
-
-    /// While a generated floor's room pieces are placed, their machines wait unactivated:
-    /// `CLevel::populate` activates each room scene
-    /// (`CEditorScene::setActivated`, vtable +0x218) only after population and
-    /// `CQuestManager::populate`.
-    bool defer_room_activation = false;
-    std::vector<std::pair<size_t, std::string>> deferred_room_machines;
-    /// `level_activated` on a placed room's machine, and its events applied.
-    void activate_room_machine(size_t index, const std::string& path);
-
-    /// The loaded level as `CLevel` keys it: `+0x280` (upper-cased dungeon `NAME`), `+0x1a4`
-    /// (depth), `IS_TOWN` (+0x86), `DONTSTORE` (+0x5a). Empty for a plain layout.
-    std::string level_dungeon;
-    int32_t level_depth = 0;
-    /// `CLevel +0x1a8`, the floor's monster level (`place_dungeon_floor`).
-    /// INVENTED: 1 for a level no floor roll set.
-    int32_t level_monster_level = 1;
-    /// The level of the player a warp brings in, 0 for none: `CGameClient::loadLevel`
-    /// reads `CPlayer +0x100`, but the sheet arrives later here.
-    int32_t arriving_player_level = 0;
-    bool level_is_town = false;
-    bool level_dont_store = false;
-    /// The template's `ALLOW_PORTALS` (+0x84); false for a plain layout.
-    bool level_allows_portals = false;
-    /// The template's `ALLOW_PET_RETURN` (+0x85); false for a plain layout.
-    bool level_allows_pet_return = false;
 
     // The town portal (`core/town_portal.h`, renderer_portal.cpp).
-    /// `CLevel +0x14c` and `+0x158`: the last `Property Node` typed `Town
-    /// Portal` (7) and `Waypoint Start` (15) the layout walk met.
-    Ogre::Vector3 town_portal_spot = Ogre::Vector3::ZERO;
-    bool has_town_portal_spot = false;
-    Ogre::Vector3 waypoint_spot{-1.0f, -1.0f, -1.0f};
-    /// Entry type 6's start (`loadRoomLayout`, cases 14 and 15):
-    /// the last `Waypoint` (14) or `Waypoint Start` (15) `Property Node`.
-    Ogre::Vector3 waypoint_entry_spot = Ogre::Vector3::ZERO;
-    bool has_waypoint_entry_spot = false;
-    /// The portal props `CPlayer::createPortals` added to the level - the items
-    /// `CLevel::deleteOpenPortals` takes away (ISA `TOWNPORTAL` or `WAYPOINTNODE`).
-    struct OpenPortal {
-        std::string unit;          ///< the `PROPS` unit's `NAME`
-        std::string display_name;  ///< its floor label
-        std::string unittype;
-        Ogre::Vector3 at = Ogre::Vector3::ZERO;
-        /// A `MAP PORTAL`'s `WARP` (0x71) effect: the dungeon it leads to,
-        /// upper-cased (`CPlayer::openMapPortal`). Empty for the others.
-        std::string warp;
-        /// `CSceneNodeObject::setEnabled` (vtable +0x40): `CTriggerUnit::trigger` turns a
-        /// used map portal off; off draws nothing and is not offered to the pad.
-        bool enabled = true;
-        std::vector<Ogre::SceneNode*> holders;  ///< its `LAYOUTFILE`'s particles
-        /// Its layout's `Sound` nodes that start on activation and loop, held
-        /// as voices under `voice` and re-mixed every frame.
-        struct HeldSound {
-            std::string voice;
-            std::string definition;
-            Ogre::Vector3 at = Ogre::Vector3::ZERO;
-            float volume = 1.0f;
-            float radius = 0.0f;
-        };
-        std::vector<HeldSound> sounds;
-    };
-    std::vector<OpenPortal> open_portals;
     /// `CSoundObjectDescriptor::descriptorSceneActivated`
     /// for a portal's layout: `START ON ACTIVATE` sounds play.
     void start_portal_sounds(OpenPortal& portal);
@@ -914,17 +790,12 @@ struct Renderer::Impl {
     int portal_targeted = -1;
     /// `warpLevels("Town", -99)` from a portal used (`CTriggerUnit::trigger`).
     bool portal_warp_pending = false;
-    tl::core::PortalLevel portal_level() const;
-    /// The level a warp leaves (`core/warp.h`): its dungeon, that dungeon's
-    /// `PARENT_DUNGEON` and the depth.
-    tl::core::WarpOrigin warp_origin() const;
-    void delete_open_portals();
-    void create_portals();
-    /// `CCharacter::applyInstantEffect`'s `OPEN TOWN PORTAL` on the player.
-    void open_town_portal();
+    tl::core::PortalLevel portal_level() const override;
+    void delete_open_portals() override;
+    void create_portals() override;
     /// `CCharacter::applyInstantEffect`'s `OPEN PORTAL` on the player:
     /// `CPlayer::openMapPortal`.
-    void open_map_portal(const std::string& dungeon);
+    void open_map_portal(const std::string& dungeon) override;
     /// `CResourceManager::createUnit(L"PROPS", L"MAP PORTAL")`, `CLevel::addItem` and its
     /// `WARP` effect: from `openMapPortal` and from a stored level state.
     bool add_map_portal(const Ogre::Vector3& at, const std::string& warp, bool enabled);
@@ -938,35 +809,21 @@ struct Renderer::Impl {
     ///
     void use_targeted_portal();
 
-    // Waypoints (`core/waypoints.h`, renderer_portal.cpp).
-    /// `CWaypointActivator::activate`: this
-    /// level's depth a waypoint, and "Waypoint Activated" when it is new.
-    void activate_waypoint();
     /// The Xbox `waypointmenu_xenon.layout`, and what `CWaypointMenu::setOpen`
     /// put in it.
     LayoutScreen waypoint_screen;
-    /// Empty until `setOpen`: `CWaypointMenu::CWaypointMenu`
-    /// clears its flags (X360 `+0x108`, `+0x109`) and row lists (`+0x29c`, `+0x2ac`).
-    std::vector<tl::core::WaypointRow> waypoint_rows;
-    int waypoint_selected = 0;
-    bool waypoint_stick_held = false;
     /// `CGameUI::toggleWaypointMenu` ->
     /// `CWaypointMenu::setOpen`.
     void toggle_waypoint_menu();
     void open_waypoint_menu();
-    void close_waypoint_menu();
-    void refresh_waypoint_menu();
-    /// The pad on the open menu: the stick moves the highlight, A is
-    /// `onClick` on the row, B closes it.
-    void drive_waypoint_menu(const tl::core::InputState& in, bool confirm_edge, bool skip_edge);
+    void close_waypoint_menu() override;
+    void refresh_waypoint_menu() override;
     // The Pause Menu and Options (`core/settings_menu.h`, renderer_options.cpp).
     /// `COptionsMenu` on the Xbox `options_Xenon.layout`: Start in the game.
     LayoutScreen pause_screen;
-    tl::core::OptionsMenu pause_menu;
     bool pause_stick_held = false;
     /// `CSettingsMenuXenon` on `settingsmenu_xenon.layout`.
     LayoutScreen settings_screen;
-    tl::core::SettingsMenu settings_menu;
     bool settings_stick_held = false;
     bool settings_dpad_held = false;
     bool settings_y_held = false;
@@ -975,15 +832,10 @@ struct Renderer::Impl {
     /// Help, `CHowToMenu` (`CGameUI +0x18b8`) on the Xbox `howto_xenon.layout`
     /// (`core/howto_menu.h`).
     LayoutScreen howto_screen;
-    tl::core::HowToMenu howto_menu;
-    bool howto_stick_held = false;
-    /// The settings when the caller keeps none (`RendererConfig::settings`).
-    tl::core::GameSettings own_settings;
-    tl::core::GameSettings& game_settings();
     void create_options_screens();
     /// `CGameUI::toggleOptions`, opening.
     void open_pause_menu();
-    void close_pause_menu();
+    void close_pause_menu() override;
     void refresh_pause_menu();
     /// The pad on the Pause Menu: the tab list, A is `onClick` on the row,
     /// Start (and B) close it.
@@ -995,39 +847,21 @@ struct Renderer::Impl {
     /// `CSettingsMenuXenon::vfunc_3` once a frame: carries a close out, writes
     /// the file after Done and brings the Pause Menu back.
     void step_settings_menu();
-    /// `CGameUI`'s Help toggle.
-    void toggle_help();
     /// `CHowToMenu::setOpen`, and what its close leads to.
-    void set_help_open(bool open);
-    /// The pad on Help and its `vfunc_9`.
-    void drive_howto_menu(const tl::core::InputState& in, float dt, bool start_edge,
-                          bool back_edge);
-    /// Any of the screens Start leads to is up - the Pause Menu, Options or the
-    /// debug menu - and the level stands still under it.
-    bool start_menu_up() const {
-        return debug_menu_open || pause_menu.open || settings_menu.open || !settings_menu.finished;
-    }
+    void set_help_open(bool open) override;
 
     // Context tips (`core/context_tips.h`, renderer_tips.cpp).
     /// `CTipMenu` (`CGameUI +0x550`) on the Xbox `tipmenu_xenon.layout`.
     LayoutScreen tip_screen;
     /// `CGameUI +0x1960`.
     tl::core::TipQueue tip_queue;
-    /// `CGameGlobals +0xf0`: `[CONTEXTTIPS]`, the console's wording when its
-    /// data is mounted.
-    tl::core::ContextTipTexts tip_texts;
-    bool tip_texts_loaded = false;
     /// `CTipMenu +0x30`; `CTipMenu::CTipMenu`.
     bool tip_open = false;
-    /// `CGameClient::getIsPaused` on the console: a full-screen menu
-    /// covers a side (`rightCovered`, `leftCovered`) or a modal menu
-    /// is up. The PC's needs both sides covered.
-    bool game_paused() const { return full_screen_menu_up() || modal_dialog_open(); }
     /// `CGameUI +0x1798`, the seven left-side menus `CGameUI::create` lists:
     /// `CInventoryMenuXenon`, `CSkillMenuXenon`, `CQuestMenuXenon`,
     /// `CMerchantMenuXenon`, `CEnchantMenuXenon`, `CStashMenuXenon`, `CStatsMenuXenon`; the
     /// port's master menu is all of them.
-    bool full_screen_menu_up() const { return inventory_menu.visible(); }
+    bool full_screen_menu_up() const override { return inventory_menu.visible(); }
     /// Which of them, for the log.
     const char* modal_dialog_name() const;
     bool level_was_paused = false;
@@ -1051,9 +885,8 @@ struct Renderer::Impl {
     /// `updateIngame`'s paused branch: the speaker's and the player's poses.
     void step_conversation_poses(float delta, float player_rate);
     void create_tip_screen();
-    void load_context_tips();
     /// `CGameUI::queueTip`.
-    void queue_tip(tl::core::ContextTip tip);
+    void queue_tip(tl::core::ContextTip tip) override;
     /// The queue's turn in `CGameUI::updateIngameUI`, once a frame.
     void step_tips();
     /// A button on the open tip, one of the `kMenuPad*`
@@ -1063,120 +896,11 @@ struct Renderer::Impl {
     /// modal list (`CGameUI +0x1948`) is open. On the console also `CGameUI::modalDialogOpen`:
     /// no console window is ever still closing.
     ///
-    bool modal_dialog_open() const;
-    /// `CPlayer::update`'s three tips, once a frame.
-    void queue_player_update_tips();
+    bool modal_dialog_open() const override;
     /// The console screens' tips: the bag, the merchant and the stash as they
     /// open, the stats and skills tabs while points are unspent.
     void queue_menu_tips();
     bool tip_bag_was_open = false;
-    /// `CCharacter::equipmentPickedUp` for the pet: the
-    /// tip when its bag is full.
-    void queue_pet_bag_tip();
-    uint32_t tip_pet_pickups = 0;
-
-    /// A row's caption: the depth's template's `LEVELNAME`, with ` - Floor N`
-    /// when it shows floor numbers (`setOpen`).
-    std::string waypoint_label(const tl::core::WaypointRow& row,
-                               const tl::core::DungeonFiles& files);
-    /// `warpLevels(dungeon, 0, depth, true, L"", false)`.
-    void warp_to_waypoint(const tl::core::WaypointRow& row);
-
-    /// `CLevel+600` (a remembered state exists while the level is built) and
-    /// `+0x1a1` (the level was put back from it).
-    bool level_has_saved_state = false;
-    bool level_restored = false;
-
-    /// The level template's `CINEMATIC` (`CLevelTemplateData +0x698`), the
-    /// stratum's laid over it; empty for a level loaded as a plain layout.
-    std::string level_cinematic;
-    /// `CCinematics` (`media/cinematics/*.dat`), read on first use.
-    tl::core::Cinematics cinematics;
-    bool cinematics_loaded = false;
-    void load_cinematics();
-    /// `CCinematicMenu +0x30`: the cinematic screen is up.
-    bool cinematic_open = false;
-    /// `CCinematicMenu +0xf8`: the music's share, a quarter under a cinematic; 1 from
-    /// `CCinematicMenu::CCinematicMenu`.
-    float cinematic_music = 1.0f;
-    /// `CCinematicMenu::update`, the music
-    /// half, every frame.
-    void step_cinematic_music(float delta);
-
-    /// The room layout being placed: its index (`CLevel+0x10`) and the hash of the
-    /// `Layout Link` chain above. INVENTED, the hash:
-    /// `CEditorBaseObject::calculateParentHierarchyHashCode`
-    /// ORs only links with +0x30 set; +0x30 is unread, so all are ORed.
-    uint32_t placing_scene = 0;
-    int64_t placing_hierarchy = 0;
-
-    /// A unit's themes (`CBaseUnit +0x108..+0x150`) and the particles they hang on it
-    /// (`CCharacter +0x738`), with what this engine drew for each trigger's particle.
-    struct UnitThemeState {
-        bool initialised = false;
-        tl::core::UnitThemeSet themes;
-        tl::core::ThemeParticleTriggers triggers;
-        struct Drawn {
-            std::vector<Ogre::SceneNode*> holders;
-            /// `CParticleAnimationTrigger +0x38`: the node under the unit's for a particle
-            /// attached on a bone, or the world node of one that does not attach.
-            Ogre::SceneNode* tag = nullptr;
-            bool configured = false;
-        };
-        std::vector<Drawn> drawn;
-        /// `CCharacter::die` has stopped its particles.
-        bool stopped_by_death = false;
-        /// `loadModel`'s triggers (`load_model_triggers`) have been made.
-        bool model_loaded = false;
-        /// `+0x81` as the trigger list last saw it; false from `CSceneNodeObject`'s
-        /// constructor, so the first show starts what the unit wears.
-        bool shown = false;
-        /// Whether `makeChampion`'s theme has been looked at for this unit.
-        bool champion_checked = false;
-    };
-
-    struct SceneUnit {
-        Ogre::Entity* entity = nullptr;
-        std::string mesh;
-        float rate = 1.0f;
-
-        /// The layout node this unit was placed from (a unit name covers several).
-        int64_t node = 0;
-
-        /// What the layout put this unit on, so a reset can put it back.
-        std::string animation;
-        bool loops = true;
-
-        /// What it is playing now (the script's last start, e.g. a swing), and the state:
-        /// the manifest times `HIT` by animation name.
-        std::string playing;
-        Ogre::AnimationState* playing_state = nullptr;
-
-        /// How far into `playing` the last frame left it, to spot the `HIT` frame once.
-        float last_time = 0.0f;
-
-        /// The unit's `ARMED` flag, which picks between two sets of animation files.
-        bool armed = true;
-
-        /// The rolled hands (`sync_unit_equipment`) are on it, or it has none.
-        bool equipment_synced = false;
-
-        /// The sound cursor, apart from `last_time` (which only `step_monster_swings()`
-        /// advances, for hunting units).
-        float last_sound_time = 0.0f;
-        /// The animation `last_sound_time` was read in: a new one starts before
-        /// its first key, not as a wrap of the last one's loop.
-        std::string sound_animation{};
-
-        /// Its themes and their particles; filled on first use.
-        UnitThemeState themes{};
-
-        /// The animation and time the particle keys were last looked at
-        /// (`step_unit_particle_keys`).
-        std::string key_animation{};
-        float key_time = -1.0f;
-    };
-    std::multimap<std::string, SceneUnit> scene_units;
 
     /// One-shot animations a script controller started, so the machine is told when one
     /// ends (`Animation Stopped`): only the renderer knows how long one runs.
@@ -1206,165 +930,24 @@ struct Renderer::Impl {
         std::vector<Ogre::SceneNode*> holders;
     };
     std::map<Ogre::Entity*, TriggerStateLayout> trigger_state_layouts;
-    /// Placed trigger props whose unit authors `LAYOUT_STATE_1`, waiting: a layout cannot
-    /// be placed inside `place_layout`, so the script's step hangs them.
-    std::vector<std::pair<Ogre::Entity*, std::string>> trigger_layout_props;
-    std::vector<std::pair<Ogre::Entity*, std::string>> pending_trigger_layouts;
 
-    /// The state each animation this engine started runs on, by entity and lower-cased
-    /// `.SKELETON` stem, so `Stop` can switch off one animation (a skeleton's internal
-    /// animation name need not match its file).
-    std::map<std::pair<Ogre::Entity*, std::string>, Ogre::AnimationState*> unit_states;
-
-    // PORT: the OGRE animation state a unit's animation was last given, kept.
-    void remember_state(Ogre::Entity* entity, const std::string& animation,
-                        Ogre::AnimationState* state) {
-        if (entity == nullptr || state == nullptr) return;
-        std::string key = animation;
-        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        unit_states[{entity, key}] = state;
-    }
-
-    // PORT: the OGRE animation state a unit's animation was last given.
-    Ogre::AnimationState* remembered_state(Ogre::Entity* entity,
-                                           const std::string& animation) const {
-        std::string key = animation;
-        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        const auto it = unit_states.find({entity, key});
-        return it == unit_states.end() ? nullptr : it->second;
-    }
-
-    /// What every quest has its characters say, and how long for (core/dialog.h): filled
-    /// by load_quest_book(), handed to every machine by wire_script().
-    tl::core::DialogBook dialog_book;
-
-    /// The units this level places, with what their own `.DAT` authors (core/units.h).
-    tl::core::UnitBook unit_book;
-
-    /// What each `Unit Spawner` has released and not taken back, by the spawner's node id
-    /// (`Destroy Spawned Units` and `MAX ALLOWED` are per spawner).
-    struct SpawnedUnit {
-        Ogre::SceneNode* node = nullptr;
-        Ogre::Entity* entity = nullptr;
-        std::string unit;
-
-        /// The unit's own id, from a range no layout uses (kSpawnedNodeBase).
-        int64_t id = 0;
-    };
-    std::map<int64_t, std::vector<SpawnedUnit>> spawned;
-    unsigned spawn_serial = 0;
-
-    /// Skill `NAME`, lower-cased, to what it plays and how far it reaches, from every
-    /// `.DAT.adm` under `media/skills/` (files are not named after their skills).
-    std::map<std::string, tl::core::AttackSkill> skills;
-    bool skill_files_loaded = false;
-    void ensure_skill_index();
-
-    /// The player's skills: every skill file by upper-cased `NAME` (a `SkillDef` points
-    /// into it) and the screen's book. The Xbox copies under `xbox/media/skills/` win.
-    struct PlayerSkillFile {
-        tl::formats::AdmFile file;
-        tl::core::SkillDef def;
-    };
-    std::map<std::string, std::unique_ptr<PlayerSkillFile>> player_skill_files;
-    bool player_skill_files_loaded = false;
-    void ensure_player_skill_files();
-    tl::core::SkillBook player_skills;
-    /// Where the class's `[SKILL]` blocks were read from, for the log.
-    std::string player_skills_source;
-
-    /// `media/EffectsList.dat` and every affix file (core/affix_book.h); console copies
-    /// under `xbox/media/affixes/` win.
-    tl::core::EffectTypeTable effect_types;
-    tl::core::AffixBook affixes;
-    /// `CSets` (`media/sets/`), loaded with the affixes it names.
-    tl::core::ItemSetBook item_sets;
-    /// `CUnitThemes` (`media/unitthemes/`), read by `load_unit_themes()`.
-    tl::core::UnitThemeBook unit_themes;
-    bool unit_themes_loaded = false;
-    /// The player's themes and their particles.
-    UnitThemeState player_themes;
     /// The cinematic state `update_npc_icons` last saw (`gCinematicActive`).
     bool npc_icons_cinematic = false;
-    /// `CLevel::updateNPCIcons` is owed once the player is in control.
-    bool npc_icons_dirty = true;
-    bool effect_data_loaded = false;
-    void ensure_effect_data();
-    /// `GLOBALS.DAT`'s item-roll figures (`CGameGlobals`, `item_roll_context()`).
-    tl::core::ItemRollGlobals item_roll_globals;
-    bool item_roll_globals_loaded = false;
-    /// What `CEquipment::unitInit`'s rolls read (`core/item_roll.h`).
-    tl::core::ItemRollContext item_roll_context();
-    /// What an item's own effect manager is built with: the effect and graph
-    /// tables and no owner (an item is not a character).
-    const tl::core::EffectManager::Context& item_effect_context();
-    tl::core::EffectManager::Context item_effect_context_;
-    /// `CResourceManager::createItem`:
-    /// a copy through `unitInit`'s rolls (`init_item_copy`). `from_save`
-    /// rolls combat stats and requirements but does not enchant.
-    tl::core::ItemStats create_item(const tl::core::ItemStats& data, bool from_save,
-                                    bool random_enchant_allowed, bool force_enchant = false);
-    /// Hands the player's inventory (and the pet's bag) the tables its effect
-    /// half reads, and recalculates (`Inventory::set_effect_context`).
-    void refresh_inventory_effects();
-    /// `CCharacter::getEffectValue`'s two halves for the player: its own
-    /// manager and its inventory's totals (`core/character_effects.h`).
-    tl::core::CharacterEffects player_total() const {
-        return tl::core::CharacterEffects(&player_effects, &player_inventory);
-    }
-    /// Rebuilt whenever the player's stats change: what `skill_stats_text` and
-    /// `skill_stat_bonuses` read. Holds `std::function`s that capture `this`.
-    tl::core::EffectDisplayContext skill_effects;
-    void refresh_skill_effects();
-    /// The player's own `CEffectManager` (`CCharacter +0x1b8`), kept in step by
-    /// `refresh_skill_effects`, ticked by `update_player_effects` (core/effect_manager.h).
-    tl::core::EffectManager player_effects;
-    /// `GLOBALS.DAT`'s regeneration rates; see load_recharge_rates().
-    tl::core::RechargeRates recharge_rates;
-    bool recharge_rates_loaded = false;
-    void load_recharge_rates();
-    /// `CCharacter::updateHP` and
-    /// `updateMana` for the player.
-    void update_player_meters(float dt);
-    /// `CCharacter::modifyMana` on the player: god mode
-    /// sets `maxMana()`; else added, capped at `maxMana()`, floored at 0.
-    void modify_player_mana(float delta);
-    /// `player_health.max` and the sheet's mana maximum from `maxHP()` and
-    /// `maxMana()` (`CharacterProgression::max_hp_of`/`max_mp_of`).
-    void refresh_player_maxima();
-    /// An item's `RESPEC`: `CPlayer::resetSkills`.
-    ///
-    void respec_player();
-    /// The player as the item use path reads it.
-    tl::core::ItemUseTarget player_use_target();
+    void view_skill_effects_changed() override;
     /// `CGameUI::useItem` on the player's bag slot;
     /// `from_tray` speaks a `Town Portal Scroll` refusal.
-    bool use_player_item(size_t slot, bool from_tray = false);
-    /// A on the bag's own tray (past the vendor pages): gem, fish, useable
-    /// item, else `wear_player_item`.
-    void bag_default_action(int slot);
+    bool use_player_item(size_t slot, bool from_tray = false) override;
     /// The console's default A on any other bag row: identify, take off,
     /// or put on in place of what is in the way. True when anything changed.
-    bool wear_player_item(size_t slot);
-    /// the first Identify Scroll of the player's
-    /// bag, then of a pet's that is not in town, used on the item at `slot`.
-    bool identify_player_item(size_t slot);
+    bool wear_player_item(size_t slot) override;
     /// The same on the copy at `slot` of `bag` (the pet's, on its tray).
-    bool identify_item_in(tl::core::Inventory& bag, size_t slot);
+    bool identify_item_in(tl::core::Inventory& bag, size_t slot) override;
 
     // ------------------------------------------- the pet's items and spells --
     // renderer_pet_items.cpp: A on the pet's tray, the learn and its
     // replace dialog (`CMessageSpellRemoveXenon`), the pet's effects and
     // regeneration (`CCharacter::updateEffects`, `updateHP`).
 
-    /// `CCharacter::getEffectValue`'s two halves for the pet.
-    tl::core::CharacterEffects pet_total() const {
-        return tl::core::CharacterEffects(&pet.effects(), &pet.bag());
-    }
-    /// The pet's manager's tables, and its spell book's effect totals.
-    void refresh_pet_effects();
-    /// The pet as the item use path reads it.
-    tl::core::ItemUseTarget pet_use_target();
     /// What asks of a tray's owner about `item`.
     /// `CGameUI +0x14c4`: item compare, toggled by the D-pad's left and right.
     /// Off, details come 0.65 s after the selection settles
@@ -1379,99 +962,40 @@ struct Renderer::Impl {
     void toggle_item_compare();
     void step_item_tooltips(float dt);
     void show_item_tooltips();
-    /// What every tray's row fill asks of the player.
-    tl::core::TrayRowContext tray_row_context();
     tl::core::TrayCaptionContext tray_caption_context(const tl::core::ItemStats& item,
                                                       bool pet_tray);
     /// A on the pet's tray: with the pet as the owner.
     void pet_tray_press();
-    /// `canUse` and `useOnTarget` of the pet's copy at `slot`
-    /// on the pet, then (the copy away when spent).
-    bool use_pet_item(size_t slot);
     /// `canUse(item, user, pet)` and `useOnTarget(item, user, pet)`
     /// (Linux `CEquipment::canUseOnTarget`, `useOnTarget`) on
     /// the first pet: a spell learned, an instant `TRANSFORM` (`LevelScript::transform_unit`).
     /// False when `canUse` refuses; `used` is the caller's to spend by.
     bool use_item_on_pet(const tl::core::ItemStats& item, int stack, bool by_player,
-                         tl::core::ItemUseResult& used);
-    /// the function's ISA 0x7c branch for the fish at `slot` of `holder`: with a pet
-    /// (`+0x5ac`), used on it, then.
-    bool feed_pet_from(tl::core::Inventory& holder, size_t slot);
+                         tl::core::ItemUseResult& used) override;
     /// The pet's half of a `Transform` event: `convertCharacter`
     /// re-made it as `unit`.
     void pet_converted(const std::string& unit);
     /// the function's equipment branch on the pet's tray.
     bool wear_pet_item(size_t slot);
-    /// for the spell scroll at `slot`: the learn, or with the slots full
-    /// (two for a pet, four else) the replace dialog.
-    void learn_spell_from_tray(bool pet_owner, size_t slot);
     /// The replace dialog's state (`CMessageSpellRemoveXenon`): whose book, the
     /// scroll's slot in that owner's bag, the choice (`+0x38`).
     bool spell_remove_pet = false;
     size_t spell_remove_slot = 0;
     int spell_remove_choice = 0;
     bool spell_remove_stick_x_held = false;
-    bool open_spell_remove(bool pet_owner, size_t slot);
+    bool open_spell_remove(bool pet_owner, size_t slot) override;
     /// `vfunc_5` for the owner as it is now.
     void refresh_spell_remove();
     /// `vfunc_2` on the pad, and the tray's poll once it is down:
     /// the chosen slot unlearned and the scroll tried again.
     void handle_spell_remove(const tl::core::InputState& in, bool x_edge, bool y_edge,
                              bool start_edge, bool back_edge, bool other_edge);
-    /// The pet's spells relearned into an emptied book (`learnSpell`,
-    /// as `applySaveState` does).
-    void relearn_pet_spells(const std::array<std::string, 4>& names,
-                            const std::array<int32_t, 4>& levels);
 
     /// `CGameUI::activateItemSlot` and the use it leads to.
-    void activate_item_slot(int index);
+    void activate_item_slot(int index) override;
     /// `CCharacter::castSkill` for the player (`--cast` and
     /// the hotbar). `report` logs a refusal; a held button does not.
-    bool cast_player_skill(const tl::core::KnownSkill& skill, bool report);
-    /// The Xbox in-game dispatch's slot loop over the six hotbar
-    /// buttons, each given as pressed this frame and held since the last.
-    void step_hotbar(const std::array<bool, 7>& pressed, const std::array<bool, 7>& held,
-                     float stick_x = 0.0f, float stick_y = 0.0f);
-    /// The dispatch's release test: with no face button pressed and a skill performed, it
-    /// is let go when its button is up (`core::hotbar_lets_go`).
-    void release_held_skill(const std::array<bool, 7>& pressed, const std::array<bool, 7>& held,
-                            bool face_pressed);
-    /// `CPlayer::attemptToStopPlayerSkill(bool)`.
-    void attempt_to_stop_player_skill(bool stop_path);
-    /// `CCharacter::performingSkill` for the player.
-    bool player_performing_skill();
-    /// where the pad aims a skill (stick direction or
-    /// facing; distance by `RANGEMIN`..`RANGE`, or a trigger's pull).
-    tl::core::Vec3 pad_skill_point(const tl::core::KnownSkill& skill, float stick_x, float stick_y,
-                                   float left_trigger, float right_trigger) const;
-    /// The point stores before it casts (X360 `CCharacter +0x1c0`,
-    /// Linux `+0x228`); unset, `--cast` aims as the pad at rest.
-    std::optional<tl::core::Vec3> pad_skill_target;
-    /// The player's `+0x228` (X360 `+0x1c0`): the last aimed-at point, from
-    /// `setTargetDirection`, `castSkill` and `turnTowardPosition`;
-    /// read by `step_player_skill_turn`.
-    tl::core::Vec3 player_turn_point{};
-    /// The player's `+0x234` (X360 `+0x1cc`): its last aim direction, normalised
-    /// (`setTargetDirection`, `turnToward`).
-    tl::core::Vec3 player_turn_direction{0.0f, 0.0f, 1.0f};
-    /// `CCharacter::setTargetDirection`: the point
-    /// on the ground (height 0) and the level direction to it.
-    void set_player_target_direction(const tl::core::Vec3& point);
-    /// `CCharacter::turnTowardPosition` for the player,
-    /// with `turnToward`.
-    void turn_player_toward(const tl::core::Vec3& at, float dt);
-    /// The console's turn in a skill or holding attack (X360 `CCharacter::update`
-    /// `core::player_skill_turn`), before the motion.
-    void step_player_skill_turn(float dt);
-    /// `CCharacter::castSkill` for a position skill (types 1, 5,
-    /// 6, 11): grounded, target let go, within `RANGE`, walked back for `REQUIRES_PATHABLE`.
-    /// Writes `caster.target_position`.
-    void aim_position_skill(const tl::core::KnownSkill& skill, tl::core::SkillCaster& caster);
-    /// `CPlayer::unitInit`'s default item slots.
-    void bind_default_item_slots();
-    /// `CSkillManager::startPassiveSkills` for the player,
-    /// when the book is built and when a skill's level changes.
-    void start_player_passives();
+    bool cast_player_skill(const tl::core::KnownSkill& skill, bool report) override;
     /// The skills tab's description column as text beside its PNG, for regression checks.
     void write_skill_text_sidecar(const std::string& png_path);
     /// `CCharacter::update`'s effect calls, in order:
@@ -1482,30 +1006,6 @@ struct Renderer::Impl {
     void step_player_camera_opacity(float delta);
     /// The player's `+0x528` (X360 `+0x508`): 1 until the camera comes within 6.
     float player_opacity = 1.0f;
-    tl::core::SkillCastContext player_cast_context();
-    /// The player's running skills and cooldowns (`CSkillManager::update`).
-    ///
-    tl::core::SkillRunner player_skill_runner;
-    /// The worn items' skill managers by equip location (`CItem +0x1c8`, X360 `+0x184`),
-    /// keyed to the item's name and emptied when it changes.
-    std::array<tl::core::SkillRunner, 12> worn_skill_runners;
-    std::array<std::string, 12> worn_skill_runner_items;
-    /// `CCharacter::updateSkill(float)` -> `CInventory::updateSkillManagers`,
-    /// inline in `CCharacter::updateAnimation`:
-    /// each location's item runs `CSkillManager::update`.
-    ///
-    void update_worn_skill_managers(float delta);
-    /// The runner a skill of that name runs on (the player's, else a worn item's), where its
-    /// later events go.
-    tl::core::SkillRunner& skill_runner_running(const std::string& name);
-    /// What the gate asks about the caster: mana off the sheet, the two
-    /// equipped weapons' unit types, and the effects that can silence them.
-    tl::core::SkillCaster player_caster() const;
-    /// Outlives `player_cast_context`, which hands out a pointer to it.
-    tl::core::SkillCaster cast_caster;
-    /// Rebuild `player_skills` for `player_class` at the class's starting
-    /// levels, points and mapping cleared.
-    void build_player_skills();
     /// The buttons the skills tab hears this frame: pressed (`GamepadButtonDown`)
     /// and, for the four a skill goes on, released (`GamepadButtonUp`).
     struct SkillsTabPad {
@@ -1531,11 +1031,6 @@ struct Renderer::Impl {
     /// the next one's open (`InventoryOpen`, 0x16).
     void step_master_menu_tab(int direction);
 
-    /// Unit `NAME`, lower-cased, to its `.DAT.adm` (files are not named after units); built
-    /// once, on the first level that needs it.
-    std::map<std::string, std::string> monster_files;
-    bool monster_files_loaded = false;
-
     /// The letterbox bars and the dialogue box a script shows (render/hud.h).
     Hud hud;
 
@@ -1543,26 +1038,12 @@ struct Renderer::Impl {
     /// `hud_xenon.layout`; `hud` is the script's.
     GameHud game_hud;
 
-    /// What the chosen class authors about itself, read once out of its `.DAT`
-    /// chain by `load_player_stats()` and handed to `player_character`.
-    tl::core::ClassProfile class_profile;
-
-    /// The player character's progression and attributes (stats, level, exp, journal).
-    tl::core::CharacterProgression player_character;
     /// What the last creation screen was left holding (`creation_names()`).
     std::string created_player_name;
     std::string created_pet_name;
 
-    /// The player character's inventory (equipment, potions, scrolls, items).
-    tl::core::Inventory player_inventory;
     /// The console's stash, `CPlayer +0x9f4`.
     tl::core::Inventory player_stash = tl::core::make_player_stash();
-    /// A saved item made again (`createUnit` with `from_save`, then its
-    /// `applySaveState`); nothing for a name the item index does not know.
-    std::optional<tl::core::ItemStats> item_from_save(const tl::formats::ItemSaveState& item);
-    /// One held item's `CItemSaveState` (`CEquipment::fillSaveState`,
-    /// core/item_save.h); `+0x5c`: the slot is an equip location.
-    tl::formats::ItemSaveState item_save_state(const tl::core::InventorySlot& held, int32_t slot);
     /// `CSharedStash::loadSharedStash` / `saveSharedStash`,
     /// the file in `directory`.
     void load_shared_stash(const std::string& directory);
@@ -1590,17 +1071,6 @@ struct Renderer::Impl {
     std::array<bool, 7> hotbar_wait_release{};
     bool hotbar_had_pad = false;
 
-    /// The level's authored `LEVELNAME`, which the HUD prints in the corner.
-    std::string level_display_name;
-
-    /// The level's own `RIMLIGHT`, which every character in it carries
-    /// (`CLevel::addCharacter`).
-    std::string rim_light_texture = kDefaultRimLight;
-
-    /// The layout this level was loaded from, as asked for (which level this is: the
-    /// pet's town trip and the town timer read it).
-    std::string level_reference;
-
     /// Whether the next main menu offers `ContinueLast`.
     bool continue_available = false;
 
@@ -1610,113 +1080,22 @@ struct Renderer::Impl {
     /// The biome the Choose Level list returned `ChooseLevelBiome` for (`run_main_menu()`).
     std::string chosen_biome;
 
-    /// The floor `place_dungeon_floor()` last built and where its exit is, polled by `run()`
-    /// every frame; cleared by `load_layout()` (`Renderer::DungeonTransition`).
-    bool dungeon_active = false;
-    std::string dungeon_active_name;
-    int dungeon_active_floor = 0;
-    int dungeon_active_floors_total = 1;
-    Ogre::Vector3 dungeon_exit_point = Ogre::Vector3::ZERO;
-    float dungeon_exit_radius = 4.0f;
-    /// The floor's `ENTRANCE_NODE`: its `Stairs Up` Unit Trigger activates a
-    /// Warper with `LEVEL DELTA -1` and no dungeon name.
-    Ogre::Vector3 dungeon_entrance_point = Ogre::Vector3::ZERO;
-    /// The `Warper`s of the floor's `ENTRANCE_NODE` and `EXIT_NODE` layouts:
-    /// where each stands and its `getForwardAbsolute()`.
-    Ogre::Vector3 dungeon_entrance_warp_at = Ogre::Vector3::ZERO;
-    Ogre::Vector3 dungeon_entrance_warp_forward = Ogre::Vector3::UNIT_Z;
-    Ogre::Vector3 dungeon_exit_warp_at = Ogre::Vector3::ZERO;
-    Ogre::Vector3 dungeon_exit_warp_forward = Ogre::Vector3::UNIT_Z;
-    float dungeon_entrance_radius = 3.0f;
-    bool dungeon_transition_pending = false;
-
-    /// `Renderer::set_passability_dump()`; empty writes nothing (Renderer::dungeon_transition).
-    std::string passability_dump_path;
-
-    bool warp_pending = false;
-    std::string warp_dungeon;
-    int warp_floor = 1;
-    /// `CGameClient +0x10a0` and `+0x10a4` as `warpLevels` left them: level delta and
-    /// absolute depth, for `performWarp`'s entry type.
-    int32_t warp_level_delta = 0;
-    int32_t warp_level_absolute = 0;
-    /// `ELevelEntryType`, which `CLevel::loadRoomLayout`
-    /// picks the start by: 3 from `setGameState`, else `core::warp_entry_type`.
-    int level_entry_type = 3;
-    /// The warp's `WAYPOINT` (`CGameClient +0x10ba`): a Warper that authors it,
-    /// or a row of the waypoint menu.
-    bool warp_waypoint = false;
-
-    /// A `CFormationNode` waiting for the player: `CFormationNode::setLayoutFile`
-    /// loads its monsters out of the level, `updateLevelObject`
-    /// brings them in within `kFormationWakeDistance`.
-    struct PendingFormation {
-        std::string path;
-        Ogre::Vector3 at;
-        int monster_level = 0;
-        bool woken = false;
-        /// Its layout holds `Unit Spawner`s: they spawn as it wakes.
-        bool spawners = false;
-        /// The formations file's name for the layout (`CFormationNodeSaveAndLoad +0x18`).
-        std::string reference;
-    };
-    /// A `CFormationNode` over `reference` at `at` (`setLayoutFile`);
-    /// false when the layout is not in the archive.
-    bool add_pending_formation(const std::string& reference, const Ogre::Vector3& at,
-                               int monster_level);
-    std::vector<PendingFormation> pending_formations;
-
     /// Spawned units playing their entrance, held out of their AI until it stops
     /// (`LevelScript::set_spawning`).
     std::map<int64_t, Ogre::AnimationState*> spawning_units;
     static constexpr float kFormationWakeDistance = 25.0f;  ///< `distance < 25.0`
     void wake_formations();
 
-    /// The two banners: `CGameUI`'s `setBigText` (`+0x1980`)
-    /// and `setSmallText` (`+0x1990`). Each holds, then
-    /// `CGameUI::updateIngameUI` fades it by 2.0 a second.
-    struct Banner {
-        std::string text;
-        float left = 0.0f;
-        float alpha = 0.0f;
-    };
-    Banner big_banner;
-    Banner small_banner;
     /// The Xbox `+` over the bag and its glow (`core/game_ui.h`).
     tl::core::AvailablePointsIcon available_points;
-    void set_big_text(const std::string& text, float seconds);
-    void set_small_text(const std::string& text, float seconds);
-
-    /// The level's `LEVELNAME` (template `+0x770`) and `SHOWFLOORNUMBER` (`+0x76c`), what
-    /// `CLevel::getName` (`level_display_name`) and the arrival banner are made of.
-    std::string level_name_authored;
-    bool level_shows_floor = true;
-    bool level_has_rules = false;
-    /// `CGameClient::loadLevel`: the level's name big and "Floor N" small, for 1.0
-    /// second.
-    void raise_arrival_banner();
 
     /// `CPlayer::levelUp` after `CCharacter::levelUp`:
     /// `PLAYER_LEVELUP` particle, chime and narrator, the banners for 2.0 seconds, full
     /// health and mana.
-    void player_levelled_up();
-    /// `CCharacter::awardExperience` on the player: pets
-    /// first (`LevelScript::award_pet_experience`); true when the player rose a level.
-    bool award_player_experience(int amount, bool dying);
-
-    /// `CParticlePreloader::GetParticle` by name: its `FILE` in
-    /// `media/particles/preload.dat`, empty for none.
-    std::string preloaded_particle_file(const std::string& name);
-    std::map<std::string, std::string> preloaded_particles;
-    bool preloaded_particles_read = false;
-
-    /// The level-up particle's nodes under the player's (`CPlayer +0x778`,
-    /// `CPlayer::unitInit`), replaced each level-up.
-    std::vector<Ogre::SceneNode*> level_up_particle_nodes;
-    void clear_level_up_particle();
+    void player_levelled_up() override;
 
     /// Fill the HUD in from what the engine knows (`HudState`).
-    void refresh_game_hud();
+    void refresh_game_hud() override;
 
     /// The main menu, built from the game's own interface files. Empty until
     /// run_main_menu() puts one up.
@@ -1740,9 +1119,6 @@ struct Renderer::Impl {
         tl::core::set_loading_boost(true);
     }
 
-    /// Whether a level's music and ambience start when it loads (off for a frame dump).
-    bool audio_enabled = true;
-
     /// The line on screen, for the debug overlay and for the frame dumps.
     std::string dialog_line;
     std::string dialog_speaker;
@@ -1755,10 +1131,6 @@ struct Renderer::Impl {
 
     /// The `CTextEvent`s in the air (`CGameUI +0x1468`), oldest first (core/text_event.h).
     std::vector<tl::core::TextEvent> text_events;
-    /// The player's `+0x1ec` / `+0x1f0`: the damage taken and not yet shown.
-    tl::core::DamageDisplay player_damage_shown;
-    /// `displayDamageAbsorbed(delta)` on the player: the red number, when due.
-    void display_player_damage(float delta);
 
     /// Who each hunting unit is going for, by attacker node: 0 the player, else the
     /// target's node (from `Hunt` events, for `step_monster_swings()`).
@@ -1769,6 +1141,8 @@ struct Renderer::Impl {
 
     /// `--logic-trace`: every wire the level script delivers, in the trace line format.
     std::FILE* logic_trace = nullptr;
+    // PORT: whether --logic-trace is writing (core/world.h).
+    bool logic_trace_on() const override { return logic_trace != nullptr; }
     float logic_trace_next_sample = 0.0f;
     Ogre::Vector3 logic_trace_last{1e9f, 1e9f, 1e9f};
 
@@ -1798,9 +1172,6 @@ struct Renderer::Impl {
     /// the walk fails.
     std::string pending_talk;
 
-    /// The player's target (`CCharacter +0x340`) while it is someone to talk to; the script
-    /// reads it through `set_player_target` (`idleAI`).
-    int64_t talk_target_node = 0;
     /// The stash whose lid is up while its screen is (`CStashMenu::setOpen`).
     std::string stash_opened_unit;
     void animate_stash(const std::string& unit, bool open);
@@ -1817,6 +1188,17 @@ struct Renderer::Impl {
     unsigned long long prof_script_us = 0;
     /// GpuSkinning::step(), inside `prof_submit_us`.
     unsigned long long prof_skin_us = 0;
+    /// Frames a headless run has stepped since its last `sections:` lines.
+    unsigned headless_profile_frames = 0;
+    /// The update's sections (core/section_profile.h) and OGRE's phases, per frame over
+    /// `frames`, to the log when `print`; then both start over.
+    void log_sections(unsigned frames, bool print);
+    void print_sections(unsigned frames);
+    void step_headless_sections();
+    void step_near_poses(float level_delta, float rate);
+    void count_player_footsteps(float was, float now);
+    void step_linked_machine(NestedScript& machine, float delta, float speed,
+                             const tl::core::Defender& player_defense, const Ogre::Vector3& at);
 
     /// `prof_submit_us` split at OGRE's seams, summed over every viewport and the window:
     /// `controllers` (frame start to the first scene-graph update: particles, animations),
@@ -1920,25 +1302,8 @@ struct Renderer::Impl {
     };
     FrameClock frame_clock;
     TouchOverlay touch_overlay;
-    int talk_target_machine = kNoMachine;
-    void set_talk_target(const std::string& unit);
-    void clear_talk_target();
 
-    /// Which script machine drives a unit: `kLevelMachine`, an index into `nested_scripts`,
-    /// or `kNoMachine`; found through the scene node, as rooms share node ids.
-    static constexpr int kLevelMachine = -1;
-    static constexpr int kNoMachine = -2;
-    int unit_machine(const std::string& unit, int64_t& node) const;
-    /// Whether the machine that runs node `node`, drawn at `where`, lets it be targeted
-    /// (found through the scene node, as in unit_machine()).
-    bool node_targetable(int64_t node, const Ogre::SceneNode* where) const;
-    tl::core::LevelScript* machine_script(int machine);
-    void apply_machine_events(int machine, const std::vector<tl::core::ScriptEvent>& events);
-    /// The machine whose `Quest Controller` has a line up, or `kNoMachine` (rooms' too).
-    int dialog_machine() const;
-    bool script_dialog_open() const { return dialog_machine() != kNoMachine; }
-    /// `LOOK_AT_PLAYER` (`CQuestDialogMenu::setNPC`).
-    void speaker_looks_at_player(const std::string& unit);
+    int unit_machine(const std::string& unit, int64_t& node) const override;
     /// `CQuestDialogMenu::updateDialogTags`: the line's
     /// `<LOOKAT=NAME>` made the speaker's target.
     void update_dialog_tags(const std::string& unit, const std::string& text);
@@ -1946,25 +1311,13 @@ struct Renderer::Impl {
     /// The confirm button was down last frame: a dialog goes on the press, not the hold.
     bool confirm_held = false;
     bool attack_held = false;  ///< the pad's Attack (X), for its press edge
-    /// The console's X (core/attack_button.h): hold position (`+0x1fe`), "down at the last
-    /// dispatch" (`+0x55`) and the 0.1 s repeat clock (`+0x40`).
-    tl::core::AttackButton attack_button;
     /// The X button's share of the in-game dispatch.
     ///
     void step_attack_button(float delta, bool down, bool pressed, float move_x, float move_y);
     /// `step_attack_button` ran this frame (the pad's dispatch); `advance`
     /// clears it, and steps the button itself for `auto_attack` without it.
     bool attack_button_stepped = false;
-    /// `CCharacter::setDestination` for the held player:
-    /// stopped, `attack()`, the point kept (`+0x1c0`). (0, 0) is the point already there.
-    void set_player_destination_held(float x, float z);
 
-    /// Whether the skip button was already down last frame.
-    bool skip_held = false;
-
-    /// DIVERGENCE (2026-09-30): a debug menu, as a pad cannot type into `CConsole`;
-    /// drawn on `modalmenu_xenon.layout`, a row of the Pause Menu (`core::options_row`).
-    bool debug_menu_open = false;
     /// The title's main menu is running (`run_main_menu`): Options' close test
     /// (`+0x1404`), out of a game the Pause Menu does not come back.
     bool title_menu_running = false;
@@ -1976,24 +1329,6 @@ struct Renderer::Impl {
     void refresh_debug_menu();
     /// The menu's pad: up and down, A, and B or + to close.
     void drive_debug_menu(const tl::core::InputState& in);
-    /// `CPlayer +0x790` (`CPlayer::getIsInGodMode`): `CCharacter::modifyHP`
-    /// changes nothing while set.
-    bool god_mode = false;
-    /// `CConsole::executeCommandLine`'s `GODSPEED`: `GOD`
-    /// flips `+0x790`, `SPEED` (`addSpeedToPlayer`) toggles
-    /// `PLAYER_SPEED_UP`. DIVERGENCE: both set to `on`, and no `CPlayer::setCheater`.
-    ///
-    void set_godspeed(bool on);
-    /// DIVERGENCE (2026-10-03, for testing skills): the LEVEL 100 row:
-    /// `CConsole::executeCommandLine`'s `LEVELUP` per level
-    /// (`CCharacter::awardExperience`) up to `level`.
-    void level_up_to(int level);
-    /// DIVERGENCE (2026-10-11, for testing skills): the port's own rest of the row:
-    /// the best droppable staff (ISA 0x3d) for the level, its requirements met from the
-    /// unspent points, worn as A wears it (`wear_item`).
-    void outfit_debug_staff();
-    /// The LEVEL row whole: `level_up_to`, then `outfit_debug_staff`.
-    void debug_level_row(int level);
 
     /// The port's performance line (`Hud::set_stats`): frames over half-second windows,
     /// and the window's size; toggled from the debug menu.
@@ -2005,23 +1340,6 @@ struct Renderer::Impl {
 
     /// Which path each unit is walked by, so the log can say where a path picked it up.
     std::map<int64_t, std::string> unit_path;
-
-    /// A sound definition: `CSoundData` (`core/sound_data.h`); layouts and lines name the
-    /// definition, not the file.
-    using SoundDefinition = tl::core::SoundData;
-
-    /// `CSoundBankDataInformation`, every `media/sounds/` table: a bank reaches a
-    /// definition by `NAME`, a layout's `Sound` node or a particle's sound by `GUID`.
-    tl::core::SoundDataInformation sound_info;
-    bool sound_files_loaded = false;
-
-    void ensure_sound_index();
-    const SoundDefinition* sound_by_name(const std::string& name);
-    const SoundDefinition* sound_by_guid(const std::string& guid);
-
-    /// Decoded effects, by archive path, shared with every voice playing one; dropped with
-    /// the archive's caches on remount (`mount_resources()`).
-    std::map<std::string, tl::core::SamplePtr> samples;
 
     /// Definitions already reported on, so each is said once.
     std::set<std::string> reported_sounds;
@@ -2039,53 +1357,9 @@ struct Renderer::Impl {
     /// A sample whose draws the level machine made (`LevelScript::play_unit_sample`).
     bool play_sound_drawn(const std::string& name, const std::string& recording, float variation,
                           const Ogre::Vector3& at);
-    /// Which recording of a definition sounds: the sound system's choice, not a game draw.
-    // PORT: the port's own generator, apart from the game's two; seeded from the clock.
-    const std::string& pick_recording(const SoundDefinition& definition);
-    std::minstd_rand recording_picker{static_cast<std::minstd_rand::result_type>(
-        std::chrono::steady_clock::now().time_since_epoch().count())};
-
-    /// Say one of the character's voice lines (`CSoundBank::queueGlobalSample`). The slot is
-    /// the player's bank's even for the pet's lines, as `modifyHP` reads it.
-    /// `delay` in seconds; `volume` 0: the sound's own. False when the class authors nothing
-    /// for the slot or the line is not queued.
-    bool play_voice(tl::core::SoundSlot slot, float delay = 0.0f, float volume = 0.0f);
-    /// `CSoundBank::queueGlobalSample(slot, volume, delay)`
-    /// on a bank whose `slot` names `name`.
-    bool queue_global_sample(tl::core::SoundSlot slot, const std::string& name, float volume,
-                             float delay);
-
-    /// Play one of the interface's own sounds (banks the menus build, named by definition;
-    /// core/sound_bank.h).
-    bool play_ui(tl::core::InterfaceSound sound);
-
-    /// The definition name in a slot, or "-", for the log.
-    const char* voice_or_none(tl::core::SoundSlot slot) const;
-
-    /// Advance `play_voice()`'s queue (`CSoundManager::update`).
-    ///
-    void step_voices(float delta);
-
-    /// `CSoundManager`'s queue of global samples.
-    tl::core::VoiceQueue voice_queue;
-
-    /// Slots already reported as unauthored, one line each.
-    std::set<int> reported_voices;
 
     /// ... and without a position, for something that happens to the player.
-    bool play_sound_2d(const std::string& name, const char* label = "voice");
-    /// `CQuestDialog::playDialogSound` / `stopDialogSound`: the one dialogue
-    /// recording that is sounding, by its voice key.
-    void play_dialog_sound(const std::string& name);
-    void stop_dialog_sound();
-    std::string dialog_sound_key;
-
-    /// The decoded sample behind one archive path, decoding it the first time.
-    tl::core::SamplePtr sample_for(const std::string& archive_path);
-
-    /// Start the music (the rules' `MUSIC`) and the ambience (a layout `Sound` node) this
-    /// level authors, after it is placed.
-    void start_level_audio(const std::string& layout_path);
+    bool play_sound_2d(const std::string& name, const char* label = "voice") override;
 
     /// The channels a layout's `Sound` nodes play on (core/sound_object.h): `CSoundManager`'s
     /// 64 (`FMOD::System::getChannel`), each a mixer voice; a positional one keeps its spot.
@@ -2103,33 +1377,20 @@ struct Renderer::Impl {
     std::array<NodeChannel, 64> node_channels;
     bool node_channel_sounding(size_t index) const;
     /// What a machine's sound banks ask of the mixer.
-    tl::core::SoundBankHost node_sound_host();
+    tl::core::SoundBankHost node_sound_host() override;
     /// The pan of each positional node channel, kept to the listener and the
     /// camera every frame.
     void step_node_channels(float delta);
     float node_channel_pan(const Ogre::Vector3& at) const;
 
     /// Start (or stop, for an empty name) a track the data names.
-    bool play_music(const std::string& relative, bool loop, const char* because);
+    bool play_music(const std::string& relative, bool loop, const char* because) override;
 
     /// What is on each channel, so a re-load does not restart the right track.
     std::string music_track;
 
-    /// The track the level authors, for `Play Level Music` to put back.
-    std::string level_music;
-
-    /// The level's `Music` nodes (`CMusicObject`) by node id, made on first input and updated
-    /// every frame (`CMusicObjectDescriptor::update`).
-    std::map<int64_t, tl::core::MusicObject> music_objects;
     /// What a node's `CMusicObject` asks of the sound manager and its level.
-    tl::core::MusicHost music_host(int64_t node);
-    void music_node_input(const tl::core::ScriptEvent& event);
-    void step_music_objects(float delta);
-
-    tl::formats::CmpScene script_layout;
-    std::set<int64_t> script_gated;
-    tl::core::QuestState initial_quests;
-    bool script_ready = false;
+    tl::core::MusicHost music_host(int64_t node) override;
 
     /// The scripted camera, when a `Camera Controller` has taken it: the controller moves
     /// the point looked at, and the camera keeps its offset (as follow_subject()). `follow`
@@ -2154,40 +1415,19 @@ struct Renderer::Impl {
     /// 0. Counted by `INTERACTIVE UI` and the quest dialog (`CQuestDialogMenu::setOpen`).
     ///
     int interactive_menus = 0;
-    /// The quest dialog's share of `interactive_menus`.
-    bool quest_dialog_interactive = false;
-    void set_interactive_menu_visible(bool on);
-    /// The quest dialog's share, taken or given back.
-    void set_quest_dialog_interactive(bool on);
-    /// `CCameraControl +0x98` and `+0x94` (`setCinematicMode`).
-    tl::core::CinematicCamera camera_cinematic;
-    /// The player's `+0x52e`, `INVINCIBLE` (only a `Game State Controller`'s `INVULNERABLE`,
-    /// `performStateControl`): `modifyHP` holds the health at 1.
-    bool player_invincible = false;
+    void set_interactive_menu_visible(bool on) override;
     /// The player's `+0x70d`, the mesh hidden on purpose (`setMeshVisible`):
     /// `HIDE PLAYER`.
     bool player_mesh_hidden = false;
     /// `CCharacter::setMeshVisible(visible, true)`
     /// on the player.
     void set_player_mesh_visible(bool visible);
-    /// `CGameStateController::doActualGameState`, the
-    /// interface's half (the level's is `LevelScript::game_state_do`).
-    void game_state_interface(uint32_t type, bool on);
     /// State 6, `CLOSE INGAME UI`: `CGameUI::closeLeft`, `closeRight`,
     /// `closeMenus` and `closeAll`.
-    void close_ingame_ui();
+    void close_ingame_ui() override;
     /// What `CCameraController::startCamera` closes:
     /// `CGameUI::closeAll` and `CGameUI::hideModalDialogs`.
     void close_for_camera();
-    /// `CGameStateController::healPlayer`:
-    /// `modifyHP(maxHP())`.
-    void heal_player();
-
-    /// Player Start's world position, and whether the layout had one.
-    Ogre::Vector3 player_start = Ogre::Vector3::ZERO;
-    /// The facing the level stands the player in (`CLevel +0x164`), as the player's yaw.
-    float player_start_yaw = 0.0f;
-    bool have_player_start = false;
 
     /// The dynamic light map (setup_light_map()): `ProjectorRTTLight` (`CGameClient +0x210`),
     /// its `ProjectorCam` (`CCameraControl +0x28`), and the quads `ProjectorLightQuad`
@@ -2221,37 +1461,6 @@ struct Renderer::Impl {
         Ogre::MaterialPtr background_material;
         std::unique_ptr<Ogre::RenderTargetListener> listener;
     } shadow_map;
-
-    /// The `Layout Link Particle` whose subtree is being placed, or 0
-    /// (ParticleSystem::owner).
-    int64_t particle_owner = 0;
-    /// What kind of file is being placed (ParticleSystem::wrapper): under a layout link,
-    /// and a particle file. Saved and restored around the recursion.
-    bool placing_under_link = false;
-    bool placing_particle_file = false;
-    /// Set by a layout link just before it places its file, taken by
-    /// place_layout() as it starts.
-    bool link_places_next_layout = false;
-    /// Set by whatever places a file as a `CParticle`, taken by place_layout(): loaded as
-    /// `CParticlePreloader::LoadParticle` does, only its
-    /// `Particle`, `Sound` and `Camera Shake` objects; no script runs.
-    bool cparticle_places_next_layout = false;
-
-    /// A particle file's `CParticleCache` extras (`LoadParticle`,
-    /// copied by `createParticleCache`): one-shot `Sound`s by GUID
-    /// with `VOLUME` (+0x40, +0x58) and `Camera Shake`s (+0xc0), in file order, by path.
-    /// `CParticleCache::CParticleCache(SceneManager*, CSoundBank*)`.
-    ///
-    struct ParticleFileExtras {
-        struct Sound {
-            std::string guid;
-            float volume = 1.0f;
-        };
-        std::vector<Sound> sounds;
-        std::vector<tl::core::CameraShake> shakes;
-    };
-    std::map<std::string, ParticleFileExtras> particle_file_extras;
-    const ParticleFileExtras* particle_extras(const std::string& reference);
 
     /// One placed `CParticle`: its extras, and where it stands from its first system's
     /// holder (ParticleSystem::cparticle).
@@ -2290,10 +1499,6 @@ struct Renderer::Impl {
     /// Drop the placements none of whose systems is left.
     void forget_dead_cparticles();
 
-    /// Log each `Puzzle Input`'s order as its machine is built (`CPuzzleRandomizer` +0x6c,
-    /// shuffled on the volatile generator).
-    void log_puzzles(const tl::core::LevelScript& script);
-
     /// Increasing paint order for layout meshes; see place_mesh().
     unsigned layout_draw_order = 1;
     /// Blended passes on alpha-less textures that place_mesh() made solid.
@@ -2312,98 +1517,13 @@ struct Renderer::Impl {
     /// ceiling; bake_static_scenery() leaves them out.
     std::set<const Ogre::Entity*> paint_ordered;
 
-    /// GUID to mesh paths, from the tileset index: every `FILE` of the record, in order (the
-    /// variants one of which each copy rolls, `CRoomPiece::initRoomPiece`).
-    std::map<int64_t, std::vector<std::string>> tileset;
-    bool tileset_loaded = false;
-
-    /// GUID to collision mesh paths (`COLLISIONFILE`, in order), from the same index;
-    /// not drawn (src/core/collision.h).
-    std::map<int64_t, std::vector<std::string>> tileset_collision;
-
-    /// Each piece's `PRERENDER` (-1) / `POSTRENDER` (+1), MeshPlacement::render_phase.
-    std::map<int64_t, int> tileset_render_phase;
-    /// Every `PIECE` GUID the index holds, drawn or not.
-    std::set<int64_t> tileset_known;
-    /// `CRoomPieceDataInformation +0x10` (console `+8`): the last piece named `ERROR`
-    /// (`ParseRoomPieceData`), drawn for an unknown GUID; 0
-    /// with none (`CRoomPieceDataInformation::CRoomPieceDataInformation`).
-    ///
-    int64_t tileset_default_guid = 0;
-
     /// Brightness and contrast, drawn over the finished frame.
     DisplayGamma display_gamma;
 
     /// The in-game minimap and automap system.
     Automap automap;
-    bool automap_initialized = false;
     bool map_toggle_held = false;
 
-    /// The level's collision geometry, in world space.
-    tl::core::CollisionWorld collision;
-    size_t collision_meshes = 0;
-    size_t collision_skipped = 0;
-
-    /// The level's pathable grid (`CLevel::bakeCollision`, core/passability.h).
-    tl::core::PassabilityMap passability;
-    /// One box per placed room layout, grown by its pieces' collision bounds,
-    /// and which of them the room piece being placed belongs to (-1: none).
-    std::vector<tl::core::PassabilityMap::Box> collision_sections;
-    int collision_section = -1;
-
-    /// The `Unit Trigger` nodes placed with their own collision: candidates for
-    /// `CBaseUnit::addToAvoidanceMap` once `passability.bake()` stands; drained after it.
-    std::vector<int64_t> door_trigger_nodes;
-
-    /// Which of `door_trigger_nodes` marked the map (for `CBaseUnit+0x19b`), to take back out
-    /// on opening (`CBaseUnit::removeFromAvoidanceMap`).
-    std::set<int64_t> door_avoidance_added;
-    /// The `Unit Trigger`s a `Not Collidable` switched off (`CBaseUnit +0x18d`
-    /// clear), which the level state carries in `CItemSaveState +0x5e`.
-    std::set<int64_t> trigger_not_collidable;
-
-    /// The level's own file's `Path Node Occupation` nodes whose cells are in
-    /// the map (`CPropertyNode +0x150`); `apply_path_blockers` starts it over.
-    std::set<int64_t> level_path_blockers_on;
-    /// A path blocker node's box as `updatePathNodes` hands it to the level, for the linked
-    /// layouts' and rooms' `Path Node Occupation` regions.
-    struct PathBlocker {
-        bool circle = false;
-        tl::core::Vec3 centre;
-        /// `+0x120`, `updateBoundingBox`'s bounds of the turned box.
-        tl::core::Vec3 low;
-        tl::core::Vec3 high;
-        /// The node's own scale X (`BOX WIDTH`, else `RADIUS`): a circle's
-        /// radius, and what `killOrMoveBaseUnits` measures with.
-        float scale_x = 0.0f;
-    };
-    struct MachinePathBlocker {
-        PathBlocker box;
-        /// `CPropertyNode +0x150`: its cells are in the map; `updatePathNodes`
-        /// adds only while clear and removes only while set.
-        bool applied = false;
-    };
-    std::map<int64_t, MachinePathBlocker> machine_path_blockers;
-    /// Put every enabled one on the navigation grid, once the grid stands.
-    void apply_machine_path_blockers();
-
-    /// The `No Spawn Region` `Property Node`s as boxes, in the order `CLevel::loadRoomLayout`
-    /// (case 3) adds them to `CLevel +0xd8`.
-    std::vector<tl::core::NoSpawnRegion> no_spawn_regions;
-    /// `CLevel::populate`'s sections: one box
-    /// per collision-enabled room piece, in the order the pieces were placed.
-    std::vector<tl::core::PopulateSection> population_sections;
-    /// `CLevel +0x28`, `populate`'s room records: one per placed room layout, the union of
-    /// its sections (`getRoomIndexThatPositionIsIn`).
-    std::vector<tl::core::LevelRoomBox> level_rooms;
-
-    /// The player character, when --play is on (off: a frame dump wants a fixed pose).
-    tl::core::Player player;
-    bool player_control = false;
-
-    /// The camera's compass heading (radians about +Y) and subject-to-camera vector, from
-    /// the layout's authored camera (follow_subject()).
-    float camera_yaw = 0.0f;
     Ogre::Vector3 camera_offset = Ogre::Vector3::ZERO;
     bool camera_follows = false;
 
@@ -2421,7 +1541,6 @@ struct Renderer::Impl {
     /// X360 `+0x18`), reset each level. `CCameraControl::CCameraControl`
     /// (X360 inline in `CGame::createCamera`): dolly 28.5, the rest zero.
     float camera_zoom_input = 0.0f;
-    float camera_dolly = 0.0f;
     /// The frame's delta for the camera (`step_player`); 0 for any other re-aim.
     float camera_delta = 0.0f;
     /// The unit talked to in the quest window (target in AI state 0x1f), and the dialog's
@@ -2442,43 +1561,18 @@ struct Renderer::Impl {
     /// What the follow camera looks at, relative to the subject's feet.
     Ogre::Vector3 camera_look_offset = Ogre::Vector3::ZERO;
 
-    /// CAMERAMULT from the level rules; see apply_environment().
-    float camera_mult = 1.0f;
-
     /// The quit input was pressed (`+`, ESC); `run()` ends its loop, and `main.cpp`'s
     /// `play()` returns to the main menu (`Renderer::quit_to_menu_requested()`).
     bool quit_requested = false;
 
-    /// The animation the player controller last asked for, applied once per change.
-    std::string player_animation;
-
     // ---------------------------------------------------------------- combat --
 
-    /// Everything the player character's own `.DAT` chain authors (`[EQUIPMENT]`,
-    /// `WEAPON_SCALE`, speeds), from load_player_stats().
-    tl::core::UnitStats player_stats;
-
-    /// The weapon whose attack is in use (`CCharacter +0x3ec`, Linux `+0x498`), and the
-    /// entity drawing the right hand's (the left's when the right is empty).
-    tl::core::ItemStats weapon;
-    bool has_weapon = false;
-    Ogre::Entity* weapon_entity = nullptr;
-    /// Where `weapon` is equipped: 0 the right hand, 1 the left, -1 bare hands.
-    int attack_location = -1;
-    /// `CCharacter +0x2b2` (Linux `+0x37e`): flipped by every `performAttack`;
-    /// with both hands armed the hands swing in turn.
-    bool alternate_hand = false;
     /// The left hand's item when `weapon_entity` is the right's (one of
     /// `worn_attachments`), for its weapon trail.
     Ogre::Entity* worn_left_hand = nullptr;
-    /// The two hands as `attackRange`, `selectAttack` and `attack` read them.
-    tl::core::HeldHands player_held_hands();
-    /// `CCharacter::selectAttack(mode)` for the player;
-    /// nothing while a swing has more than 0.2 s left.
-    void select_player_attack(int mode);
     /// `CCharacter::attack`: the hand
     /// a swing is taken with when one is ranged and the other not.
-    void choose_player_attack_hand();
+    void choose_player_attack_hand() override;
     /// The other equipped items `CEquipment::attachToGivenLocation` puts on the character
     /// (core/equipment_attach.h), rebuilt by `sync_worn_attachments`.
     std::vector<Ogre::Entity*> worn_attachments;
@@ -2488,162 +1582,18 @@ struct Renderer::Impl {
     /// kept on `tag_righthand` / `tag_lefthand` by `updateBonePositions`.
     /// Made when a weapon first wants one.
     Ogre::SceneNode* hand_nodes[2] = {nullptr, nullptr};
-    /// The held weapon's element particle (`CEquipment +0x3c8`), under its hand
-    /// node, and the hand it rides.
-    std::vector<Ogre::SceneNode*> weapon_element_particles;
     int weapon_element_hand = 0;
     /// `CEquipment::createParticles` + `attachToGivenLocation`
     /// for the weapon just put in a hand.
     void attach_weapon_element(bool right);
-    void clear_weapon_element();
 
-    /// The animation class that weapon swings on ("Polearm", "Rslash", "Attack"; core/weapons.h).
-    std::string attack_class = "Attack";
-
-    /// A swing in progress; the hit lands on the manifest's `HIT` frame
-    /// (core/animation_manifest.h).
-    struct Swing {
-        bool active = false;
-        std::string animation;  ///< the `.SKELETON` stem being played
-        float elapsed = 0.0f;   ///< seconds into it, at the played rate
-        float hit_at = 0.0f;    ///< when the blow lands
-        float length = 0.0f;    ///< how long the whole thing runs
-        bool landed = false;
-        int64_t target = 0;  ///< the node aimed at, 0 for "whatever is in reach"
-    };
-    Swing swing;
-
-    /// The animation a cast queued: `CCharacter::castSkill`
-    /// blends it in for `duration`, then `IDLE` or the loop; its keys fire `EVENT_TRIGGER`
-    /// (`CCharacter::updateSkillKeys`).
-    struct SkillPlayback {
-        bool active = false;
-        std::string animation;  ///< the `.SKELETON` stem playing
-        int index = -1;         ///< its place in the model's list
-        float time = 0.0f;      ///< the animation's own clock, in seconds
-        float length = 0.0f;
-        float speed = 1.0f;
-        float held = -1.0f;  ///< frame time left on the cue; -1 loops
-        int then_loop = -1;  ///< queued after it, looping
-    };
-    SkillPlayback skill_playback;
-    /// `CCharacter +0x398` and the cast flags beside it.
-    tl::core::ActiveSkill player_active_skill;
-    /// The character's animations in manifest order with lengths (`CGenericModel +0x1e0 ->
-    /// +0x28`), built once per mesh.
-    tl::core::AnimationCatalog player_catalog;
-    std::string player_catalog_mesh;
-    void build_player_catalog();
-    /// Put a cast's cue on the character.
-    void play_skill_cue(const tl::core::SkillAnimationCue& cue);
     /// The shadow and light maps brought up to date for a frame dump.
     void update_light_maps(const std::string& png_path);
-    void step_skill_animation(float delta);
-    /// The skill animation's own keys, before the skill's: trails, sounds, particles.
-    void fire_model_keys(const std::vector<tl::core::FiredKey>& keys,
-                         const tl::core::AnimationManifest& manifest);
-    /// `CCharacter::updateActiveSkill` for
-    /// the player.
-    void step_active_skill(float dt);
 
-    /// The node the character is fighting (`CCharacter::setTarget`, `+0x340`); outlives a
-    /// swing, read by `CMonster::idleAI` for the pet.
-    int64_t player_target_node = 0;
-    /// The target item (`CCharacter +0x350`) as a skill sees it: a breakable `castSkill`
-    /// found and aimed at; 0 for none. Kept until `setTarget`,
-    /// a position aim, or the breakable leaving (`notifyOfDeletion`).
-    int64_t player_skill_item = 0;
-    /// `CCharacter::setTarget` for the living
-    /// player: the target, and the target item let go.
-    void set_player_target(int64_t node) {
-        player_target_node = node;
-        player_skill_item = 0;
-    }
-
-    /// How much life something has left, by layout node id (one unit name covers several);
-    /// seeded on the first hit.
-    struct Health {
-        float current = 0.0f;
-        float max = 0.0f;
-        bool dead = false;
-    };
-    std::map<int64_t, Health> unit_health;
-    Health player_health;
-
-    /// The player's own death: `CCharacter::alive` false (AI state 5, then 6) and
-    /// `CPlayer +0x884`, the delay before the death screen.
-    struct PlayerDeath {
-        bool dying = false;
-        std::string animation;  ///< the `DIE` animation `findRandomAnimation` chose
-        float timer = tl::core::kDeathTimerStart;
-    };
-    PlayerDeath player_death;
-    /// `CDieMenu +0x30` (open), and the pad's highlighted choice. `CDieMenu::CDieMenu`
-    /// starts closed, nothing chosen.
-    bool death_screen_up = false;
     int death_selected = 0;
-    /// `setGameState(5)` with choice 2 away from a town: `warpLevels("Town", -99)`.
-    bool death_town_pending = false;
 
-    /// A spawned instance's own level and champion-ness, by node, set at `spawn_unit()`;
-    /// `level == 0`: none (readers use `effective_monster_level()`).
-    struct SpawnLevel {
-        int level = 0;
-        bool champion = false;
-    };
-    std::map<int64_t, SpawnLevel> unit_spawn_level;
-
-    // PORT: the level a placed unit was made at (`CLevel +0x1a8` for a populated floor's,
-    // `spawn_unit()`), else the player's `character_level`.
-    int effective_monster_level(int64_t node) const {
-        const auto found = unit_spawn_level.find(node);
-        if (found != unit_spawn_level.end() && found->second.level > 0) return found->second.level;
-        return character_level;
-    }
-
-    /// Whether this node was promoted at spawn through `CHAMPIONSPAWNCLASS`
-    /// (`apply_champion_curves()`; apart from `UnitStats::is_champion`).
-    bool spawn_marked_champion(int64_t node) const {
-        const auto found = unit_spawn_level.find(node);
-        return found != unit_spawn_level.end() && found->second.champion;
-    }
-
-    /// The authored stat curves under `media/graphs/stats/`; see `core/stats.h`.
-    tl::core::StatBook stat_graphs;
-    bool stat_graphs_loaded = false;
-    /// `media/graphs/camerashakes/`: the curves a `CCameraShake` names.
-    tl::core::StatBook camera_shake_graphs;
-    bool camera_shake_graphs_loaded = false;
-    /// `CCameraControl`'s two shake lists (`+0x58`, `+0x70`), walked by
-    /// update_game_camera() and cleared with the level.
-    tl::core::CameraShakes camera_shakes;
-    /// `CGameSpeed`, from `CMasterResourceManager::CMasterResourceManager`
-    /// with its own `DecelerateGameSpeed.dat`
-    /// (`CGraph::loadGraph`); stepped by advance() (load_game_speed()).
-    tl::core::StatGraph game_speed_curve;
-    tl::core::GameSpeed game_speed{&game_speed_curve, &game_speed_curve};
-    bool game_speed_loaded = false;
     /// The lowest speed of the slow-down under way, for the log.
     float game_speed_lowest = 1.0f;
-    void load_game_speed();
-    /// `CCharacter::rollAttack`: a player blow leaving the target dying or dead
-    /// slows the game for half a second.
-    void slow_on_player_kill(bool target_dead);
-
-    /// Every item in the game, by name, from `media/masterresourceunits.dat`.
-    tl::core::ItemBook items;
-    bool items_loaded = false;
-    /// The master table's `UNIT_GUID`s (`CResourceManager::getUnitDataByGuid`,
-    /// `getUnitGuidByDataGroup`), by `NAME`; filled by `ensure_item_index`.
-    std::map<int64_t, std::string> master_unit_by_guid;
-    std::map<std::string, int64_t> master_guid_by_unit;  ///< by upper-cased `NAME`
-    /// -1 for a unit the table has not got.
-    int64_t unit_guid_of(const std::string& name);
-    /// Empty for a guid the table has not got.
-    std::string unit_of_guid(int64_t guid);
-
-    /// The `.ANIMATION` manifest beside each character mesh, by mesh directory.
-    std::map<std::string, tl::core::AnimationManifest> manifests;
 
     /// The attack button held with the stick at rest for the whole scene
     /// (`step_attack_button`), to verify a fight headlessly (Renderer::set_auto_attack()).
@@ -2666,23 +1616,11 @@ struct Renderer::Impl {
 
     bool pad_highlighted_hostile = false;
 
-    /// The `dropped_items` entry targeted for pickup (`CCharacter::setTargetItem`,
-    /// `+0x350`), sought only with no unit target (`+0x340`).
-    int item_targeted = -1;
-    Ogre::Entity* item_highlighted = nullptr;
     /// The second pass's other pick: a `Unit Trigger` by machine and node
     /// (`trigger_targeted_machine` `kNoMachine` for none).
     int trigger_targeted_machine = -2;
     int64_t trigger_targeted_node = 0;
     void interact_targeted_trigger();
-    /// The sleeping mimic the same pass points at, by machine and node. DIVERGENCE: the PC
-    /// targets it under the pointer (`CGameClient::updateIngame`); a pad cannot.
-    int mimic_targeted_machine = -2;
-    int64_t mimic_targeted_node = 0;
-    /// A on it: `CCharacter::attack` on a `MIMICIDLE`
-    /// target calls `reactToDamage(player, true)`. DIVERGENCE: ranged, the original walks to
-    /// it instead.
-    void disturb_targeted_mimic();
     /// The selection came from the console's second pick (`+0x1c4`).
     bool item_second_pick = false;
     /// The target item as A sets it (`CCharacter::setTargetItem`, `+0x350`, AI state 7):
@@ -2704,39 +1642,13 @@ struct Renderer::Impl {
     void step_item_ai(float delta);
     /// `CCharacter::attackAI` on a sleeping mimic.
     void step_mimic_attack(float delta);
-    /// The enchant shrine a shrine's page works on (`CEnchantMenuXenon +0xf4`, set
-    /// from the target item): its machine and `Unit Trigger` node.
-    int enchant_shrine_machine = -2;
-    int64_t enchant_shrine_node = 0;
-    /// The shrine's `+0x19c` (Linux `CTriggerUnit +0x1f0`) cleared: a one-shot
-    /// trigger at its last state (the machine's `UnitTriggerView::armed`).
-    bool enchant_shrine_spent() const;
     /// `CGameUI::updateIngameUI` for AI state 0x16.
     void open_enchant_shrine(int machine, int64_t node);
-    /// Whether a `Unit Trigger`'s prop is an `ENCHANTSHRINE` (ISA 0x9d).
-    bool is_enchant_shrine(const std::string& unit);
     /// The prop a trigger draws, if it draws one.
     Ogre::Entity* trigger_entity(int64_t node, const std::string& unit, const NodeMap& nodes) const;
-    /// The renderer's handle on one placed copy of a node (a `Unit Trigger`'s presence and
-    /// collision group, a pathing blocker): copies share node ids, so the key mixes in the
-    /// room and link hierarchy `CLogicNodeState` saves (+0x30, +0x40). Level nodes keep ids.
-    int64_t instance_key(int64_t node, const NodeMap& nodes) const;
-    int64_t instance_key(int64_t node, int machine) const;
-    static int64_t instance_key(int64_t node, uint32_t scene, int64_t hierarchy);
 
-    /// Fishing (`core/fishing.h`): the player's AI states 0x20..0x22 and the
-    /// bobber (`CPlayer +0x850..+0x860`).
-    tl::core::FishingState fishing_state = tl::core::FishingState::Off;
-    tl::core::FishingBobber bobber;
-    /// The fishing animation playing, and its speed (`blendAnimation`'s).
-    std::string fishing_animation;
     float fishing_animation_rate = 1.0f;
-    /// A one-shot fishing animation, and whether it has run out.
-    bool fishing_animation_once = false;
     float fishing_animation_clock = 0.0f;
-    /// The level's fish slot class (`CLevelTemplateData +0x5a8`, slot 6 of
-    /// `chooseUnitSpawners`); empty with no template.
-    std::string level_fish_spawn_class;
     /// `CPlayer +0x828`, `+0x830`, `+0x840`/`+0x848`: the rod on the right
     /// hand, the fish on the hook, the line.
     Ogre::Entity* fishing_rod = nullptr;
@@ -2746,27 +1658,18 @@ struct Renderer::Impl {
     Ogre::SceneNode* fishing_line_node = nullptr;
     /// Where the hole is: the lure never sinks below it (`updateFishingLine`).
     Ogre::Vector3 fishing_hole_at = Ogre::Vector3::ZERO;
-    /// Whether a `Unit Trigger`'s prop is a `FISHING HOLE` (ISA 0x7a).
-    bool is_fishing_hole(const std::string& unit);
     /// `CPlayer::startFishing` at the hole
     /// `at`.
     void start_fishing(const Ogre::Vector3& at);
     /// `setAIState(2)` out of any fishing state (`CPlayer::setAIState` hides the rod).
-    void stop_fishing();
+    void stop_fishing() override;
     /// Play a fishing animation (`blendAnimation` / `queueBlendAnimation`).
     void play_fishing_animation(const std::string& name, float rate, bool once,
-                                const std::string& then);
-    /// What `queueBlendAnimation` put behind the one-shot fishing animation.
-    std::string fishing_queued;
+                                const std::string& then) override;
     /// `animationPlayingSubstring` for the one-shot fishing animation.
-    bool fishing_animation_playing(const std::string& name) const;
-    /// One frame of AI states 0x20..0x22, and the two buttons in 0x21.
-    void step_fishing(float delta, bool catch_press, bool stop_press);
+    bool fishing_animation_playing(const std::string& name) const override;
     /// `CPlayer::catchFish`.
-    void catch_fish();
-    /// `CPlayer::fishingAICatch` once
-    /// `FISHING_CATCH` has run out.
-    void land_catch();
+    void catch_fish() override;
     /// `CPlayer::updateAnimation`'s fishing half and
     /// `updateFishingLine`: rod, line and hooked fish.
     void update_fishing_gear();
@@ -2776,16 +1679,7 @@ struct Renderer::Impl {
     ///
     void refresh_fishing_screen();
     /// `CGameUI::openModalDialog`.
-    void open_modal(const std::string& title, const std::string& text);
-    /// The name a quest objective prints (`CQuestUnitData::getUnitName`),
-    /// off the item and unit tables.
-    tl::core::QuestUnitNamer quest_unit_namer();
-    /// What `CQuestUnitData` reaches outside the quest for (`tl::core::QuestUnitWorld`).
-    tl::core::QuestUnitWorld quest_unit_world();
-
-    /// The player's own level (`award_experience()`), and what a placed monster with no
-    /// `unit_spawn_level` scales its curves at.
-    int character_level = 1;
+    void open_modal(const std::string& title, const std::string& text) override;
 
     /// A standing unit's fidgets: `CMonster::idleAI` under `animationExistsSubstring("FIDGET")`:
     /// while idle, `randomIntegerBetweenVolatile(0, 1000) <= 9` per AI tick, not within
@@ -2812,177 +1706,45 @@ struct Renderer::Impl {
     /// Keyed by entity, and cleared whenever an entity is torn down (`clear_subject()`).
     std::map<Ogre::Entity*, Fidget> fidgets;
 
-    /// How fast a swing plays, as a multiple of real time (the blow's frame sets the cadence).
-    // INVENTED: `ATTACKSPEED` over 100; the console's attack animation speed is not
-    // transcribed here.
-    float swing_rate() const {
-        return player_stats.attack_speed > 0.0f ? player_stats.attack_speed / 100.0f : 1.0f;
-    }
-
     /// Link one `.SKELETON` beside the character's mesh onto it and what it wears
     /// (Renderer::link_animation()).
-    bool link_subject_animation(const std::string& name);
+    bool link_subject_animation(const std::string& name) override;
 
     /// Play one of them, exclusively, on the character and what it wears
     /// (Renderer::apply_animation()); `quiet` for the per-frame caller.
     bool apply_subject_animation(const std::string& name, float time, bool quiet);
 
     /// Put the character on whatever wanted_player_animation() asks for.
-    void follow_player_animation();
+    void follow_player_animation() override;
 
-    /// What the character should be playing this frame: its swing while one is
-    /// running, and otherwise whatever its movement says.
-    std::string wanted_player_animation() const {
-        if (player_death.dying) {
-            return player_death.animation.empty() ? player_animation : player_death.animation;
-        }
-        if (fishing_state != tl::core::FishingState::Off && !fishing_animation.empty()) {
-            return fishing_animation;
-        }
-        // An `Animation Controller` holding the player (`setAIPlayAnimation`,
-        // state 0x10): the scene's animation, over whatever it was doing.
-        if (!scripted_player_animation.empty()) return scripted_player_animation;
-        if (skill_playback.active) return skill_playback.animation;
-        if (swing.active) return swing.animation;
-        return player.animation();
-    }
-    /// What a `PLAYER` `Animation Controller` has the character play
-    /// (`CAnimationPlayer::playAnimation`), and whether it loops.
-    std::string scripted_player_animation;
     bool scripted_player_loops = false;
 
-    void load_stat_graphs();
-
-    void load_camera_shake_graphs();
-
-    size_t load_graph_directory(const std::string& directory, tl::core::StatBook& book);
-
-    void start_critical_shake();
-    /// A shake `CCharacter::die` starts at a body, along
-    /// the up vector (`+0x9c`), from `centre`.
-    void start_death_shake(const char* name, float duration, float magnitude,
-                           const Ogre::Vector3& centre);
     /// `die`'s branches before the fall: the burst or the death flight.
     /// True when one took the death (no `DIE` animation).
     bool die_burst_or_flight(const tl::core::ScriptEvent& event, SceneUnit& unit, NodeMap& nodes);
 
-    /// Read every quest under `media/Quests/` into `quest_book`, once.
-    void load_quest_book();
-    bool quest_book_loaded = false;
-
-    /// A quest no NPC initialised is worth 1 level (`CQuest +0x1ec` from the constructor);
-    /// `--quest-level` moves it for `--accept-quest`.
-    int quest_level_for_offer = 1;
-    void ensure_item_index();
-    /// A unit's data group: the file over its `BASEFILE` chain
-    /// (`CUnitResourceList::parseChildFile`, core/unit_resource.h); a missing base is empty.
-    /// `first_root` is tried before each `BASEFILE` (`xbox/`). With a `group`, also the four
-    /// values `CUnitResourceList::loadFile` appends.
-    tl::formats::AdmFile read_unit_file(const std::string& path,
-                                        const std::string& first_root = std::string(),
-                                        const tl::core::ResourceGroup* group = nullptr);
-    const tl::core::AnimationManifest& manifest_for(const std::string& mesh_path);
-    void load_player_stats();
-
-    /// Read the playable classes, once.
-    void load_player_classes();
-
     /// Destroy the subject and everything hanging off it.
     void clear_subject();
 
-    /// The three classes a new character can be, in the order the creation
-    /// screen shows them. Empty until load_player_classes() has run.
-    std::vector<tl::core::PlayerClass> player_classes;
-
-    /// The character's class by `NAME`, or empty (a `--mesh` run): this, not the mesh's
-    /// filename, identifies the class.
-    std::string player_class;
     bool equip_starting_weapon();
     /// `location` is where the inventory holds it (0 the right hand, 1 the
     /// left); -1 puts a bow in the left and anything else in the right.
-    bool equip_weapon_item(const tl::core::ItemStats& item, int location = -1);
+    bool equip_weapon_item(const tl::core::ItemStats& item, int location = -1) override;
     /// Hang `right` and `left` (item names, empty for none) on a unit's
     /// `tag_righthand`/`tag_lefthand` bones (its `[EQUIPMENT]`).
     void equip_unit_items(Ogre::Entity* entity, const std::string& unit, const std::string& right,
                           const std::string& left);
-    /// `CEquipment::calculateCombatStats` for the weapon in
-    /// a hand: its attack (`+0x238` right, `+0x23c` left), or none.
-    tl::core::UnitStats::WeaponAttack weapon_attack_of(const std::string& item_name,
-                                                       tl::core::Hand hand = tl::core::Hand::Right);
-    /// `CCharacter::createDefaultEquipment`, spawn-class
-    /// half: `SPAWNRIGHTHAND` then `SPAWNLEFTHAND`, one `g_Rand` roll each.
-    void roll_unit_equipment(const std::string& unit, tl::core::LevelScript::UnitCreation& made);
-    /// What `CCharacter::createDefaultEquipment` makes a machine's
-    /// characters' equipment with.
-    tl::core::LevelScript::UnitEquipment unit_equipment_hooks();
     /// Hang on each drawn character the hands its roll gave it, once made.
     void sync_unit_equipment();
-    void unequip_weapon();
-    void sync_equipped_weapon();
+    void unequip_weapon() override;
     /// `CEquipment::equipped` for every location but the held weapon's.
-    void sync_worn_attachments(int weapon_location);
+    void sync_worn_attachments(int weapon_location) override;
     void clear_worn_attachments();
 
-    /// An item on the floor (dropped, a monster's, gold, a quest's). Picked up by
-    /// `CCharacter::getItemAI`/`getItem`
-    /// via `setTargetItem`, chosen by
-    /// core/targeting.h. Drawn as the console's (`step_ground_labels`,
-    /// core/item_label.h); not transcribed: `CItem::update`'s light override.
-    ///
-    struct DroppedWorldItem {
-        tl::core::ItemStats item;
-        int count = 0;
-        Ogre::SceneNode* node = nullptr;
-        Ogre::Entity* entity = nullptr;
-
-        /// The toss (`CEquipment +0x250` path, `+0x258` distance along it,
-        /// `+0x25c` still flying) and the orientation it lands in (`+0x2f0`).
-        tl::core::DropArc arc;
-        float travelled = 0.0f;
-        bool flying = false;
-        bool spins = false;
-        Ogre::Quaternion rest = Ogre::Quaternion::IDENTITY;
-
-        /// `CBaseUnit +0x170/+0x178` for an item a quest placed; empty otherwise.
-        tl::core::QuestUnitTag quest_tag;
-
-        /// The id a `Unit Spawner` knows it by, or 0 for an item no spawner released.
-        int64_t unit_id = 0;
-
-        /// A `CItemGold`, not a `CEquipment`: amount, turn and size (`pile`), its growing in
-        /// (`+0x234`, from 0.35) and `GOLD_SPARKLE`.
-        bool is_gold = false;
-        tl::core::GoldPile pile;
-        float grow_left = 0.0f;
-        std::vector<Ogre::SceneNode*> sparkle;
-
-        /// `CEquipment +0x3d0` and `+0x3c8`: the drop particle and a weapon's element
-        /// (`createParticles`, core/item_label.h).
-        std::vector<Ogre::SceneNode*> particles;
-
-        /// Its range and fade (`CItem +0x199`, `+0x204`, ...), and whether it is on the near
-        /// item list (`CLevel +0x90`).
-        tl::core::ItemPresence presence;
-        bool listed = true;
-    };
-    /// `CEquipment::update` and `CItemGold::update`
-    /// after `CItem::update`: the toss, gold's sparkle and growth.
-    void step_dropped_item(DroppedWorldItem& dropped, float delta);
-    /// `CEquipment::setActiveInLevel(true)` ->
-    /// `createParticles`.
-    void start_item_particles(DroppedWorldItem& dropped);
-    /// A ground item leaving the level: its particles, then its model.
-    void remove_ground_item(DroppedWorldItem& dropped);
     /// The console's floor labels for the frame: landed items and usable
     /// `Unit Trigger`s on screen (core/item_label.h), handed to the HUD.
     void step_ground_labels();
 
-    /// `CUnitThemes::reload`, once
-    /// (`CUnitThemes::CUnitThemes(folder)`).
-    void load_unit_themes();
-    /// `CBaseUnit::unitInitThemes` the first
-    /// time a unit's themes are asked for.
-    void init_unit_themes(UnitThemeState& state, const tl::core::UnitStats& stats);
     /// `CCharacter::unitThemeUpdated` on a
     /// drawn unit: its theme particles made, placed and started, or stopped.
     void unit_theme_updated(UnitThemeState& state, Ogre::Entity* entity, uint32_t unit_type,
@@ -3012,189 +1774,46 @@ struct Renderer::Impl {
     void step_unit_themes();
     /// `CLevel::updateNPCIcons` over the
     /// placed units.
-    void update_npc_icons();
+    void update_npc_icons() override;
     /// `CGameUI::getUIIsInCinematic`, the
     /// part the port has.
-    bool ui_in_cinematic() const;
+    bool ui_in_cinematic() const override;
     /// Take a unit's theme particles down and forget its themes.
     void clear_unit_themes(UnitThemeState& state);
-    /// `GLOBALS.DAT`'s label colours (`core/item_label.h`), read with the item
-    /// figures.
-    tl::core::ItemLabelColours item_label_colours;
-    /// Level-local: `restart()` replaces `Impl`, so a dropped item does not survive leaving.
-    /// INVENTED: the original keeps its items in `CLevelState`; player drops have no field.
-    std::vector<DroppedWorldItem> dropped_items;
 
-    /// A `CBreakable` in the level: a barrel, an urn, a basket (core/breakable.h).
-    struct BreakableWorld {
-        std::string unit;  ///< its `NAME`
-        tl::core::BreakableData data;
-        tl::core::Breakable state;
-        Ogre::SceneNode* node = nullptr;
-        Ogre::Entity* entity = nullptr;
-        /// Its collision group, and the id the `Unit Spawner` that released it
-        /// knows it by.
-        int64_t id = 0;
-        bool has_collision = false;  ///< its collision model loaded (`+0x238`)
-        /// Its range and fade, and whether it is on the near item list.
-        tl::core::ItemPresence presence;
-        bool listed = true;
-    };
-    /// In `CLevel::addItem` order, newest first. Level-
-    /// local. INVENTED: no `CLevelState` field, so a restored level has none.
-    std::vector<BreakableWorld> breakables;
-    /// What the last item near list logged: listed, active, of all.
-    std::array<size_t, 3> item_near_logged{static_cast<size_t>(-1), 0, 0};
-    /// The level's items as `CLevel::getActiveUnitsAtPosition`
-    /// walks them (`+0x90`): the breakables still standing, at their nodes.
-    std::vector<tl::core::ActiveUnitCandidate> breakable_item_candidates() const;
-    /// Items a missile's area reached (`CMissile::doAOEDamage`,
-    /// `CItem::interact(nullptr)`), broken after the missiles step.
-    struct PendingItemInteract {
-        int64_t item = 0;
-        bool by_player = false;  ///< the breaker `interact` is handed
-    };
-    std::vector<PendingItemInteract> pending_item_interacts;
-    void flush_item_interacts();
-    /// Queue `item` for `flush_item_interacts`: true for a standing, unqueued breakable.
-    bool queue_item_interact(int64_t item, bool by_player = false);
-    /// The level's items as the machines get them (`set_level_items`), offered to the damage
-    /// shapes each frame (`CLevel::updateItems`).
-    tl::core::LevelScript::LevelItems level_items;
-    void step_breakable_shapes();
-    /// The standing breakable with this id, or null.
-    const BreakableWorld* standing_breakable(int64_t id) const;
-    /// Whether `unit` is made as a `CBreakable` (`CREATEAS: BREAKABLE` along `BASEFILE`;
-    /// `CResourceManager::createNewItem`).
-    bool is_breakable_unit(const std::string& unit);
-    bool non_selectable_prop(const std::string& unit);
-    std::map<std::string, bool> breakable_units;
-    /// `NONSELECTABLE` by prop name, once each (`non_selectable_prop()`).
-    std::map<std::string, bool> non_selectable_units;
-    /// `createUnit` for a breakable, then `CLevel::addItem(b, at, false)`:
-    /// `unitInit`, `setActiveInLevel(true)`,
-    /// then `settle`. False with no file or model.
-    bool place_breakable(const std::string& unit, const Ogre::Vector3& at,
-                         const Ogre::Quaternion& facing, int64_t id, const Ogre::Vector3* settle,
-                         const float* drawn_scale = nullptr);
-    /// `CBreakable::interact(CCharacter*)` on
-    /// `breakables[index]`, by the player (`by_player`) or by nobody.
-    bool break_breakable(size_t index, bool by_player);
-    void cast_prop_trap(const std::string& unit, const std::string& name, uint32_t level,
-                        const Ogre::Vector3& skill_at, const Ogre::Quaternion& facing,
-                        bool by_player);
     /// `CLevel::findItemWithinView` from the player: the
     /// first breakable within `max_angle` and `max_distance` in clear sight, or -1.
-    int breakable_within_view(float max_angle, float max_distance) const;
+    int breakable_within_view(float max_angle, float max_distance) const override;
 
     /// The point `CLevel::update` runs the items from: a
     /// scripted camera's, else the player's.
-    Ogre::Vector3 item_view_point() const;
-    tl::core::ItemActiveRangeInput item_range_input(const Ogre::Vector3& at, bool interactable,
-                                                    bool casts_shadows) const;
+    ogre::Vector3 item_view_point() const override;
     /// `Camera::isVisible` on the item's culling bounds (`+0x1c0`).
-    bool item_in_camera(Ogre::SceneNode* node, bool from_model = false) const;
+    bool item_in_camera(Ogre::SceneNode* node, bool from_model = false) const override;
     /// A step's changes drawn on the item's node.
     void draw_item_presence(Ogre::SceneNode* node, const tl::core::ItemPresence& p,
-                            const tl::core::ItemPresenceChange& change);
-    /// `CLevel::updateNearUnitList`'s item
-    /// half, on the characters' tick (`LevelScript::set_item_near_list`).
-    void item_near_list();
+                            const tl::core::ItemPresenceChange& change) override;
     /// `CLevel::updateItems` over the near list: each
     /// `update` (`CBreakable::update`, floor items,
     /// `CTriggerUnit::update`); out-of-range broken ones deleted.
-    void step_level_items(float delta);
+    // PORT: drawing, what the item code asks of the scene (renderer_items.cpp).
+    void view_restart_trigger_layout(int64_t node, const NodeMap* nodes) override;
+    Ogre::SceneNode* view_place_entity(Ogre::Entity* entity, const Ogre::Vector3& at,
+                                       const Ogre::Quaternion& turn) const;
+    void view_set_scale(Ogre::SceneNode* node, float scale) override;
+    void view_set_visible(const std::vector<Ogre::SceneNode*>& holders, bool on) override;
+    void view_destroy_entity(Ogre::Entity* entity) override;
+    ogre::Vector3 view_landed_size(Ogre::SceneNode* node, Ogre::Entity* entity) override;
+    std::string view_entity_mesh(const Ogre::Entity* entity) const override;
+    void view_hide_death_screen() override;
+    void view_show_minimap() override;
 
-    /// A `Unit Trigger`'s range and fade (a `CItem`), by instance key, made as `addItem`
-    /// makes one the first time the walk meets it.
-    struct TriggerPresence {
-        tl::core::ItemPresence presence;
-        bool listed = true;
-        bool interactable = false;  ///< `ISA 0x20`
-        bool shadows = true;        ///< `SHADOWS`
-    };
-    std::map<int64_t, TriggerPresence> trigger_presence;
-    /// The collision groups the range took out (`CTriggerUnit::update`), so it puts back
-    /// only what it took.
-    std::set<int64_t> trigger_range_off;
-    /// One `Unit Trigger` as the item walk sees it.
-    struct TriggerItem {
-        int64_t key = 0;
-        int machine = kLevelMachine;  ///< `kLevelMachine` or a `nested_scripts` index
-        int64_t node = 0;             ///< its `Unit Trigger` node in that machine
-        /// its prop's nodes (none for a bare collision model)
-        std::vector<Ogre::SceneNode*> nodes;
-        const NodeMap* node_map = nullptr;  ///< its machine's nodes
-        Ogre::Vector3 at = Ogre::Vector3::ZERO;
-        TriggerPresence* state = nullptr;
-    };
-    /// Every `Unit Trigger` of every machine of the level.
-    std::vector<TriggerItem> level_trigger_items();
-    /// `CTriggerUnit::update`'s collision rule on one: in while active, out of
-    /// range out (only while `COLLIDEABLE`, i.e. not made `Not Collidable`).
-    void trigger_range_collision(int64_t key, bool active);
-
-    /// A merchant: its inventory (`CCharacter +0x490`) and clock (`+0x388`,
-    /// `CCharacter::update`), by node (core/merchant.h).
-    struct MerchantState {
-        std::string unit;
-        tl::core::Inventory inventory = tl::core::make_merchant_inventory();
-        bool gambler = false;
-        float clock = 0.0f;
-    };
-    std::map<int64_t, MerchantState> merchants;
-    /// INVENTED: a `CItemSaveState` here has no affixes, sockets or rolled armour, so the
-    /// stock copies are kept by level (`dungeon:depth`) and node.
-    std::map<std::string, std::map<int64_t, MerchantState>> remembered_merchants;
-    /// `CCharacter::unitInit`'s Merchant branch for any
-    /// unstocked merchant, then every merchant's clock.
-    void step_merchants(float delta);
-    /// `generateMerchantInventory` into a
-    /// fresh merchant-shaped inventory for `node`.
-    void stock_merchant(MerchantState& state, int64_t node, const tl::core::UnitStats& stats);
-    /// The merchant as `core/merchant.h`'s stock roll reads it.
-    tl::core::MerchantCharacter merchant_character(MerchantState& state, int64_t node,
-                                                   const tl::core::UnitStats& stats);
-    /// Run `fn` with the stock roll's context (its pointers live only as long).
-    void with_merchant_stock_context(
-        const std::function<void(const tl::core::MerchantStockContext&)>& fn);
-    /// `CLevel::populateNewMerchantsInventory`, as
-    /// `CGameClient::restoreLevelState` ends.
-    void populate_new_merchants();
-    /// The merchant a vendor screen was opened on, by its unit name; null for
-    /// none.
-    MerchantState* merchant_named(const std::string& unit);
     /// The merchant whose screen is open.
     int64_t trading_with = 0;
     /// X on a vendor's screen: buy from the merchant's tray,
     /// sell from the bag.
     void trade_selected();
-    /// `CCharacter::applySaveState`'s
-    /// merchant half, for a merchant the level state brings back.
-    void restore_merchant(const tl::formats::CharacterSaveState& saved);
-    /// Placed characters already asked whether they are merchants.
-    std::set<int64_t> merchant_checked;
 
-    /// A Transmuter's own inventory (`CCharacter +0x490`), by node: the combine's slots 15-18
-    /// are its, and stay when the screen closes.
-    struct CombinerState {
-        std::string unit;
-        tl::core::Inventory inventory;
-    };
-    std::map<int64_t, CombinerState> combiners;
-    /// INVENTED, as `remembered_merchants`: the copies the level state cannot
-    /// carry, by level and node.
-    std::map<std::string, std::map<int64_t, CombinerState>> remembered_combiners;
-    /// The combiner whose screen is open.
-    int64_t combining_with = 0;
-    /// The Transmuter placed as `unit` (ISA 0x86); null for none.
-    CombinerState* combiner_named(const std::string& unit);
-    /// `CRecipes` (`media/recipes/`), read by `load_recipes()`.
-    tl::core::RecipeBook recipes;
-    bool recipes_loaded = false;
-    void load_recipes();
-    /// Y on a Transmuter's screen:.
-    void transmute_selected();
     /// A on the bag on an enchanter's or a shrine's screen;
     /// true when the press is the tray's own A instead (an unidentified item).
     bool enchant_selected();
@@ -3211,7 +1830,7 @@ struct Renderer::Impl {
     bool retirement_requested = false;
     /// A on a gem in the bag: the item-select
     /// dialog, for a player with a pet. Returns false when it did not open.
-    bool open_gem_socketing();
+    bool open_gem_socketing() override;
     /// The dialog's input (`CMessageItemSelectXenon::vfunc_2`); on closing the
     /// tray's poll sets the gem into the chosen item.
     void handle_item_select(const tl::core::InputState& in);
@@ -3234,8 +1853,6 @@ struct Renderer::Impl {
     void handle_pet_commands(const tl::core::InputState& in, const PetCommandEdges& edges);
     /// `vfunc_5` for the pet as it is now.
     void refresh_pet_commands();
-    /// What reads off the player's level.
-    tl::core::PetDepartureLevel pet_departure_level() const;
     bool pet_commands_stick_x_held = false;
     /// X on a Transmuter's or a stash's screen: bag to their slots, their
     /// tray back.
@@ -3249,112 +1866,26 @@ struct Renderer::Impl {
     /// page, which X moves into and out of; null on any other.
     tl::core::Inventory* housing_inventory_for(VendorScreen screen);
     tl::core::Inventory* housing_inventory_of(VendorScreen screen);
-    /// `CCharacter::applySaveState`'s inventory half for a
-    /// restored Transmuter.
-    void restore_combiner(const tl::formats::CharacterSaveState& saved);
-    /// `CBaseUnit::addToAvoidanceMap` / `removeFromAvoidanceMap`
-    /// for a breakable: radius + 0.4 on the grid.
-    void breakable_avoidance(BreakableWorld& b, bool add);
-    /// A breakable taken out of the level: its model, its collision, its place
-    /// on the map grid.
-    void remove_breakable(BreakableWorld& b);
 
-    void drop_item_near_player(const tl::core::ItemStats& item, int count);
-    /// `CLevel::addItem(item, at, true)` for a `CEquipment`:
-    /// grounded, then tossed (`CEquipment::drop`).
-    void drop_item(const tl::core::ItemStats& item, int count, const Ogre::Vector3& at);
-    /// A layout's `Item` node: `CItemDescriptor::CreateObject`
-    /// (`CEquipment::createNewEquipment`), then
-    /// `CItemDescriptor::descriptorSceneActivated`.
-    void place_layout_item(const tl::formats::CmpNode& node, const Ogre::Vector3& at);
-    /// `CLevel::addItem(gold, at, true)` for a `CItemGold`: `setActiveInLevel`
-    /// grounds it and its sparkle; the drop sound when `drop_sound`.
-    void place_gold(const tl::core::GoldPile& pile, const Ogre::Vector3& at,
-                    const tl::core::ItemStats* item = nullptr, bool drop_sound = true);
-    /// `CItem::snapToGround`: down from 100 to -100; a miss
-    /// retries at `randomOpenPosition(p, 4)`, 30 times.
-    Ogre::Vector3 snap_item_to_ground(const Ogre::Vector3& at);
-    /// `CCharacter::getItem`, the gold half,
-    /// for `dropped_items[index]`.
-    void take_gold(size_t index);
-    /// `CGameClient::autoPickupGold`.
-    void auto_pickup_gold();
-    /// The treasure at the end of `CCharacter::die`;
-    /// `attacker` as `hurt_unit` takes it.
-    void drop_death_loot(int64_t node, const std::string& unit, int64_t attacker);
-    void drop_death_loot_at(const Ogre::Vector3& at, int64_t node, const std::string& unit,
-                            int64_t attacker);
-    /// What the loot rolls hand core/item_roll.h: placement tests, `addUnit`, `createUnit`.
-    tl::core::LootPlacement loot_placement_at(const Ogre::Vector3& at);
-    tl::core::CreateLootUnit loot_unit_maker();
-    /// The killer or breaker as the loot roll reads it: `attacker` 0 is the
-    /// player, `LevelScript::kNoAttacker` nobody (null).
-    const tl::core::LootCharacter* loot_character(int64_t attacker, tl::core::LootCharacter& out);
-    /// Units a `Unit Spawner` released with `GIVE LOOT` clear (+0x703, +0x704).
-    std::set<int64_t> no_loot_units;
     /// The item's own mesh as an entity, its materials bound; null when it names none.
-    Ogre::Entity* create_item_entity(const tl::core::ItemStats& item);
-    /// An item at rest on the ground (`CLevel::addItem`, `CItem::snapToGround`): no toss.
-    void place_ground_item(const tl::core::ItemStats& item, int count, const Ogre::Vector3& at,
-                           const Ogre::Quaternion& orientation, const tl::core::QuestUnitTag& tag);
+    Ogre::Entity* create_item_entity(const tl::core::ItemStats& item) override;
 
-    /// The `Quest Item` and `Quest Boss` `Property Node`s, in the order
-    /// `CLevel::loadRoomLayout` (cases 12 and 13) adds them
-    /// to `CLevel +0x108` and `+0xf0`.
-    struct QuestMarker {
-        Ogre::Vector3 position;
-        Ogre::Quaternion orientation;
-        /// `CPropertyNode +0x114`: how many of `populate`'s NPCs stand on it.
-        int32_t taken = 0;
-    };
-    std::vector<QuestMarker> quest_item_markers;
-    std::vector<QuestMarker> quest_boss_markers;
-    /// What each monster placed for a quest carries (`CBaseUnit +0x170/+0x178`), by node.
-    std::map<int64_t, tl::core::QuestUnitTag> quest_unit_tags;
-    /// A character's own name (`CCharacter +0x4c0`) by node: a quest champion's
-    /// (`CQuestUnitData::spawnUnit`) or `UNIQUE_MONSTER_NAME`
-    /// (`createUnit`); shown over `DISPLAYNAME`.
-    std::map<int64_t, std::string> unit_names;
-    /// `CRandomNames` (`media/RANDOMNAMES.DAT`), read with the quests.
-    tl::core::RandomNames random_names;
-    /// `CQuestManager::populate` for the level just built.
-    void populate_quests();
-    /// `addCharacter`'s `dropToGround(4.0)` (`CQuestUnitData::createUnit`;
-    /// `spawnUnit`).
-    Ogre::Vector3 dropped_to_ground(const Ogre::Vector3& at) const;
-    void create_quest_unit(const tl::core::QuestObjective& objective,
-                           const tl::core::QuestUnitTag& tag, int64_t quest_guid);
-    /// `CQuestUnitData::spawnUnit` past its checks; the
-    /// character's node, or 0.
-    int64_t spawn_quest_unit(const tl::core::QuestObjective& objective,
-                             const tl::core::QuestUnitTag& tag, int64_t quest_guid,
-                             const Ogre::Vector3& at, const Ogre::Quaternion& facing);
     /// A unit as a quest event sees it (`questEventFire`'s third argument): its
     /// name, its `UNITTYPE` for `ISA`, where it stands and what it carries.
     tl::core::QuestEventUnit quest_event_unit(const std::string& name, const std::string& unittype,
                                               const Ogre::Vector3& at,
                                               const tl::core::QuestUnitTag& tag);
-    /// An item's `+0x170` / `+0x178` as a tag; empty for -1.
-    tl::core::QuestUnitTag quest_tag_of_item(const tl::core::ItemStats& item);
-    /// The `QUEST_GUID` of the quest a tag names, -1 for none.
-    int64_t quest_guid_of(const tl::core::QuestUnitTag& tag);
-    /// What the bags tell the quest log: `CEquipment::addedToInventory`
-    /// raises event 0 for the player's and the pet's bags,
-    /// `removedFromInventory` event 5 from any (`housing_item_events`).
-    tl::core::InventoryItemEvents bag_item_events;
-    tl::core::InventoryItemEvents housing_item_events;
-    void wire_bag_item_events();
-    void bag_item_added(tl::core::ItemStats& item);
-    void bag_item_removed(const tl::core::ItemStats& item);
+    void bag_item_added(tl::core::ItemStats& item) override;
+    void bag_item_removed(const tl::core::ItemStats& item) override;
     /// Where an event's item is: where it lay (`bag_event_at`), else the player.
     Ogre::Vector3 bag_event_position() const;
     bool bag_event_at_set = false;
     Ogre::Vector3 bag_event_at = Ogre::Vector3::ZERO;
     /// Carry out what completed quests take back (`QuestLog::take_item_removals`):
     /// the player's bag, then the pet's.
-    void apply_quest_item_removals();
+    void apply_quest_item_removals() override;
     /// A pickup or a kill reported to the quests, and the banner for each one it finished.
-    void quest_event(const std::vector<const tl::core::QuestDefinition*>& finished);
+    void quest_event(const std::vector<const tl::core::QuestDefinition*>& finished) override;
     /// `CCharacter::getItemAI`'s targeting half: which
     /// `dropped_items` entry is in reach; sets `item_targeted`/`item_highlighted` only.
     bool update_item_selection(bool active);
@@ -3394,7 +1925,7 @@ struct Renderer::Impl {
     /// A `SPAWNPARTICLE` key fired: `CCharacter::updateAnimation`,
     /// keyframe types 4 and 5.
     void fire_particle_trigger(const std::string& animation, size_t index,
-                               const tl::core::AnimationTag& tag);
+                               const tl::core::AnimationTag& tag) override;
     /// Keep every attached trigger's node on its bone: `CCharacter::
     /// updateBonePositions`.
     void update_particle_triggers();
@@ -3460,13 +1991,6 @@ struct Renderer::Impl {
     DrawnTrails player_trails;
     /// A placed unit's, by its entity; made by its first trail key.
     std::map<Ogre::Entity*, DrawnTrails> unit_trails;
-    /// What `equip_unit_items` hung in a placed unit's hands, slots 0 and 1:
-    /// the item's entity and its `UNITTYPE`.
-    struct UnitHeldItems {
-        Ogre::Entity* held[2] = {nullptr, nullptr};
-        std::string unittype[2];
-    };
-    std::map<Ogre::Entity*, UnitHeldItems> unit_held_items;
 
     /// The character as `CCharacter`'s trail code reads it.
     tl::core::TrailCharacter player_trail_character();
@@ -3492,166 +2016,39 @@ struct Renderer::Impl {
     /// `entity`'s, or every one whose unit has left the scene when null.
     void clear_unit_weapon_elements(Ogre::Entity* entity);
 
-    /// Start a swing, if the character is not already in one.
-    bool begin_swing(int64_t target);
-
-    /// Advance the player's swing and land it when the authored frame passes.
-    void step_swing(float delta);
+    // PORT: drawing, what the swing, a death and a breakable ask of the scene
+    // (renderer_combat.cpp).
+    float view_animation_length(Ogre::Entity* entity, const std::string& name) const override;
+    void player_weapon_trail_key(const tl::core::AnimationTag& tag) override;
+    void player_shoot_tracer(const tl::core::Vec3& from, const tl::core::Vec3& to) override;
+    void player_hide_hand_trails() override;
+    bool view_unit_falls(int64_t node) override;
+    bool view_ready() const override;
+    void view_cast_shadows(Ogre::Entity* entity, bool on) override;
+    void view_add_node_collision(Ogre::SceneNode* node, const std::string& path,
+                                 int64_t group) override;
 
     /// Advance every hunting monster's swing and land those.
     void step_monster_swings(float delta);
 
-    /// The player's blow on `target`: `rollAttack`, held weapon or bare-handed; sets
-    /// `last_blow_critical`. `damage_scale` and `soak_scale` are `rollAttack`'s two floats.
-    float player_blow(int64_t target, float damage_scale = 1.0f, float soak_scale = 1.0f);
-    /// `player_blow` with no weapon in use: the character's own attack.
-    float player_unarmed_blow(int64_t target, float damage_scale, float soak_scale);
-    /// The two blows' shared half: the defender, the roll, the interrupt and
-    /// `applyDamageEffects`.
-    float player_strike(int64_t target, const tl::core::Strike& strike);
-    /// What `CCharacter::rollAttack` puts on the one struck
-    /// after `applyDamageEffects`: `KNOCKBACK`, `DEGRADEARMOR` and the attacker's
-    /// `TRANSFER` effects. Null `target_machine` and `target_node` 0: the player. `from`/`to`:
-    /// the knock-back's direction.
-    void roll_attack_effects(const tl::core::AttackEffectSources& sources, float knock_back,
-                             float degrade, const tl::core::Vec3& from, const tl::core::Vec3& to,
-                             tl::core::LevelScript* target_machine, int64_t target_node,
-                             const tl::core::EffectSource& attacker);
-    /// The same for a placed character's blow: its manager, the pet's bag for the player's
-    /// pet, and its `KNOCK BACK` and `DEGRADE ARMOR`.
-    void unit_attack_effects(int64_t attacker_node, tl::core::LevelScript* target_machine,
-                             int64_t target_node);
-    /// A placed character as `CCharacter::isEffectValidForUnit`
-    /// reads it.
-    tl::core::ItemUseTarget unit_use_target(tl::core::LevelScript* machine, int64_t node);
-    /// `CCharacter::getDmgToReflectFromMissile` of the player (0), the pet,
-    /// or a placed character: the share sent back.
-    float missile_reflect_share(int64_t unit);
-    /// `CCharacter::performUnknownSkill(CSkill*)` on the
-    /// player, for a used item's skill.
-    void perform_unknown_skill(const std::string& name, uint32_t level);
-    /// `applyInstantEffect`'s `WARP` on the player: `warpLevels(dungeon, 0,
-    /// absolute)`, carried out as a Warper's is.
-    void warp_by_effect(const std::string& dungeon, int32_t absolute);
-    /// A skill event's caster's level (X360 `+0xf0`) for `CEffect::setOwner`'s
-    /// `USEOWNERLEVEL`: the placed character's, or the player's for null; empty if unrun.
-    std::optional<int32_t> event_caster_level(tl::core::LevelScript* machine, int64_t node) const {
-        if (machine == nullptr) return player_character.level();
-        int level = 0;
-        if (!machine->unit_level(node, level)) return std::nullopt;
-        return level;
-    }
-    bool last_blow_critical = false;
-    /// The last blow's direction (from the player to the target, turned by
-    /// `rollAttack`'s jitter), knock-back force and critical, for `die`.
-    tl::core::KillingBlow last_killing_blow;
-    /// `rollAttack`'s glancing flag (`applyDamage`'s 7th argument) and `blocked()`.
-    bool last_blow_glancing = false;
-    bool last_blow_blocked = false;
-    /// `rollAttack` interrupted the target of the last blow.
-    bool last_blow_interrupts = false;
-
-    /// How much life a placed unit has, creating the entry the first time.
-    Health& health_of(int64_t node, const std::string& unit);
-
-    /// Take `amount` off a placed unit, killing it if that empties it. `owner`: its machine
-    /// if known. `blow`: what `applyDamage` hands `die`. `struck`: `applyDamage`'s 8th
-    /// argument, rolling `CAST SKILL ON STRUCK` (`LevelScript::damage_unit`).
-    void hurt_unit(int64_t node, const std::string& unit, float amount, bool is_crit = false,
-                   int64_t attacker = 0, tl::core::LevelScript* owner = nullptr,
-                   const tl::core::KillingBlow* blow = nullptr, bool struck = false);
-    /// The machine whose characters include `node` (the level's own first).
-    tl::core::LevelScript* script_owning(int64_t node);
     /// A unit's animations in its manifest's order with their lengths; see
     /// `LevelScript::set_animation_catalog`.
-    std::vector<std::pair<std::string, float>> animation_catalog(const std::string& unit);
+    std::vector<std::pair<std::string, float>> animation_catalog(const std::string& unit) override;
     std::map<std::string, std::vector<std::pair<std::string, float>>> animation_catalogs;
 
-    /// A placed unit's life has run out: fall over, stop hunting, stop being hunted.
-    void kill_unit(int64_t node, const std::string& unit, bool fall = true, int64_t attacker = 0);
-    /// A floor-rolled level (`unit_spawn_level`) handed to the machine's `setLevel`.
-    void apply_spawn_level(int64_t node) {
-        const auto found = unit_spawn_level.find(node);
-        if (found != unit_spawn_level.end() && found->second.level > 0) {
-            script.set_unit_level(node, found->second.level);
-        }
-    }
-
-    /// Take `amount` off the player. `attacker` (`applyDamage`'s 6th argument, `kNoAttacker`
-    /// none) is answered by reflection; `struck` rolls `CAST SKILL ON STRUCK` first.
-    /// `shown`: add to the number over the character.
-    void hurt_player(float amount, const std::string& from,
-                     int64_t attacker = tl::core::LevelScript::kNoAttacker, bool struck = false,
-                     bool shown = true);
-    /// `CCharacter::applyDamage`, its tail: a
-    /// living victim answers with `DAMAGE REFLECTION` (0x30) plus `PERCENT DAMAGE REFLECTED`
-    /// (0x20), through the attacker's armour. Node 0 is the player.
-    void reflect_damage(const tl::core::CharacterEffects& victim, int64_t victim_node,
-                        const std::string& victim_name, float amount, int64_t attacker);
-    int reflect_depth = 0;
-    /// `CCharacter::applyDamageEffects` on a placed unit or
-    /// the player (null): the elemental part may leave a `DAMAGEEFFECT*` affix.
-    void apply_damage_status(tl::core::LevelScript* machine, int64_t node, float amount,
-                             const std::array<int, tl::core::kDamageTypeCount>& by_type, int parts,
-                             int first_type, bool forced, int attacker_level,
-                             const tl::core::EffectSource& attacker);
-    /// The character whose skill event is applying effects right now (an
-    /// effect's `+0x48`): a placed unit, or with a null machine the player.
-    tl::core::LevelScript* instant_caster_machine = nullptr;
-    int64_t instant_caster_node = 0;
-    /// The direction that event hands `applyAffixesAndEffects`
-    /// for `CAffix::setDirection`; unset is `UNIT_Z`.
-    bool effect_direction_set = false;
-    std::array<float, 3> effect_direction{};
-    /// `CCharacter::applyInstantEffect`, case
-    /// `DAMAGE`, on the player.
-    void player_instant_damage(const tl::core::Effect& effect);
-    /// What a blow meets on the player: `AC()`, `maxHP()`, `getBlockChance()`
-    /// and `damageDefense(type)`.
-    tl::core::Defender player_defender();
-    /// `CCharacter::modifyDamage` when a `SHIELD BUFFER` took the hit:
-    /// `Absorbed!` over the character and `SHIELDBLOCK` (slot 7).
-    void show_absorbed(const Ogre::Vector3& at, const tl::core::UnitStats& stats);
-    /// The same over a placed unit, by node.
-    void show_unit_absorbed(tl::core::LevelScript* machine, int64_t node);
-    /// `attacker`: whoever dealt the last blow (`die`'s 2nd argument), for the
-    /// `CAST SKILL ON DEATH` procs; `kNoAttacker` for none.
-    void kill_player(int64_t attacker = tl::core::LevelScript::kNoAttacker);
-    bool save_character(const std::string& path, bool force);
+    bool save_character(const std::string& path, bool force) override;
     void step_player_death(float delta);
     void open_death_screen();
     void refresh_death_screen();
-    void choose_resurrection(tl::core::ResurrectChoice choice);
-    void level_resetting_player(tl::core::ResurrectChoice choice);
-
-    /// The nearest hostile placed unit within `reach` of the character, or 0.
-    int64_t hostile_in_reach(float reach) const;
 
     /// How long the last load_layout() took, in seconds.
     float load_seconds = 0.0f;
 
-    /// Layout files being loaded, by path, so a self-reference cannot recurse forever.
-    std::set<std::string> layouts_in_progress;
-
-    /// `--rng-trace`: where every seeding and draw of `g_Rand` (`core::game_random()`) goes.
-    std::FILE* rng_trace_file = nullptr;
     tl::core::RandomTrace rng_trace;
     /// Takes the trace off `g_Rand`, which outlives this renderer.
     struct RngTraceGuard {
         ~RngTraceGuard() { tl::core::game_random().set_trace(nullptr); }
     } rng_trace_guard;
-    /// `CResourceManager+0x42` (X360 `+0x26`): set by `CLevel::loadRoomLayout` around each
-    /// room piece, making `CLayout::loadLayoutFile` reseed; clear at first.
-    ///
-    bool layout_seeding = false;
-    int32_t layout_level_seed = 0;  ///< `CResourceManager::getCurrentLevelSeed()`
-    /// `loadLayoutFile`'s static `mRecursiveFix` count (layouts being loaded)
-    /// and `iChildCount`, reset whenever an outermost load starts.
-    uint32_t layout_stack_depth = 0;
-    uint32_t layout_child_count = 0;
-
-    /// Wardrobe pieces worn on the subject, animated with the body (Renderer::equip()).
-    std::vector<Ogre::Entity*> equipment;
 
     /// `CWardrobe` (core/wardrobe.h): the class's outfit (`wear_base_outfit`), each slot's
     /// entity, and what the slots last held; `wardrobe_ready` once the outfit is read.
@@ -3691,6 +2088,7 @@ struct Renderer::Impl {
         /// The camera's distance from the character, as a share of the
         /// backdrop's own (1 = where the menu put it).
         float zoom = 1.0f;
+        std::string dress_class = "Alchemist";  ///< the class it dresses
     };
     WardrobeEditor wardrobe_editor;
 
@@ -3752,35 +2150,16 @@ struct Renderer::Impl {
     /// `CWardrobe::update(CInventory*)` for the player: five
     /// slots from outfit and worn items, the skin composited, each slot's submeshes; nothing
     /// when the slots are unchanged, unless `force`.
-    void dress_player(bool force = false);
+    void dress_player(bool force = false) override;
 
     /// Archive paths of the animation skeletons linked so far, for pieces equipped later.
     std::vector<std::string> linked_paths;
-
-    /// The subject and everything worn on it (subject may be null before show_mesh()).
-    std::vector<Ogre::Entity*> animated() const {
-        std::vector<Ogre::Entity*> all;
-        if (subject) all.push_back(subject);
-        all.insert(all.end(), equipment.begin(), equipment.end());
-        return all;
-    }
 
     /// Re-parse the subject's material scripts even if cached: set only around a creation
     /// class swap, as every class declares `Material_#1/<slot>` (g_parse_counts).
     bool force_subject_materials = false;
 
     // -------------------------------------------------------------- the pet --
-
-    /// The player's animal (core/pet.h); its behaviour is the level script's (a character of
-    /// the level's machine). This side owns the model, the voice lines and the map icon.
-    tl::core::Pet pet;
-
-    Ogre::Entity* pet_entity = nullptr;
-    Ogre::SceneNode* pet_node = nullptr;
-    std::string pet_mesh;
-
-    /// The pet's id in the level script (`kSpawnedNodeBase`), new with each model.
-    int64_t pet_node_id = 0;
 
     /// Last frame's town flag and health, for the hide and the low-health line.
     bool pet_was_in_town = false;
@@ -3793,22 +2172,14 @@ struct Renderer::Impl {
     /// when the unit or mesh is missing.
     bool spawn_pet(const std::string& unit);
 
-    /// The learned spells onto the script's pet (`learnSpell`).
-    void give_pet_spells_to_script();
-
     /// Stand the animal beside the character, wherever it now is (`place_player_at()`).
-    void place_pet_beside_player();
-
-    /// Destroy the model and the script's character, for another animal or a level left.
-    void destroy_pet_entity();
+    void place_pet_beside_player() override;
 
     /// Take a unit `spawn_unit()` placed out of every list and destroy its model, held items,
     /// node and particles; `id` from `spawn_unit()` (0: unknown). The script is not told.
-    void destroy_spawned_unit(Ogre::Entity* entity, int64_t id);
+    void destroy_spawned_unit(Ogre::Entity* entity, int64_t id) override;
     /// Every per-entity list `place_mesh()` and `spawn_unit()` used, emptied of the entity.
     void forget_unit_entity(Ogre::Entity* entity);
-    /// The archive path of a unit's mesh (`UnitStats::mesh`); empty for none.
-    std::string unit_mesh_path(const std::string& unit);
     /// The scene's half of `CCharacter::convertCharacter`:
     /// `deleteUnitSpecificData`, `unitInit`'s model for
     /// `unit` on the same node, then the `TRANSFORM` particle.
@@ -3825,18 +2196,6 @@ struct Renderer::Impl {
 
     /// Play the trigger tags every animated unit crossed this frame.
     void step_unit_sounds();
-
-    /// Send the pet shopping (`CCharacter::sendToTown`); false when away or not allowed.
-    bool send_pet_to_town();
-
-    /// Copy what the level script says about the pet into `pet`.
-    void sync_pet_mirror();
-
-    /// `pet`'s stance onto the script's character, and its target dropped.
-    void apply_pet_stance();
-
-    /// Whether this level is the town, where the pet has nowhere to go.
-    bool in_town() const;
 
     /// The pets that stood on the backdrop's `Point of Interest`, by unit name: kept hidden,
     /// not destroyed, as `scene_units`, `scene_animations` and `spawned` hold them.
@@ -3878,9 +2237,9 @@ struct Renderer::Impl {
     float preview_idle_time = 0.0f;
 
     void init_character_preview();
-    void update_character_preview(float delta);
+    void update_character_preview(float delta) override;
     void shutdown_character_preview();
-    void update_menu();
+    void update_menu() override;
     /// The Stats column (`CStatsXenon`): pending points, the selection.
     tl::core::StatsPage stats_page;
     /// `CStatsMenuXenon::vfunc_7` (`setOpen`): opens with the Stats tab,
@@ -3890,146 +2249,34 @@ struct Renderer::Impl {
     bool mount_resources();
     void setup_scene();
     void advance(float delta);
+    using World::place_layout;
+    // PORT: place_layout in OGRE's maths, for the renderer's callers.
     bool place_layout(const std::string& reference, const Ogre::Vector3& origin,
-                      const Ogre::Quaternion& basis, int depth, uint32_t load_seed_arg = 0);
+                      const Ogre::Quaternion& basis, int depth, uint32_t load_seed_arg = 0) {
+        return place_layout(reference, from_ogre(origin), from_ogre(basis), depth, load_seed_arg);
+    }
 
-    /// Build and place one procedurally-generated dungeon floor.
-    bool place_dungeon_floor(const std::string& dungeon_name, int floor_number);
-    /// `CLevel::populate(true)`: formations, counts, the five
-    /// unit phases and gold. `placed_pieces` takes the formations placed.
-    void populate_level(const tl::core::LevelTemplate& level_template, int level,
-                        std::vector<std::pair<std::string, Ogre::Vector3>>& placed_pieces);
-    /// One unit phase of `CLevel::populate`: monsters..
-    /// props, sections picked on `g_Rand`, each a
-    /// `populateSectionOfLevel`. `owner`: the characters' list; `label`: the log's word.
-    struct PopulatePhase {
-        int64_t owner = 0;
-        const char* label = "";
-        bool champion = false;      ///< `populateSectionOfLevel`'s fourth argument
-        bool markers = false;       ///< its fifth: the NPCs stand on `CLevel +0xf0`
-        bool empty_counts = false;  ///< an empty roll counts as one: all but the monsters
-        bool props = false;         ///< the props phase, for the log
-    };
-    int populate_units(const std::string& spawn_class, uint32_t wanted, int level,
-                       tl::core::Randomizer& sections, const PopulatePhase& phase);
-    tl::core::Vec3 populate_open_position(const tl::core::Vec3& at, float radius);
-    /// A unit's `MINION_SPAWNCLASS` rolled on `g_Rand` as the level takes it in.
-    std::vector<std::string> roll_unit_minions(const std::string& unit, int level);
-    /// ... and each of them made beside `master`, added to the level under
-    /// `owner` and made its pet.
-    void place_unit_minions(int64_t master, int64_t owner, const std::vector<std::string>& minions);
-    /// Both, for a character already in the level.
-    void spawn_unit_minions(int64_t master, int64_t owner);
-    std::vector<tl::core::FormationChoice> formation_choices(const std::string& table);
-    /// A `CREATEAS: TRIGGER` prop made outside a layout (`populate`'s chests:
-    /// `CResourceManager::createUnit`, `CLevel::addItem`),
-    /// as a one-node layout so it acts as a placed one. False for a unit
-    /// that is not a trigger prop. `scale`: what making it drew (`CBaseUnit::unitInit`).
-    bool place_populated_trigger(const std::string& unit, const Ogre::Vector3& at,
-                                 const Ogre::Quaternion& facing, int64_t id, float scale = 1.0f);
-    struct PopulatedTrigger {
-        std::string unit;
-        Ogre::Quaternion facing = Ogre::Quaternion::IDENTITY;
-    };
-    /// The trigger props `place_populated_trigger` made, by node (stored as created).
-    std::map<int64_t, PopulatedTrigger> populated_triggers;
-    /// The scale `populate` drew for a trigger prop, by its coming node; `place_layout`
-    /// draws any other.
-    std::map<int64_t, float> made_trigger_scale;
-    /// `CGameClient::loadLevel`'s quest pass for a dungeon depth.
-    void apply_floor_quests(const tl::core::DungeonDef& def, uint32_t depth);
-
-    /// Find a `Property Node` of `wanted_type` (`"exit"` or `"entrance"`, without case) in a
-    /// placed chunk's `.cmp` (`EXIT_NODE.LAYOUT` / `ENTRANCE_NODE.LAYOUT` via a `Layout Link`).
-    /// What else the marker's layout says: its flattened forward (`CLevel +0x164`) and the
-    /// `Warper` beside it.
-    struct ChunkMarkerExtra {
-        Ogre::Vector3 forward = Ogre::Vector3::UNIT_Z;
-        bool has_warper = false;
-        Ogre::Vector3 warper_position = Ogre::Vector3::ZERO;
-        Ogre::Vector3 warper_forward = Ogre::Vector3::UNIT_Z;
-    };
-    bool find_chunk_marker(const std::string& chunk_cmp_path, const Ogre::Vector3& chunk_origin,
-                           const std::string& wanted_type, Ogre::Vector3& world_position,
-                           float& radius, ChunkMarkerExtra* extra = nullptr);
-
-    void load_tileset();
-    /// `group` tags the triangles so they can be switched off (`CollisionWorld::set_group()`);
-    /// zero is the level's own. `piece_at`: the owning `Room Piece`'s position, making it a
-    /// `CLevel::populate` section (`population_sections`).
+    using World::add_collision_mesh;
+    // PORT: add_collision_mesh with OGRE's matrix, for the renderer's callers.
     void add_collision_mesh(const std::string& path, const Ogre::Matrix4& to_world,
-                            int64_t group = 0, const Ogre::Vector3* piece_at = nullptr);
-
-    /// A collision mesh as add_collision_mesh() folds it in, in its own space, read once per
-    /// level; each placement transforms its points with the same `Matrix4 * Vector3`.
-    /// Defaults: `CCollisionModel::CCollisionModel`.
-    struct CollisionModel {
-        enum class State { Loaded, Threw, Missing } state = State::Missing;
-        /// The load's exception, repeated for every placement as it was before.
-        std::string error;
-        struct Submesh {
-            /// `tl::core::collision_material` of the submesh's name and index.
-            uint32_t material = 0;
-            std::vector<Ogre::Vector3> points;
-            /// Three per triangle, each already checked against `points`.
-            std::vector<uint32_t> corners;
-        };
-        std::vector<Submesh> submeshes;
-        bool has_bounds = false;
-        tl::core::Vec3 low, high;
-    };
-    /// By the path add_collision_mesh() was handed; per level.
-    std::unordered_map<std::string, CollisionModel> collision_models;
-    const CollisionModel& collision_model(const std::string& path);
-
-    /// A layout file as parse_cmp() reads it, once per level. Null when it does not read; a
-    /// parse failure is kept (`ok` false). By pointer, so a nested placement cannot move a
-    /// layout its parent is walking.
-    std::unordered_map<std::string, std::unique_ptr<const tl::formats::CmpScene>> layout_files;
-    const tl::formats::CmpScene* layout_file(const std::string& path);
-
-    /// How long a `SOUND` definition plays, in seconds; 0 when it names nothing.
-    float sound_length(const std::string& name);
+                            int64_t group = 0) {
+        ogre::Matrix4 m;
+        for (size_t r = 0; r < 4; ++r)
+            for (size_t c = 0; c < 4; ++c) m[r][c] = to_world[r][c];
+        add_collision_mesh(path, m, group, nullptr);
+    }
 
     /// `CGameUI::addTextEvent`: nothing with "Show Damage
     /// Info" off or out of the camera's sight.
-    void add_text_event(const tl::core::TextEvent& event);
-    /// One of the combat and loot lines over a unit standing at `unit_at`.
-    void add_combat_text(tl::core::CombatText what, const Ogre::Vector3& unit_at, int amount = 0);
-    /// Where a unit of the level stands; false when nothing draws it.
-    bool unit_node_position(int64_t node, Ogre::Vector3& at);
+    void add_text_event(const tl::core::TextEvent& event) override;
     /// One of a character's own particles (`CCharacter +0x4a8`) put at `at`
     /// and started. Nothing where the slot is null.
     void start_character_particle(const tl::core::UnitStats& unit, int slot,
                                   const Ogre::Vector3& at);
-    /// A unit as `CSkillManager::getPositionForSkill` reads
-    /// one: centre, radius, facing. A null machine is the player.
-    bool skill_position_unit(tl::core::LevelScript* machine, int64_t node,
-                             tl::core::SkillPositionUnit& out);
-    /// `CCharacter::castSkill`: the
-    /// point a unit's position skill is cast at, into `unit_cast_caster`.
-    void aim_unit_position_skill(tl::core::LevelScript& machine, int64_t node,
-                                 const tl::core::KnownSkill& skill);
     /// `CEffect::playFX`: each asking effect's `PARTICLE_FX` 0.1 above `centre`,
     /// started. `who` is for the log.
     void play_effect_fx(tl::core::EffectManager& effects, const Ogre::Vector3& centre,
                         const std::string& who);
-    /// `CCharacter::playHitParticle` on the
-    /// unit struck.
-    void play_hit_particle(const tl::core::UnitStats& victim, const Ogre::Vector3& from,
-                           const Ogre::Vector3& at);
-    /// `CCharacter::playStrikeParticle` of
-    /// the attacker; `radius` is the struck unit's.
-    void play_strike_particle(const tl::core::UnitStats& attacker, const Ogre::Vector3& from,
-                              const Ogre::Vector3& at, float radius, bool critical, bool blocked);
-    /// `CCharacter::die`: the particle at the body.
-    void play_death_particle(const tl::core::UnitStats& unit, const Ogre::Vector3& at);
-    /// What `rollAttack` shows of the player's blow besides
-    /// the damage. `damage` is what `applyDamage` was handed.
-    void show_player_blow(int64_t target, const std::string& unit, float damage);
-    /// `CCharacter::awardFame` for the
-    /// player, with its text.
-    bool award_player_fame(int amount);
     void step_floaties(float delta);
     void step_pending_talk();
 
@@ -4054,100 +2301,32 @@ struct Renderer::Impl {
     bool selected_unit(std::string& unit, bool& hostile, int64_t& node,
                        Ogre::Entity*& picked_entity);
 
-    /// Whether this entity is still a placed or spawned unit (the highlight's raw pointer).
-    bool entity_still_placed(const Ogre::Entity* entity) const;
-
     /// Run that pick for this frame, remember it and log it when it changes.
     /// `active` false clears it.
     bool update_pad_selection(bool active);
 
     /// Where a placed unit stands, by lower-cased substring (`ratlin`).
     bool unit_position(const std::string& name, Ogre::Vector3& at, std::string& found) const;
-    /// The unit itself, by the same match.
-    Ogre::Entity* find_unit_entity(const std::string& name, std::string& found) const;
 
-    /// Block or unblock one `Path Node Occupation` region on the nav grid (nothing for
-    /// another node). `nodes`: the switching machine's map. `live`: also clear characters off
-    /// the cells (`clear_path_blocker_area`).
-    void apply_path_blocker(int64_t node_id, bool on, const NodeMap* nodes = nullptr,
-                            bool live = false);
-    /// `CPropertyNode::killOrMoveBaseUnits()` over every
-    /// machine: a box `width` by `length` about `centre`.
-    void clear_path_blocker_area(const PathBlocker& b);
-    bool path_blocker_of(const tl::core::LevelScript::NodeRecord& n, PathBlocker& b) const;
-    bool path_blocker_of(const tl::formats::CmpNode& node, PathBlocker& b) const;
-    size_t set_path_blocker_cells(const PathBlocker& b, bool on);
-    /// Every blocker that is on taken off the map (a level reset).
-    void lift_path_blockers();
-
-    /// Apply every enabled pathing blocker the layout places.
-    void apply_path_blockers(const tl::formats::CmpScene& layout, const std::set<int64_t>& gated);
-
-    /// `CBaseUnit::addToAvoidanceMap` for every
-    /// `ISA(INTERACTABLE)` `Unit Trigger` placed (`door_trigger_nodes`, drained): its collision
-    /// model into the map grid; recorded in `door_avoidance_added` for `TriggerState`.
-    void register_door_avoidance();
-
-    /// Load the authored numbers of every unit this layout places.
-    void load_unit_stats(const tl::formats::CmpScene& layout, const std::set<int64_t>& gated);
-
-    /// Read one unit's authored numbers into the book; false when nothing is called that.
-    bool index_unit(const std::string& name);
-
-    /// This unit's authored numbers, or the defaults when nothing loaded them.
-    tl::core::UnitStats stats_for_unit(const std::string& unit) const {
-        if (const tl::core::UnitStats* found = unit_book.find(unit)) return *found;
-        return tl::core::UnitStats{};
-    }
-    /// `CCharacter::alignment()` for a placed character:
-    /// its machine's `+0x338` (`setAlignment`), else the data's.
-    tl::core::UnitStats::Alignment unit_side(int64_t node, const tl::core::UnitStats& stats) const;
-    /// `CCharacter::setAlignment`: red outline and highlight for a hostile
-    /// (`+0x280` 2 or 4) unless a mimic (`ISA 0xa7`).
-    bool outline_hostile(const tl::core::UnitStats& stats) const {
-        return stats.hostile() && !unit_types.isa(stats.unittype, tl::core::unit_type::kMimic);
-    }
-    /// A character whose `+0x640` master is the player, in any machine.
-    bool node_is_player_pet(int64_t node) const;
-    // PORT: whether a unit is on the hostile side (`unit_side`).
-    bool unit_hostile(int64_t node, const tl::core::UnitStats& stats) const {
-        return unit_side(node, stats) == tl::core::UnitStats::Alignment::Hostile;
-    }
-
-    /// Index every monster unit by its `NAME`, once.
-    void ensure_monster_index();
-
-    /// Resolve a `Unit Spawner`'s `RESOURCE` to a unit name (a unit, or a `Spawn Class` table
-    /// rolled on `g_Rand`); empty when it cannot.
-    std::string resolve_spawn_resource(const std::string& group, const std::string& resource,
-                                       int depth = 0, int32_t level = 0, uint32_t flags = 0);
-
-    /// The spawn tables a roll reads and its context, read on first use.
-    struct SpawnTables {
-        std::map<std::string, tl::core::SpawnClass> classes;
-        std::map<std::string, tl::core::SpawnUnitData> units;
-        tl::core::SpawnContext context;
-    };
-    /// Fill `tables.context`. `items_by_type` backs a `UNITTYPE` pick with the item index
-    /// (`CUnitResourceList::getDataGroupsByUnitType`).
-    void build_spawn_context(SpawnTables& tables, bool items_by_type);
-    /// The spawn class whose `NAME` is `name` (`spawn_class_paths`), parsed
-    /// against `context`; empty when there is none.
-    std::optional<tl::core::SpawnClass> load_spawn_class(const std::string& name,
-                                                         const tl::core::SpawnContext& context);
-
-    /// The spawn tables the drops roll (`drop_death_loot`), kept for the level.
-    SpawnTables loot_tables;
-    bool loot_tables_built = false;
+    bool path_blocker_of(const tl::core::LevelScript::NodeRecord& n, PathBlocker& b) const override;
+    bool path_blocker_of(const tl::formats::CmpNode& node, PathBlocker& b) const override;
 
     /// Put one unit into the scene at a point, remembered under `owner`; null when the unit or
     /// its mesh is missing. `level`: the rolled monster level (0: none, `character_level`).
     /// `champion`: resolved through `CHAMPIONSPAWNCLASS`, given `CCharacter::makeChampion`'s
     /// stats (`apply_champion_curves()`).
+    using World::spawn_unit;
+    // PORT: spawn_unit in OGRE's maths, for the renderer's callers.
     Ogre::Entity* spawn_unit(const std::string& unit, const Ogre::Vector3& at, int64_t owner,
                              int level = 0, bool champion = false, bool spawn_anim = false,
-                             const Ogre::Quaternion& facing = Ogre::Quaternion::IDENTITY,
-                             float scale = 0.0f);
+                             const Ogre::Quaternion& facing = Ogre::Quaternion::IDENTITY) {
+        return World::spawn_unit(unit, from_ogre(at), owner, level, champion, spawn_anim,
+                                 from_ogre(facing));
+    }
+    Ogre::Entity* view_spawn_unit_model(const std::string& unit, const std::string& mesh_path,
+                                        int64_t id, const ogre::Vector3& at,
+                                        const ogre::Quaternion& facing, float placed_scale,
+                                        bool spawn_anim) override;
     /// The node of a unit the script made takes its drawn scale (`LevelScript::unit_scale`).
     void apply_unit_scale(int64_t node);
 
@@ -4198,120 +2377,14 @@ struct Renderer::Impl {
     void spawner_input(const tl::core::ScriptEvent& event);
     /// `CUnitSpawnerDescriptor::update` for every machine's spawners.
     void step_spawners(float delta);
-    /// The nodes a machine's events act on.
-    NodeMap* nodes_of(tl::core::LevelScript* machine);
-    /// A unit a spawner released: which spawner, for its `unitStateChange`.
-    struct SpawnerUnit {
-        tl::core::LevelScript* machine = nullptr;
-        int64_t spawner = 0;
-    };
-    std::map<int64_t, SpawnerUnit> spawner_units;
-    /// A `Particle` spawner's layouts (`CUnitSpawner +0x1d0`), by spawner and index.
-    std::map<int64_t, std::map<uint32_t, std::vector<Ogre::SceneNode*>>> spawner_particles;
-    /// Units released with `GIVE XP` clear (`+0x454` = 0).
-    std::set<int64_t> no_xp_units;
     /// `CUnitSpawner::unitStateChange` for a released item:
     /// 3 when picked up.
-    void spawned_item_state(int64_t id, int state);
-    /// Ids for released items, from the same range as spawned characters.
-    int64_t next_spawned_id();
-
-    /// Index every prop unit by its `NAME`, once (`media/units/props/`, apart from monsters).
-    void ensure_prop_index();
-    std::map<std::string, std::string> prop_files;
-    bool prop_files_loaded = false;
-
-    /// A `CSkillEvent` hung on a skill event's damage shapes (`CSkillEvent::addListeners`),
-    /// its hooks as callbacks.
-    struct SkillEventListener final : tl::core::DamageShapeListener {
-        std::function<bool(const tl::core::DamageShape&, const tl::core::DamageShapeUnit&)> can;
-        std::function<bool(const tl::core::DamageShape&, const tl::core::DamageShapeUnit&)> act;
-        /// `itemEffectedByDamageShape`; unset: nothing
-        /// against the shape's own `interact`.
-        std::function<bool(const tl::core::DamageShape&, const tl::core::DamageShapeItem&)> item;
-        // `itemEffectedByDamageShape`,
-        // through the listener's hook; unset, nothing against it.
-        bool affect_item(const tl::core::DamageShape& shape,
-                         const tl::core::DamageShapeItem& which) override {
-            return !item || item(shape, which);
-        }
-        bool can_affect(const tl::core::DamageShape& shape,
-                        const tl::core::DamageShapeUnit& who) override {
-            return can && can(shape, who);
-        }
-        bool affect(const tl::core::DamageShape& shape,
-                    const tl::core::DamageShapeUnit& who) override {
-            return act && act(shape, who);
-        }
-    };
-    std::vector<std::unique_ptr<SkillEventListener>> skill_event_listeners;
+    void spawned_item_state(int64_t id, int state) override;
 
     /// Place a unit whose body is a particle layout, not a mesh (`LAYOUTFILE` and no
     /// `MESHFILE`, e.g. the phase beast's portal), which spawn_unit() cannot place.
     bool place_layout_bodied_unit(const std::string& unit, const Ogre::Vector3& at);
-    /// A prop's `RESOURCEDIRECTORY` + `LAYOUTFILE` + `.LAYOUT`; empty for a
-    /// prop with no layout body.
-    std::string prop_layout_path(const std::string& unit);
 
-    /// What a `Unit Trigger`'s `MODEL` (a unit, `cmp_field::unit_trigger`) is made of.
-    /// `ANIMATION_STATE_n` is played once and held, not looped (`CTriggerUnit::setTriggerState`
-    /// `blendAnimation(idx, false, 0.1, 1.0, -1.0)`); `_LOOP_` loops; a transition
-    /// runs first.
-    struct TriggerProp {
-        std::string mesh;            ///< `RESOURCEDIRECTORY` + `MESHFILE`
-        std::string collision;       ///< + `COLLISIONFILE`, when it has one
-        std::string resting;         ///< `ANIMATION_STATE_1`, played once
-        std::string resting_loop;    ///< `ANIMATION_STATE_LOOP_1`, looped
-        std::string activated;       ///< `ANIMATION_STATE_2`, played once
-        std::string activated_loop;  ///< `ANIMATION_STATE_LOOP_2`, looped
-        std::string opening;         ///< `ANIMATION_TRANSITION_STATE_2`
-        std::string closing;         ///< `ANIMATION_TRANSITION_STATE_1`
-        /// `CTriggerUnit::unitInit`: `MAXSTATES` (2 unless
-        /// authored), and `LOOPTYPE`'s index in `gTRIGGER_LOOP_TYPE_NAMES`, -1 for none.
-        int32_t max_states = 2;
-        int32_t loop_type = -1;
-        /// `addSoundsToState`: `SOUND_STATE_ONE` / `_TWO`,
-        /// else `INTERACT_SOUND`.
-        std::string state_sound[2];
-        /// A props unit file names it, so `setUnitModelName`
-        /// runs `unitInit`; it may draw nothing.
-        bool found = false;
-        bool collideable = true;  ///< `COLLIDEABLE`
-        /// `BLOCK` (`CBaseUnit +0x156`, `unitInit`): whether a ray meets the
-        /// collision model (`CLevel::objectRayCollision`).
-        bool block = false;
-        /// `LAYOUT_STATE_1` and `LAYOUT_STATE_2` (`CTriggerUnit +0x2b0`).
-        std::string state_layout[2];
-        /// `OCCUPIESNODES`, `CBaseUnit +0x18f`: without it `addToAvoidanceMap`
-        /// leaves the grid alone.
-        bool occupies_nodes = true;
-        /// `SHADOWS` (`CBaseUnit +0x1a9`, true by default).
-        bool shadows = true;
-        /// `CItem +0x210`, the floor label: `DISPLAYNAME`, `NAME` or `ITEM`
-        /// (`CItem::unitInit`).
-        std::string display_name;
-        std::string unittype;  ///< `UNITTYPE`, for the label's two type tests
-        /// `CTriggerUnit::unitInit`: `[TREASURE]`'s
-        /// `SPAWNCLASS` (`+0x2d0`), `MINCOUNT`, `MAXCOUNT` (1 each; constructor).
-        ///
-        std::string treasure_class;
-        int32_t treasure_min = 1;
-        int32_t treasure_max = 1;
-        /// `CBaseUnit::unitInit`: `[SKILL]` blocks in order.
-        std::vector<std::string> skills;
-        std::vector<uint32_t> skill_levels;
-        /// `+0x194`, `COLLISION_RADIUS` (`CTriggerUnit::unitInit`), 0.3 by default
-        /// (`CBaseUnit::CBaseUnit`): the trap is cast that far below.
-        float collision_radius = 0.3f;
-        /// `SCALE` (1) + `randomBetweenVolatile(0, SCALE_VARIATION)` (`CBaseUnit::unitInit`).
-        ///
-        float scale = 1.0f;
-        float scale_variation = 0.0f;
-    };
-
-    /// Resolve a `Unit Trigger`'s `MODEL` to its geometry, or false when
-    /// nothing under `media/units/props/` is called that.
-    bool trigger_prop(const std::string& unit, TriggerProp& out);
     /// The layout half of `CTriggerUnit::setTriggerState`;
     /// `state` is 1 or 2.
     void set_trigger_state_layout(Ogre::Entity* entity, const TriggerProp& prop, int state);
@@ -4321,454 +2394,56 @@ struct Renderer::Impl {
     void finish_trigger_unit(int64_t node, const std::string& unit, const TriggerProp& prop,
                              bool by_player, const std::vector<const Ogre::SceneNode*>& mine,
                              bool treasure, bool skill);
-    /// `unitInit`'s states for a new machine's `Unit
-    /// Trigger`s (`LevelScript::init_unit_trigger`).
-    void init_unit_triggers(tl::core::LevelScript& machine);
-    std::map<std::string, TriggerProp> trigger_props;
 
-    /// `CCharacter::die`'s skill half for a placed unit: `stopAllSkills(true, true, false)` and
-    /// `CSkillManager::fireSkillsOnDeath`.
-    void fire_unit_skills_on_death(tl::core::LevelScript& machine, int64_t node);
-    void fire_unit_skills_on_create(tl::core::LevelScript& machine, int64_t node);
-    /// A player skill's `[EVENT_*]` block as its layouts remember it: the `CSkillEvent` a
-    /// `Missiles` spawner fires for (`CSkillEvent::missileApplyingEffects`).
-    struct SkillEventSource {
-        std::string skill;
-        uint32_t level = 0;
-        const tl::formats::AdmSection* event = nullptr;     ///< the block (`+0xa0`)
-        const tl::formats::AdmSection* property = nullptr;  ///< its level (`+0x90`)
-        /// That level's `DURATIONOVERRIDEMS` in seconds (`+0xa4`, inherited).
-        float duration_override = 0.0f;
-        tl::core::SkillTargetFilter unauthored = tl::core::SkillTargetFilter::Enemy;
-        int32_t target_alignment = 2;  ///< the skill's `TARGET_ALIGNMENT`
-        tl::core::SkillEventSpec spec;
-        int group = 0;            ///< `+0x48`, the event's `EVENT_*` group
-        int32_t target_type = 0;  ///< the level property's `TARGET_TYPE` (`+0x70`)
-        /// The skill's owner when a placed unit; null is the player.
-        tl::core::LevelScript* caster_machine = nullptr;
-        int64_t caster_node = 0;
-        /// The copy of the skill that fired the event (`SkillRunState::copy`).
-        uint32_t run = 0;
-    };
-    /// The placed unit whose skill is running, set around its `SkillRunner` calls; null
-    /// machine: the player.
-    struct UnitEventCaster {
-        tl::core::LevelScript* machine = nullptr;
-        int64_t node = 0;
-        Ogre::SceneNode* scene = nullptr;
-        float radius = tl::core::kDefaultCollisionRadius;
-    };
-    UnitEventCaster unit_event_caster;
-    /// `DAMAGE_REQUIRES_LOS` (`CSkillEvent +0x14a`): the level stands between caster and
-    /// target (`machine` null: the player).
-    bool skill_event_sight_blocked(const SkillEventSource& src, tl::core::LevelScript* machine,
-                                   int64_t node);
-    UnitEventCaster unit_event_caster_for(tl::core::LevelScript* machine, int64_t node);
-    /// A placed unit's cast animation, stepped for its keys as the player's is
-    /// (`step_skill_animation`).
-    struct UnitSkillPlayback {
-        tl::core::LevelScript* machine = nullptr;
-        int64_t node = 0;
-        std::string animation;
-        int index = -1;
-        float time = 0.0f;
-        float length = 0.0f;
-        float speed = 1.0f;
-        float held = -1.0f;
-        int then_loop = -1;
-    };
-    std::vector<UnitSkillPlayback> unit_skill_playbacks;
-    /// Each unit model's animations in manifest order, by mesh.
-    std::map<std::string, tl::core::AnimationCatalog> unit_catalogs;
-    /// The caster a unit's `SkillCastContext` points at, kept alive here.
-    tl::core::SkillCaster unit_cast_caster;
-    /// The hooks every machine's characters cast through (`LevelScript::UnitSkills`).
-    tl::core::LevelScript::UnitSkills unit_skill_hooks();
-    /// `CBaseUnit::unitInit`: a unit's
-    /// `[SKILL]` blocks.
-    std::vector<tl::core::LevelScript::UnitSkill> unit_skill_list(const std::string& unit);
-    const tl::core::AnimationCatalog* unit_catalog(const std::string& mesh);
     /// `CGenericModel +0x1cc`'s list for a mesh as `loadAnimations` builds it from the
     /// `.ANIMATION` file (`tl::core::load_animation_list`); `missing` counts absent files.
     tl::core::AnimationCatalog model_catalog(const std::string& mesh, const std::string& dir,
-                                             size_t* missing = nullptr);
-    tl::core::SkillCaster unit_caster(tl::core::LevelScript& machine, int64_t node,
-                                      tl::core::LevelScript* target_machine, int64_t target_node,
-                                      bool has_target);
-    tl::core::SkillCastContext unit_cast_context(tl::core::LevelScript& machine, int64_t node,
-                                                 tl::core::LevelScript* target_machine,
-                                                 int64_t target_node, bool has_target);
-    /// `CCharacter::castSkill`'s `performSkill`, mana and animation for a unit.
-    bool cast_unit_skill(tl::core::LevelScript& machine, int64_t node,
-                         tl::core::LevelScript* target_machine, int64_t target_node,
-                         bool has_target);
+                                             size_t* missing = nullptr) override;
     /// Every placed unit's cast: its animation's keys, `updateActiveSkill` and
     /// its manager's `update`.
     void step_unit_skills(float delta);
-    /// A placed unit's skill by name, for its runner's lookups.
-    const tl::core::KnownSkill* unit_skill_named(tl::core::LevelScript& machine, int64_t node,
-                                                 const std::string& name);
     /// The entity a machine's unit is drawn with, or null.
-    SceneUnit* scene_unit_of(tl::core::LevelScript* machine, int64_t node);
-    /// Every `Unit Spawner` of a placed skill layout by node id (the file's own, so the latest
-    /// cast's is kept), with its event and shape.
-    struct SkillSpawner {
-        SkillEventSource source;
-        tl::core::SpawnerShape shape;
-    };
-    std::map<int64_t, SkillSpawner> skill_spawners;
-    /// `CSkillEvent::startEvent`, the layout half: `FILE`
-    /// on the caster (or target, `PLACEONTARGET`) facing its way, timelines played.
-    void start_skill_event(const tl::core::KnownSkill& skill, uint32_t level, int group,
-                           const tl::formats::AdmSection& event,
-                           const tl::core::SkillEventTarget& target);
-    /// A character `findCharacterWithinView` can answer: the player, or a
-    /// machine's node.
-    struct ViewUnit {
-        bool player = false;
-        tl::core::LevelScript* machine = nullptr;
-        int64_t node = 0;
-        /// A breakable by id when nonzero (`SkillEventTarget::item`).
-        int64_t item = 0;
-    };
-    /// A player skill's `CSkillEvent` while it lives (`CSkill +0xb8`): its layout's nested
-    /// machines, `first`..`end`.
-    struct LiveSkillEvent {
-        std::string skill;
-        /// The copy of the skill that started it (`SkillRunState::copy`).
-        uint32_t run = 0;
-        size_t first = 0;
-        size_t end = 0;
-        /// `ATTACHOWNER`: the caster follows `shape` (`+0x40`, the first damage shape) of the
-        /// layout placed at `at`, `facing`.
-        bool attach_owner = false;
-        bool ignores_units = false;
-        bool ignores_obstructions = false;
-        bool scale_distance = false;
-        tl::core::LevelScript* shape_machine = nullptr;
-        int64_t shape = 0;
-        Ogre::Vector3 at = Ogre::Vector3::ZERO;
-        Ogre::Quaternion facing = Ogre::Quaternion::IDENTITY;
-        /// `+0x1fc`: origin to target on the ground, and `+0x160`, its length (within range).
-        tl::core::Vec3 to_target{};
-        float distance = 0.0f;
-        int32_t skill_target_type = 0;
-        /// Who cast it (`+0x50`): a placed unit, or the player (null machine).
-        tl::core::LevelScript* caster_machine = nullptr;
-        int64_t caster_node = 0;
-        /// The skill loops (`CSkill +0xec` not -1): `stopAllParticles`' flag.
-        bool loop = false;
-        /// The particle systems its layout placed, by the nodes they hang from.
-        std::vector<Ogre::SceneNode*> holders;
-        /// Still in the skill's list (`CSkill +0xc0`); `stopSkill` resets it either way.
-        bool listed = true;
-        /// `updateEvent`'s line half: the systems with a `Line` emitter (`+0xa8`), driven with
-        /// `ATTACH_LINE_EMITTER` (+0x147) or `..._TO_MAX_DISTANCE` (+0x148).
-        std::vector<Ogre::SceneNode*> line_holders;
-        bool attach_line_emitter = false;
-        bool to_max_distance = false;
-        bool collides = false;  ///< +0x149 `LINE_EMITTER_COLLIDES`
-        /// `ATTACHTOTARGET` with no target or +0x148: the layout follows `far_point`.
-        bool far_target = false;
-        Ogre::Vector3 far_point = Ogre::Vector3::ZERO;
-        int fire_from = 0;          ///< +0x108 `FIREFROMBONE`
-        int fire_at = 0;            ///< +0x10c `FIREATBONE`
-        float range = 0.0f;         ///< `CSkill::getRange` at the run's level
-        float target_ahead = 0.0f;  ///< +0x164 `TARGET_AHEAD_OF_UNIT`
-        /// The owner whose bones the line leaves from (`getOwnerCharacter`), and the target
-        /// (`+0x80`).
-        ViewUnit owner;
-        bool has_target = false;
-        ViewUnit target;
-        bool line_reported = false;
-    };
-    /// `CSkillEvent::updateEvent`, the `ATTACHOWNER` half,
-    /// once a frame.
-    void update_live_skill_events(float delta);
-    /// `updateEvent`, the `ATTACHTOTARGET` and line halves.
-    void update_skill_event_lines(LiveSkillEvent& event);
+    SceneUnit* scene_unit_of(tl::core::LevelScript* machine, int64_t node) override;
+    // PORT: drawing, a skill event's particle systems (renderer_effects.cpp).
+    size_t view_particle_mark() const override;
+    void view_ride_particles(size_t mark, Ogre::SceneNode* ride) override;
+    void view_claim_particles(size_t mark, std::vector<Ogre::SceneNode*>& holders,
+                              std::vector<Ogre::SceneNode*>& line_holders) override;
+    bool view_particles_alive(const std::vector<Ogre::SceneNode*>& holders) const override;
+    void view_stop_particles(const std::vector<Ogre::SceneNode*>& holders, bool loop) override;
+    void view_stop_emission(const std::vector<Ogre::SceneNode*>& holders) override;
+    void view_translate(const std::vector<Ogre::SceneNode*>& holders, const Ogre::Vector3& by);
+    void view_stretch_lines(const std::vector<Ogre::SceneNode*>& line_holders,
+                            const Ogre::Vector3& start, const Ogre::Vector3& end);
     /// `CSkillEvent::getBonePosition(unit, attachment, true)`
     /// in the world; false when the unit is gone.
     bool skill_bone_world(const ViewUnit& unit, int attachment, Ogre::Vector3& out);
     /// The unit's facing on the ground (vtable +0x130). False when it is gone.
     bool skill_unit_forward(const ViewUnit& unit, Ogre::Vector3& out);
-    /// A placed character's `CEffectManager` (`+0x1b8`), made on first use (owner the player,
-    /// gate `unit_effect_on_unit`).
-    tl::core::EffectManager* unit_effect_manager(tl::core::LevelScript* machine, int64_t node);
-    /// `CCharacter::applyEffectOnUnit` for a placed
-    /// character; true copies the effect in.
-    bool unit_effect_on_unit(tl::core::LevelScript* machine, int64_t node,
-                             tl::core::Effect& effect);
-    /// `CCharacter::applyInstantEffect` for a
-    /// placed character.
-    void unit_instant_effect(tl::core::LevelScript* machine, int64_t node,
-                             const tl::core::Effect& effect, float value);
-    /// `updateEffects`' `KNOCK BACK EFFECT` case (`CCharacter::updateEffects`;
-    /// `updateHP`): this frame's push, forces
-    /// decayed; `resistance` is `PERCENT KNOCK BACK RESISTANCE` (0x35).
-    tl::core::Vec3 knock_back_push(tl::core::EffectManager& effects, float resistance, float dt,
-                                   const std::string& who);
-    void update_unit_effects(float dt);
-    /// `CCharacter::moveToPosition` for the player.
-    bool move_player_to(const Ogre::Vector3& to, bool ignore_units, bool ignore_obstructions);
-    bool move_unit_to(tl::core::LevelScript* machine, int64_t node, const Ogre::Vector3& to,
-                      bool ignore_units, bool ignore_obstructions);
-    std::vector<LiveSkillEvent> live_skill_events;
-    /// `CSkillEvent +0x15c`: what is left of `DURATIONOVERRIDEMS` (`+0x158`), set by
-    /// `startEvent`, run down by `updateEvent`;
-    /// `canStop` waits on it.
-    struct SkillEventHold {
-        std::string skill;
-        uint32_t run = 0;
-        tl::core::LevelScript* caster_machine = nullptr;
-        int64_t caster_node = 0;
-        float left = 0.0f;
-    };
-    std::vector<SkillEventHold> skill_event_holds;
-    /// `CSkillEvent::shouldStop`, negated, over one copy's
-    /// live events (`SkillRunState::copy`).
-    bool skill_events_alive(const std::string& skill, uint32_t run,
-                            tl::core::LevelScript* caster_machine, int64_t caster_node);
-    /// `CSkillEvent::canStop` over them, for
-    /// `CSkill::attemptToStopSkill`.
-    bool skill_events_can_stop(const std::string& skill, uint32_t run,
-                               tl::core::LevelScript* caster_machine, int64_t caster_node);
-    /// `CSkill::stopSkill`'s `resetEvent` over
-    /// the copy's events: `CSkillEvent::stopEvent`, and
-    /// `CSkillEvent::reset` detaching flying missiles
-    /// (`FlyingMissile::detached`).
-    void detach_event_missiles(const std::string& skill, uint32_t run,
-                               const tl::formats::AdmSection& block,
-                               tl::core::LevelScript* caster_machine, int64_t caster_node);
-    /// A placed item's collision group and avoidance entry switched (`TriggerCollidable`,
-    /// `ENABLECOLLISION` / `DISABLECOLLISION`).
-    void set_trigger_collidable(int64_t key, bool on);
-    bool skill_event_particles_alive(const LiveSkillEvent& event) const;
-    bool level_stores_unit(int64_t id);
-    void reset_skill_events(const std::string& skill, uint32_t run,
-                            tl::core::LevelScript* caster_machine, int64_t caster_node);
-    /// `CSkillEvent::addListeners`, the damage-shape half:
-    /// shapes of machines `first`.. take `TARGET_CORPSES` and `MAX_UNITS_HIT` and report.
-    void hang_player_skill_event(const SkillEventSource& source, size_t first);
-    /// `CSkillEvent::applyEffects` on one character (null
-    /// machine: the player); whether anything was applied. (`CSkillEvent::invokeHitSkills`,
-    /// is apart.)
-    bool skill_event_effects_on(const SkillEventSource& source, tl::core::LevelScript* machine,
-                                int64_t node);
-    /// `CSkillEvent::applyWeaponDamage` on a placed
-    /// character: `WEAPONDAMAGEPCT` of the player's blow; the damage dealt.
-    float skill_event_weapon_blow(const SkillEventSource& source, tl::core::LevelScript* machine,
-                                  int64_t node, float damage_scale, float soak_scale);
-    /// A skill event striking one character (`characterEffectedByDamageShape`,
-    /// `startEvent`'s `APPLYEFFECTS`).
-    bool skill_event_strike(const SkillEventSource& source, tl::core::LevelScript* machine,
-                            int64_t node);
-    /// `CLevel::findCharacterWithinView` from `at` turned by
-    /// `facing`, optionally for a skill (`CSkill::getTargetIsValid`); true with a unit.
-    bool find_character_within_view(const tl::core::Vec3& at, const Ogre::Quaternion& facing,
-                                    float near, float angle, float range, int32_t alignment,
-                                    bool nearest, const ViewUnit& ignore, ViewUnit& found,
-                                    const std::function<bool(const ViewUnit&)>& valid = nullptr);
-    /// `CCharacter::castSkill`: a
-    /// targetless cast with `FINDTARGETANGLE` takes the nearest valid character in the cone,
-    /// else the first breakable (`findItemWithinView`).
-    void find_player_skill_target(const tl::core::KnownSkill& skill);
-    /// `CSkill::getTargetIsValid` for a player skill.
-    bool player_skill_target_valid(const tl::core::KnownSkill& skill, const ViewUnit& unit);
-    /// The standing breakable with this id, by index; -1 for none.
-    int breakable_index(int64_t id) const;
-    /// Skills a player skill's events executed (`EXECUTE_SKILL`), added hidden by
-    /// `CSkillManager::addSkill`, by upper-cased name.
-    std::map<std::string, tl::core::KnownSkill> executed_skills;
-    const tl::core::KnownSkill* add_executed_skill(const std::string& name, uint32_t level);
-    /// The player's skill of that name: the class's, else an executed one.
-    const tl::core::KnownSkill* player_skill(const std::string& name);
-    /// While another unit's executed skill starts: its node, which the layouts ride.
-    Ogre::SceneNode* event_caster_override = nullptr;
-    /// The same unit by machine and node.
-    tl::core::LevelScript* event_caster_override_machine = nullptr;
-    int64_t event_caster_override_node = 0;
-    /// `CSkillEvent::startEvent`'s tail: each `EXECUTE_SKILL`
-    /// via `CExecuteSkillProps::executeSkill`.
-    void execute_event_skills(const SkillEventSource& source, const tl::core::SkillEventSpec& spec,
-                              const ViewUnit* unit, const tl::core::Vec3& origin,
-                              const Ogre::Quaternion& facing, const tl::core::Vec3& point);
-    void invoke_hit_skills(const SkillEventSource& source, int group,
-                           tl::core::LevelScript* machine, int64_t node);
-    /// `CLevel +0x200`: who watches which unit (core/unit_observers.h); per level.
-    tl::core::UnitObservers unit_observers;
-    /// `CSkill`'s `iUnitObserver` half: one copy of a caster's skill (null machine: player's)
-    /// listening for a death its effect may cause.
-    struct SkillObserver final : tl::core::UnitObserver {
-        Impl* impl = nullptr;
-        tl::core::LevelScript* caster_machine = nullptr;
-        int64_t caster_node = 0;
-        std::string skill;
-        uint32_t run = 0;
-        void unit_state_change(const void* machine, int64_t unit, int state) override;
-    };
-    std::map<std::tuple<tl::core::LevelScript*, int64_t, std::string, uint32_t>,
-             std::unique_ptr<SkillObserver>>
-        skill_observers;
-    /// The observer for one copy of a caster's skill, made on first asking.
-    SkillObserver* skill_observer_for(tl::core::LevelScript* caster_machine, int64_t caster_node,
-                                      const std::string& skill, uint32_t run);
-    /// `CSkill::unitStateChange`.
-    void skill_unit_state_change(SkillObserver& observer, tl::core::LevelScript* machine,
-                                 int64_t node, int state);
-    /// Set while the player's `updateHP` takes effect damage: death broadcasts 4, then 1.
-    bool player_hurt_by_effects = false;
-    /// Who the possibly-lethal effects credit, while `player_hurt_by_effects` is set.
-    int64_t player_effect_killer = tl::core::LevelScript::kNoAttacker;
-    /// `CSkillEvent::unitSpawnedFromUnitSpawner` for a
-    /// character a player skill's spawner released.
-    void skill_unit_spawned(const SkillEventSource& source, tl::core::LevelScript& machine,
-                            int64_t node);
-    /// `CCharacter::addPet` on the player: past
-    /// `MAXIMUM_PET_INSTANCES` the oldest of the name die, then `setMaster`.
-    void add_player_pet(tl::core::LevelScript& machine, int64_t node);
-    /// The same with a placed master (a monster's `MAKEPET` summon).
-    void add_monster_pet(tl::core::LevelScript& machine, int64_t node,
-                         tl::core::LevelScript& master_machine, int64_t master_node);
-    /// The compiled layout at `reference`, parsed once (via layout_file()).
-    const tl::formats::CmpScene* cached_layout(const std::string& reference);
-    std::map<std::string, const tl::formats::CmpScene*> cached_layouts;
 
-    /// One missile in flight (`core/missile.h`) and what draws it.
-    struct FlyingMissile {
-        tl::core::Missile missile;
-        SkillEventSource source;
-        /// Fired by a spawner of the level's own layout (a trap): no owner or listener.
-        bool level_placed = false;
-        /// Fired by the player's weapon (`CEquipment::fireMissiles`): the weapon listens.
-        bool by_weapon = false;
-        /// Its event restarted (`CSkillEvent::reset`): no listener left, so
-        /// `doDamageToCharacter`'s own blow and no death event.
-        bool detached = false;
-        Ogre::SceneNode* node = nullptr;  ///< carries `ACTIVE`
-        std::vector<Ogre::SceneNode*> active;
-    };
-    /// A deque: a missile's blow can fire more (`step_missiles` holds one by reference).
-    std::deque<FlyingMissile> missiles;
-    /// Particle layouts placed for a moment (a missile's `RELEASE`, `HIT`, `DIE`):
-    /// `CMissile::killMissile` gives them 1.0 s (`+0x1b4`),
-    /// then `handleDeathOfMissile` stops each.
-    struct TransientParticles {
-        std::vector<Ogre::SceneNode*> holders;
-        float left = 0.0f;
-        bool stopped = false;
-        /// A character's own particle: taken down once its layout's timer stopped it.
-        bool self_timed = false;
-    };
-    std::vector<TransientParticles> transient_particles;
-    /// `CUnitSpawner::createAndFireMissile` /
-    /// `CMissile::fireMissile`: launched from `at` along
-    /// `forward`, drawn, kept in `missiles`. `who` names the firer in the log.
-    void launch_missile(FlyingMissile flying, const Ogre::Vector3& at, const Ogre::Vector3& forward,
-                        const std::string& who);
-    /// `CEquipment::fireMissiles(owner, target)` for the
-    /// player's weapon (needs a `MISSILE`); `target` a character, `breakable` an index (-1).
-    bool fire_weapon_missiles(int64_t target, int breakable);
-    /// The same for a placed character's weapon, from its hand (`left`), at `target_node` of
-    /// `target_machine` when `aimed`, else along its facing.
-    void fire_unit_weapon_missile(tl::core::LevelScript* machine, int64_t node,
-                                  const std::string& missile, bool left, bool aimed,
-                                  tl::core::LevelScript* target_machine, int64_t target_node);
-
-    // ---- procs and a weapon's own skills (`core/weapon_procs.h`) ----------
-    /// The player's known list as procs ask of it (`CSkillManager +0x60`): what
-    /// `CBaseUnit::activateEffect` taught; one copy per
-    /// name. `CCharacter::deactivateEffect`'s delete is
-    /// not carried.
-    tl::core::SkillCopies player_proc_skills{true};
-    /// `CCharacter +0x708`: 1.0 when an own proc other than `CAST SKILL AT TARGET` casts
-    /// (`executeProcs`), run down by `CCharacter::update`,
-    /// waited out by `CAST SKILL ON STRUCK`.
-    float player_proc_lockout = 0.0f;
-    /// The skill files by name, for `SkillCopies::add`.
-    tl::core::SkillFileLookup skill_file_lookup();
-    /// What a proc or weapon skill is cast at: a character, a breakable (by id), or nothing,
-    /// with its centre and radius taken when made (a breakable's procs come after it broke).
-    struct ProcTarget {
-        tl::core::LevelScript* machine = nullptr;
-        int64_t node = 0;
-        int64_t breakable_id = 0;
-        bool placed = false;
-        tl::core::Vec3 centre{};
-        float radius = 0.0f;
-        bool any() const { return placed; }
-    };
-    ProcTarget proc_target_unit(int64_t node);
-    ProcTarget proc_target_breakable(int index);
-    /// `CCharacter::executeProcs(type, target)` for the
-    /// player: its own effects, then its worn items'.
-    void player_execute_procs(int type, const ProcTarget& target);
     /// `CCharacter::doWeaponSkill(weapon)`: true when a
     /// skill started, which ends the blow.
-    bool player_weapon_skill(const ProcTarget& target);
-    /// `CCharacter::doWeaponProcs(weapon, struck)`.
-    void player_weapon_procs(const ProcTarget& struck);
-    /// The procs' target for an attacker id: a placed unit, or none.
-    ProcTarget proc_target_attacker(int64_t attacker);
+    bool player_weapon_skill(const ProcTarget& target) override;
 
-    /// `CBaseUnit::activateEffect` on a placed unit: a
-    /// cast-skill effect adds its skill to the unit's list.
-    void unit_activate_effect(tl::core::LevelScript* machine, int64_t node,
-                              tl::core::Effect& effect);
-    /// `CCharacter::executeProcs(type, target)`, placed unit.
-    void unit_execute_procs(tl::core::LevelScript& machine, int64_t node, int type,
-                            tl::core::LevelScript* target_machine, int64_t target_node,
-                            bool has_target);
-    /// `CSkillManager::executeSkill(skill, player, ...)` on
-    /// the holder's manager: the player's (`location` -1) or the worn item's
-    /// (`worn_skill_runners`, `+0x1c8`; `doWeaponSkill`, `doWeaponProcs`,
-    /// `CInventory::executeProcs`). INVENTED: a bag item runs on the player's.
-    bool run_proc_skill(const tl::core::SkillCopy& skill, const tl::core::Vec3& start,
-                        const tl::core::Vec3& aim, const ProcTarget& target, const char* why,
-                        int location = -1);
-    /// `CEquipment::missileApplyingEffects`: the wielder's
-    /// `rollAttack` on what its missile met.
-    bool weapon_missile_harm(int64_t unit, const Ogre::Vector3& at, float damage_scale,
-                             float soak_scale);
-    /// The same for a placed character's weapon: `getCharacterCanBeHarmedByMissile`
-    /// (`isEnemy(wielder, unit)`), then `rollAttack`.
-    bool unit_weapon_missile_harm(tl::core::LevelScript* wielder, int64_t wielder_node,
-                                  int64_t unit, const Ogre::Vector3& at, float damage_scale,
-                                  float soak_scale);
-    void fire_spawner_missile(int64_t node, const std::string& resource, const Ogre::Vector3& at,
-                              const Ogre::Vector3& forward);
-    void step_missiles(float delta);
-    void clear_missiles();
-    /// `CMissilePreloader`'s missiles by their upper-cased name, built once.
-    std::map<std::string, const tl::formats::CmpNode*> missiles_by_name;
-    bool missiles_indexed = false;
-    const tl::formats::CmpNode* missile_named(const std::string& name);
-    bool level_missile_harm(const tl::core::MissileSpec& spec, int64_t unit,
-                            const Ogre::Vector3& at, float damage_scale,
-                            const tl::core::Vec3& push);
-    /// `CSkillEvent::missileApplyingEffects` behind
-    /// `getCharacterCanBeHarmedByMissile`: true when the missile stops on `unit`.
-    bool missile_harm(const SkillEventSource& source, int64_t unit, float soak_scale,
-                      const Ogre::Vector3& at, float damage_scale, float yaw);
-    /// `CSkillEvent::canEffectPosObject(at, unit)`: centre
-    /// within 3.0 of `at` in height; null machine is the player.
-    bool skill_event_reaches_height(const Ogre::Vector3& at, tl::core::LevelScript* machine,
-                                    int64_t node);
-    /// `missileApplyingEffects`' `CSkill::triggerEvent(6, ...)`: `EVENT_MISSILEHIT`
-    /// on the firing copy, the struck unit its target.
-    void fire_missile_hit_event(const SkillEventSource& source, tl::core::LevelScript* machine,
-                                int64_t node, const Ogre::Vector3& at, float yaw);
+    // PORT: drawing, a missile's node and particles, a held item's model (renderer_effects.cpp).
+    Ogre::SceneNode* view_create_node(const Ogre::Vector3& at) const;
+    void view_aim_node(Ogre::SceneNode* node, const Ogre::Vector3& at,
+                       const Ogre::Vector3& forward);
+    void view_destroy_node(Ogre::SceneNode* node) override;
+    void view_transients_alive(const std::vector<const std::vector<Ogre::SceneNode*>*>& lists,
+                               const std::vector<char>& stop, std::vector<char>& alive) override;
+    bool view_held_item(const Ogre::Entity* held, Ogre::Vector3& hand, float& height) const;
     /// A particle layout placed at `at` (or riding `parent`), and its systems' nodes.
     std::vector<Ogre::SceneNode*> place_particle_layout(const std::string& reference,
                                                         const Ogre::Vector3& at,
                                                         const Ogre::Quaternion& facing,
                                                         Ogre::SceneNode* parent,
                                                         ParticleStart start = ParticleStart::Now);
-    void destroy_particle_holders(std::vector<Ogre::SceneNode*>& holders);
+    void destroy_particle_holders(std::vector<Ogre::SceneNode*>& holders) override;
     /// `CBaseUnit::sphereCollision` for a drawn unit: the
     /// first `t` in [0, 1] its collision model is touched, above 1 if not; false if not drawn.
     bool unit_collider_sweep(int64_t id, const tl::core::Vec3& from, const tl::core::Vec3& to,
-                             float radius, float& t);
+                             float radius, float& t) override;
     /// A character's collision model (`CCharacter +0x4c8`): `media/models/collider.mesh`,
     /// what `loadModel` gives units with no `COLLISIONFILE`.
     tl::core::CollisionWorld unit_collider;
@@ -4777,58 +2452,30 @@ struct Renderer::Impl {
     void follow_subject();
     /// `CCameraControl::updateGameCamera` for the engine's default framing.
     void update_game_camera(const Ogre::Vector3& player_at);
-    void step_player(float delta, const tl::core::InputState& in);
-    /// The cast or the swing holds the player where they stand: see step_player().
-    bool player_motion_held();
+    void step_player(float delta, const tl::core::InputState& in) override;
     void drive_player(float delta);
     Ogre::Entity* place_mesh(const MeshPlacement& placement);
     /// `CLevel::bake`'s room-piece batching, once the level and its
     /// remembered state are in place.
-    void bake_static_scenery();
+    void bake_static_scenery() override;
+    void view_prepare_mesh(const std::string& mesh_path) override;
 
     /// Carry out what a level script decided, and log it; `nodes` is the map the events
     /// address.
-    void apply_script_events(const std::vector<tl::core::ScriptEvent>& events, NodeMap& nodes);
+    void apply_script_events(const std::vector<tl::core::ScriptEvent>& events,
+                             NodeMap& nodes) override;
 
     /// One frame of the level script, from wherever the character is.
     void step_script(float delta);
 
     // The level remembered and put back.
 
-    /// A machine and its node map: the level's own, then every nested one in build order.
-    struct MachineView {
-        tl::core::LevelScript* script = nullptr;
-        NodeMap* nodes = nullptr;
-        uint32_t scene = 0;
-        int64_t hierarchy = 0;
-    };
-    std::vector<MachineView> machines();
     /// A `Cinematic` node's `[CINEMATIC]`, opened by the run loop.
     std::string pending_layout_cinematic;
 
-    /// The level being built's dungeon and depth, and whether it is remembered (`CLevel+600`).
-    void set_level_identity(const std::string& dungeon, int32_t depth, bool is_town,
-                            bool dont_store, bool allows_portals);
-
-    /// `CGameGlobals +0x2c0 .. +0x2c8` (`reload`).
-    tl::core::LevelMemoryRules level_memory_rules();
-
-    /// Increment a journal statistic on the player and log it (except steps).
-    void count_journal(tl::core::JournalStatistic stat, int32_t amount = 1) {
-        if (amount == 0) return;
-        player_character.journal().increment(stat, amount);
-        if (stat != tl::core::JournalStatistic::StepsTaken) {
-            const int32_t total = player_character.journal().value(stat);
-            TL_LOG_INFO("journal: %s +%d = %d", tl::core::journal_statistic_name(stat), amount,
-                        total);
-        }
-    }
-
-    /// `CPlayer::storeLevelSavedState` over this level.
-    void store_level_state();
-
-    /// `CGameClient::restoreLevelState`, if remembered.
-    void restore_level_state();
+    // PORT: the automap's revealed cells into a level state and back (renderer_session.cpp).
+    void view_store_automap(tl::formats::LevelSaveState& state) override;
+    void view_restore_automap(const tl::formats::LevelSaveState& state) override;
 
     /// Put the level back as it loaded: nothing hidden, no camera held, triggers unspent.
     void reset_script();
@@ -4838,8 +2485,44 @@ struct Renderer::Impl {
     void arm_particle_timer(size_t first, size_t last);
     bool place_particle(const tl::formats::CmpScene& layout, const tl::formats::CmpNode& node,
                         const Ogre::Vector3& position, const Ogre::Quaternion& orientation);
-    /// Whether this layout's particles are drawn (`RendererConfig::pu_particle_layouts`).
-    bool particle_universe_takes(const std::string& layout_path) const;
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool place_particle(const tl::formats::CmpScene& layout, const tl::formats::CmpNode& node,
+                        const ogre::Vector3& position,
+                        const ogre::Quaternion& orientation) override {
+        return place_particle(layout, node, to_ogre(position), to_ogre(orientation));
+    }
+    void view_automap_add_tile(int type, const ogre::Vector3& at, const ogre::Vector3& dir, bool a,
+                               bool b) override;
+    void view_automap_player(const ogre::Vector3& at) override;
+    void view_place_viewer(const tl::formats::CmpScene& layout,
+                           const ogre::Vector3& origin) override;
+    void view_place_meshes(const std::vector<MeshPlacement>& placements, size_t& animated_props,
+                           size_t& idled) override;
+    /// One of `view_place_meshes`' placements: its entity, its animation and, a unit's, its
+    /// scene entry.
+    void view_place_one_mesh(const MeshPlacement& from_layout, size_t& animated_props,
+                             size_t& idled);
+    /// A placed unit's scene entry, hands, render flags and rim light.
+    void dress_placed_unit(Ogre::Entity* entity, const MeshPlacement& placement,
+                           Ogre::AnimationState* started, bool armed);
+    void view_own_trigger_particles(size_t before, int64_t node, const NodeMap& sink) override;
+    void view_settle_link_particles(size_t systems_before, int64_t owner,
+                                    const std::string& reference, const ogre::Vector3& origin,
+                                    const ogre::Quaternion& basis,
+                                    tl::core::LinkParticleSettle what) override;
+    /// `view_settle_link_particles`' parts: its systems learn their link; they become one
+    /// `CParticle`; they stop.
+    void link_particle_systems(size_t systems_before, int64_t owner, const Ogre::Vector3& origin,
+                               const Ogre::Quaternion& basis);
+    void register_link_cparticle(size_t systems_before, int64_t owner, const std::string& reference,
+                                 const Ogre::Vector3& origin, bool stopped);
+    void stop_particle_systems(size_t systems_before);
+    bool view_caching_particles() const override;
+    unsigned long view_milliseconds() const override;
+    void view_automap_create() override;
+    size_t view_level_particle_node(size_t systems_before) override;
+    void view_stand_subject(const ogre::Vector3& at, const ogre::Vector3& facing) override;
+    void logic_trace_text(const char* text) override;
     /// One `Particle` node as Torchlight's ParticleUniverse system, started as
     /// `CParticle::Start` starts it.
     bool place_torchlight_particle(const tl::formats::CmpScene& layout,
@@ -4863,17 +2546,14 @@ struct Renderer::Impl {
                               const std::string& animation, bool loops, float rate,
                               bool optional = false, Ogre::AnimationState** started = nullptr,
                               bool armed = true, std::string* played = nullptr, float blend = 0.0f,
-                              bool queue = false);
+                              bool queue = false) override;
 
     /// How long a placed unit's animation runs (`CGenericModel::getAnimationLengthSeconds`);
     /// negative when missing, 0 for a pose.
-    float scene_animation_length(const std::string& unit, const std::string& animation);
-
-    /// Hand a level script everything it asks the renderer for.
-    void wire_script(tl::core::LevelScript& machine);
+    float scene_animation_length(const std::string& unit, const std::string& animation) override;
 
     /// Append what a machine traced to `--logic-trace`.
-    void flush_logic_trace(tl::core::LevelScript& machine) {
+    void flush_logic_trace(tl::core::LevelScript& machine) override {
         if (logic_trace == nullptr) return;
         for (const std::string& line : machine.take_trace()) {
             std::fputs(line.c_str(), logic_trace);
@@ -4883,20 +2563,17 @@ struct Renderer::Impl {
     }
     void aim_camera(const tl::formats::CmpScene& scene, const Ogre::Vector3& origin);
     bool ground_under(const Ogre::Vector3& from, float& surface_y) const;
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool ground_under(const ogre::Vector3& from, float& surface_y) const override {
+        return ground_under(to_ogre(from), surface_y);
+    }
     void stand_subject_at(const tl::formats::CmpNode& start, const Ogre::Vector3& origin);
-    std::string rules_path_for(const std::string& layout_path);
-    /// The rules file each main-menu backdrop was chosen from (`Renderer::menu_layout_for`),
-    /// by `backdrop_key` of its layout (file names do not lead back; `CLevel::loadRoomLayout`).
-    std::map<std::string, std::string> backdrop_rules;
     /// The layout is a main-menu backdrop (`/MAINMENUS/`), loaded via
     /// `CGameClient::loadMenuLevel`: `CLevel::bake` adds its `Light`s to
     /// `stgeomLight_`, but only `CGameClient::loadLevel`'s pass
     /// builds it, so a menu's layout lights never reach the light map.
     bool loading_menu_level = false;
-    static std::string backdrop_key(const std::string& layout_path);
-    bool read_rules(const std::string& layout_path, tl::formats::AdmFile& out, bool quiet);
-    void read_rim_light(const std::string& rules_reference);
-    void apply_environment(const std::string& layout_path);
+    void apply_environment(const std::string& layout_path) override;
     void set_model_ambient(Ogre::Entity* entity, const Ogre::ColourValue& colour,
                            std::set<Ogre::Material*>& seen);
     void apply_scenery_fill(const tl::formats::AdmSection& rules);
@@ -4906,13 +2583,10 @@ struct Renderer::Impl {
     void setup_shadow_map(const tl::formats::AdmSection& rules);
     /// Logs what the scene holds (nodes, entities, particle systems...), with
     /// `when` after "scene" in the line.
-    void log_scene_census(const char* when) const;
+    void log_scene_census(const char* when) const override;
     /// The end of a timing window: glthread's costs, the shaders made, the GPU
     /// waits (renderer_diagnostics.cpp).
     static void log_driver_costs(bool print, unsigned frames);
-    /// A frame over 50 ms, split into drive, advance and render, for the log.
-    void log_long_frame(unsigned long long drive_us, unsigned long long advance_us,
-                        unsigned long long render_us, unsigned long long total_us);
     void update_player_shadow(const Ogre::Vector3& focus);
     /// Every character's and loose item's light by distance from `focus` (`CCharacter::update`
     /// `CItem::update`, `CGenericModel::setLightOverride`),
@@ -4939,15 +2613,9 @@ struct Renderer::Impl {
     /// What the view is cleared to: the port's grey for a bare model, else the level's fog
     /// (`CGameClient::refreshLighting`).
     Ogre::ColourValue view_background{0.15f, 0.16f, 0.20f};
-    void update_automap_icons();
+    void update_automap_icons() override;
     /// `CCharacter::updateMotion`'s icon move and `setMeshVisible`'s visibility, per frame.
     void step_automap_icons();
-    /// `CQuestManager::getNPCIcon`.
-    int npc_quest_icon(const std::string& unit, uint32_t type);
-    /// `media/UNITTYPES.HIE`, read once (`CResourceManager`'s hierarchy).
-    void load_unit_types();
-    tl::core::UnitTypeHierarchy unit_types;
-    bool unit_types_loaded = false;
     /// A unit's automap icon (`CCharacter +0x728`), and whether its mesh was
     /// visible the last time it was looked at.
     struct UnitIcon {
@@ -5024,7 +2692,6 @@ const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename);
 std::vector<std::string> archive_paths_under(const std::string& dir, const char* suffix);
 std::vector<std::string> archive_paths_in_listing_order(const std::string& dir, const char* suffix);
 /// The file of the spawn class whose `NAME` is `name` (case aside), or empty.
-std::string spawn_class_path(const std::string& name);
 std::vector<std::string> underscore_words(const std::string& name);
 std::string wardrobe_texture_for(const std::string& mesh_name, const std::string& dir,
                                  const std::string& slot, const std::string& set_word);
@@ -5083,13 +2750,11 @@ constexpr const char* kMenuPetUnit = "Dog";
 /// Where a class's idle is parked on the creation screen (as `--animation-time`).
 constexpr float kMenuIdleTime = 1.1f;
 
-/// What a main-menu level plays (`CGameClient::loadMenuLevel` hardcodes it), spelled as
-/// a rules `MUSIC` key.
-constexpr const char* kMenuMusic = "../music/Title.ogg";
+using tl::core::kMenuMusic;
 
 std::vector<uint8_t> read_file(const std::string& path);
 void log_animation_states(const Ogre::Entity* entity);
-bool names_the_bind_pose(const std::string& animation);
+using tl::core::names_the_bind_pose;
 bool skeleton_has_tracks(const Ogre::SkeletonPtr& skeleton);
 size_t pose_from_skeleton(Ogre::Entity* entity, const Ogre::SkeletonPtr& pose);
 size_t merge_shared_animations(const Ogre::SkeletonPtr& master, const Ogre::Skeleton* source,
@@ -5261,15 +2926,11 @@ bool caching_particles();
 void set_caching_particles();
 void restart_particle_system(ParticleSystem& system);
 void stop_particle_emission(ParticleSystem& system);
-/// The gameplay camera's default distance: `CCameraControl::getDefaultDistanceToDolly()`
-/// (.rodata, 28.5) times `CAMERAMULT`; `CCameraControl::processInput()` clamps
-/// between 14.0 and that. `CCameraControl::updateGameCamera` offsets
-/// `(0.5, 0.75, -0.5)` turned by the camera angle, scaled by the dolly.
-inline constexpr float kDefaultCameraDistance = 28.5f;
+using tl::core::kDefaultCameraDistance;
 
 Ogre::Vector3 default_camera_offset(float camera_mult);
-void log_memory(const char* when);
-const tl::formats::CmpNode* find_spawn(const tl::formats::CmpScene& layout);
+using tl::core::find_spawn;
+using tl::core::log_memory;
 /// The material name of every submesh as the serializer reads it, in order: OGRE 14 keeps
 /// no unresolvable name (`SubMesh::getMaterialName`), and collision materials
 /// (`tl::core::collision_material`) resolve nowhere (`MeshSerializerImpl::readSubMesh`).
@@ -5280,33 +2941,19 @@ struct SubmeshMaterialNames final : Ogre::MeshSerializerListener {
     void processMeshCompleted(Ogre::Mesh*) override {}
 };
 
-bool mesh_local_bounds(const Ogre::MeshPtr& mesh, tl::core::Vec3& low, tl::core::Vec3& high);
-void write_passability_dump(const tl::core::PassabilityMap& grid, const std::string& path);
-void log_passability(const tl::core::PassabilityMap& grid, double seconds);
+using tl::core::log_passability;
+using tl::core::write_passability_dump;
 void for_each_triangle(
     const Ogre::MeshPtr& mesh, const Ogre::Matrix4& to_world,
     const std::function<void(const Ogre::Vector3&, const Ogre::Vector3&, const Ogre::Vector3&)>& fn,
     const std::function<bool(const std::string&)>& accept_material = nullptr);
 }  // namespace renderer_detail
-/// Where the ids given to spawned units start: a block no layout uses (`0x5350` is "SP").
-constexpr int64_t kSpawnedNodeBase = 0x5350000000000000LL;
+using tl::core::kSpawnedNodeBase;
 
-// The player as a missile meets it: no character id is negative.
-constexpr int64_t kMissilePlayer = -1;
+using tl::core::kMissilePlayer;
 
 namespace renderer_detail {
-std::vector<tl::core::LevelScript::Reachable> missile_candidates(
-    const std::vector<tl::core::LevelScript*>& machines);
-float sphere_sweep_t(const tl::core::Vec3& from, const tl::core::Vec3& to, float radius,
-                     const tl::core::Vec3& centre, float other);
-float box_sweep_t(const tl::core::Vec3& from, const tl::core::Vec3& to, float radius,
-                  const tl::core::Vec3& low, const tl::core::Vec3& high);
-int64_t missile_closest(const std::vector<tl::core::LevelScript::Reachable>& candidates,
-                        const tl::core::Vec3& at, const tl::core::Vec3& forward, float angle,
-                        float sight);
-bool missile_unit(const std::vector<tl::core::LevelScript::Reachable>& candidates, int64_t id,
-                  tl::core::Vec3& c, float& r, bool& alive);
-tl::core::SpawnUnitData spawn_data_of(const tl::core::ItemStats& item);
+using tl::core::spawn_data_of;
 Ogre::Quaternion quaternion_from_axes(const tl::core::SpawnAxes& axes);
 /// `ProjectorCam` (`CGameClient::CGameClient`): orthographic,
 /// `setFrustumExtents(-24, 24, 24, -24)`, looking straight down, kept 100 above the focus
@@ -5448,13 +3095,12 @@ void set_light_map_texture(const Ogre::MaterialPtr& material, const std::string&
 
 tl::core::DungeonManager& loaded_dungeon_manager();
 tl::core::DungeonFiles archive_dungeon_files();
-tl::core::SpawnClassLookup archive_spawn_class_lookup();
 bool subject_in_shot(const Ogre::Camera* camera, const Ogre::Entity* subject);
 namespace renderer_detail {
 std::string biome_key_from_ruleset(const std::string& ruleset);
 std::string biome_display_name(const std::string& key);
-std::array<uint8_t, 64> orientation_bytes(float yaw);
-float yaw_of_bytes(const std::array<uint8_t, 64>& bytes);
+using tl::core::orientation_bytes;
+using tl::core::yaw_of_bytes;
 tl::formats::QuestManagerSave quests_to_save(
     const tl::core::QuestLog& log, const std::function<int64_t(const std::string&)>& unit_guid_of);
 std::string save_directory_of(const std::string& path);
@@ -5464,8 +3110,7 @@ extern bool keep_inventory;
 Ogre::MeshPtr load_gear_mesh(const std::string& path, const std::string& fallback_dir);
 Ogre::Vector3 line_point(const Ogre::Vector3 (&p)[4], float t);
 }  // namespace renderer_detail
-/// How long a quest's banner stays up, in seconds.
-constexpr float kQuestBannerSeconds = 2.0f;
+using tl::core::kQuestBannerSeconds;
 
 /// How fast it then fades, in alpha per second (.rodata, `CGameUI::updateIngameUI`),
 /// after the hold.

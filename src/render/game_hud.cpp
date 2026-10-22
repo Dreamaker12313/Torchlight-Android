@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <iterator>
+#include <vector>
 
 namespace tl::render {
 namespace {
@@ -144,13 +145,19 @@ std::string indexed(const char* prefix, size_t index) {
 GameHud::~GameHud() { destroy(); }
 
 const GameHud::Sprite* GameHud::sprite(const std::string& name) const {
-    const auto found = sprites_.find(lowered(name));
+    auto found = sprites_.find(lowered(name));
+    // A console image the sheets lack, drawn in the PC's like of it.
+    if (found == sprites_.end()) found = sprites_.find(lowered(pc_image_for(name)));
     return found == sprites_.end() ? nullptr : &found->second;
 }
 
 bool GameHud::load_art(const std::string& group) {
+    // The item icons, then the PC's own sets (the panel looks the interface pack leaves out),
+    // both optional.
+    std::vector<const char*> extra(std::begin(kItemIconImagesets), std::end(kItemIconImagesets));
+    for (const char* path : pc_imagesets()) extra.push_back(path);
     // Reserved up front for both loops below: a `Sprite` holds a pointer into one of these.
-    sets_.reserve(std::size(kImagesets) + std::size(kItemIconImagesets));
+    sets_.reserve(std::size(kImagesets) + extra.size());
 
     for (const char* path : kImagesets) {
         std::vector<uint8_t> bytes;
@@ -191,7 +198,7 @@ bool GameHud::load_art(const std::string& group) {
 
     // The item icons are supplementary: a missing or short sheet is logged and skipped rather than
     // failing the build.
-    for (const char* path : kItemIconImagesets) {
+    for (const char* path : extra) {
         std::vector<uint8_t> bytes;
         if (!read_menu_resource(path, group, bytes) || bytes.empty()) continue;
         tl::formats::Imageset set = tl::formats::parse_imageset(bytes.data(), bytes.size());

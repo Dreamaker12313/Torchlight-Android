@@ -9,7 +9,7 @@ import os
 import pathlib
 
 PACKAGE = "io.github.greenswampdweller.rekindled"
-ACTIVITY = "android.app.NativeActivity"
+ACTIVITY = "port.android.GameActivity"
 ABI = "arm64-v8a"
 MIN_SDK = 31
 TARGET_SDK = 36
@@ -42,6 +42,10 @@ def sdk() -> pathlib.Path:
 def ndk() -> pathlib.Path:
     env = os.environ.get("ANDROID_NDK_HOME")
     return pathlib.Path(env) if env else _newest(sdk() / "ndk")
+
+
+def llvm_strip() -> pathlib.Path:
+    return ndk() / "toolchains" / "llvm" / "prebuilt" / "windows-x86_64" / "bin" / "llvm-strip.exe"
 
 
 def cmake_bin() -> pathlib.Path:

@@ -20,10 +20,6 @@ constexpr const char* kAchievementsCaption = "Text1_clone309121";
 
 }  // namespace
 
-tl::core::GameSettings& Renderer::Impl::game_settings() {
-    return config.settings != nullptr ? *config.settings : own_settings;
-}
-
 void Renderer::Impl::create_options_screens() {
     // Above the HUD and the waypoint menu, below the quest window and the
     // modal message the debug menu is drawn on.
@@ -298,14 +294,6 @@ void Renderer::Impl::step_settings_menu() {
     if (help) toggle_help();
 }
 
-// `CGameUI`'s Help toggle: the Pause Menu, Options and
-// `+0x3ac` closed, then Help's `setOpen(!open)` (`vfunc_3` is
-// `isOpen`). Options is never open here: Y closed it first.
-void Renderer::Impl::toggle_help() {
-    if (pause_menu.open) close_pause_menu();
-    set_help_open(!howto_menu.open);
-}
-
 // `CHowToMenu::setOpen`. No sound on either side.
 void Renderer::Impl::set_help_open(bool open) {
     if (open == howto_menu.open) return;
@@ -326,25 +314,6 @@ void Renderer::Impl::set_help_open(bool open) {
     // in a game (the client's `+0x1404`) the Pause
     // Menu comes back.
     if (!title_menu_running) open_pause_menu();
-}
-
-void Renderer::Impl::drive_howto_menu(const tl::core::InputState& in, float dt, bool start_edge,
-                                      bool back_edge) {
-    howto_menu.update(dt, in.stick_y);
-    int code = 0;
-    if (std::abs(in.stick_y) > 0.5f) {
-        if (!howto_stick_held) {
-            code = in.stick_y > 0.0f ? tl::core::kMenuPadStickUp : tl::core::kMenuPadStickDown;
-        }
-        howto_stick_held = true;
-    } else {
-        howto_stick_held = false;
-    }
-    if (in.skip && !skip_held) code = tl::core::kMenuPadB;
-    if (start_edge) code = tl::core::kMenuPadStart;
-    if (back_edge) code = tl::core::kMenuPadBack;
-    if (code == 0) return;
-    if (howto_menu.press(code).toggle) toggle_help();
 }
 
 bool Renderer::pause_menu_open() const { return impl_->pause_menu.open; }

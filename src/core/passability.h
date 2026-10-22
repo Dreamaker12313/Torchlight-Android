@@ -23,6 +23,8 @@ public:
     /// What the console multiplies by to find a cell: never a division by 0.4,
     /// which rounds differently on a cell's edge.
     static constexpr float kInverseCell = 2.5f;
+    /// The width of a room's edge strips `bakeCollision` casts again.
+    static constexpr float kStrip = 4.0f;
 
     /// An `Ogre::AxisAlignedBox` as `bakeCollision` builds one per room layout:
     /// null until the first piece is merged in.
@@ -30,6 +32,9 @@ public:
         Vec3 low;
         Vec3 high;
         bool finite = false;
+        /// The room's `.pth` file as read (its layout's path less `LAYOUT`, plus `pth`), or
+        /// empty: the cells `calculatePassability` takes instead of casting.
+        std::vector<uint8_t> cached;
 
         /// Merge a finite box in, as the inlined `AxisAlignedBox::merge` in
         /// `bakeCollision` does.
@@ -47,11 +52,15 @@ public:
     /// The passability half of `CLevel::bakeCollision`: one
     /// `calculatePassability` over the whole list when `sections` is null, otherwise one per
     /// finite box in order. Cells no pass reached end blocked.
-    void bake(const CollisionWorld& world, const std::vector<Box>* sections);
+    /// `recalculate`: the room pieces' boxes `bakeCollision` casts again after the rooms' passes
+    /// (`CLevel +0xB0`), before each room's four edge strips.
+    void bake(const CollisionWorld& world, const std::vector<Box>* sections,
+              const std::vector<Box>* recalculate = nullptr);
 
     /// `CLevel::calculatePassability` over
     /// the box `low`..`high`.
-    Pass calculate(const CollisionWorld& world, const Vec3& low, const Vec3& high);
+    Pass calculate(const CollisionWorld& world, const Vec3& low, const Vec3& high,
+                   const std::vector<uint8_t>* cached = nullptr, bool zero_first = false);
 
     /// `CLevel::clearPassabilityData`: map cells to -1, object cells
     /// to 0.
@@ -101,6 +110,8 @@ public:
     /// `calculatePassability`, before erosion.
     // PORT: an accessor of the port's copy of `CLevel +0x40`, `+0x48`.
     uint32_t passable_cells() const { return passable_; }
+    // PORT: an accessor of the port's copy of `CLevel +0x40`; outside the grid, 1.
+    int8_t map_value(int x, int z) const { return inside(x, z) ? map_[index_of(x, z)] : 1; }
 
     /// `+0x58 / 6.5`, as `CLevel::populate`
     /// prints it, in float.
@@ -147,6 +158,12 @@ private:
                        int delta);
     void adjust_map_passability_collision(const Vec3& box_low, const Vec3& box_high,
                                           const CollisionWorld& world, int64_t group, int delta);
+    /// `calculate`'s use of a room's `.pth`: true when it fits the box and was copied into the
+    /// map (`x1`, `z1` then the file's size).
+    bool take_cached(const std::vector<uint8_t>& cached, int x0, int z0, int& x1, int& z1,
+                     Pass& pass);
+    /// `calculate`'s cast again: every cell of the box made open first.
+    void open_cells(int x0, int z0, int x1, int z1);
 
     // `CLevel +0x40`'s order, column by column (x, then z). PORT: an index.
     size_t index_of(int x, int z) const {

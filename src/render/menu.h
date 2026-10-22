@@ -238,6 +238,11 @@ private:
     void add_console_frame(const char* window, bool item_frame, float dx, float dy,
                            const std::string& dims_with);
     MenuArtSet* art_named(const std::string& set);
+    /// The set to draw `image` from: the one named when it has the image, else any loaded set
+    /// that does (a look's fixed image the pack leaves to the PC's `GuiLook`). Null when none.
+    MenuArtSet* art_for(const std::string& set, const std::string& image);
+    /// The PC's `Logo` and `GuiLook` beside the console sheets, on a PC pak.
+    bool load_pc_art(const std::string& group);
     /// Whether a window of the console screen is showing, for the focus.
     bool console_window_visible(const std::string& window) const;
     /// A on the focused window: its `onClick`, as `CNewGameMenu` answers it.
@@ -276,6 +281,9 @@ private:
     MenuArtSet widgets_art_;
     MenuArtSet widgets1_art_;
     MenuArtSet widgets2_art_;
+    /// `Logo` and `GuiLook` for the console screen on a PC pak: what the pack's sheets leave out.
+    MenuArtSet logo_art_;
+    MenuArtSet gui_art_;
 
     /// The screen's captions, each at its own authored rectangle.
     struct ConsoleLabel {
@@ -499,6 +507,18 @@ private:
     /// One `icons2` imageset, its texture and its material.
     bool load_art_set(const char* file, const std::string& group, ArtSet& art);
 
+    /// Where a console-screen image is drawn from: the sheet its reference names, else the PC's
+    /// own `Logo` or `GuiLook` when they are mounted, else any sheet holding an image of that
+    /// name. Null `set` when none has it.
+    struct ArtRef {
+        const tl::formats::Imageset* set = nullptr;
+        Ogre::MaterialPtr material;
+    };
+    ArtRef resolve_art(const std::string& set_name, const std::string& image) const;
+
+    /// The console column's button images, as its first button (`ContinueLast`) names them.
+    void resolve_console_buttons();
+
     /// The console frame - the four border pieces - and the bottom bar's
     /// groups, from the console layout.
     void build_console_frame();
@@ -643,6 +663,15 @@ private:
     ArtSet widgets_art_;
     ArtSet widgets1_art_;
     ArtSet widgets2_art_;
+
+    /// The PC's `Logo` and `GuiLook` loaded beside the console sheets (a PC pak only; the Xbox's
+    /// carries neither), for the images those sheets leave out.
+    bool pc_art_ = false;
+    /// The column's button images and where they are drawn from (`resolve_console_buttons`).
+    std::string console_normal_ = "gem_button";
+    std::string console_hover_ = "gem_button_rollover";
+    ArtRef console_button_art_;
+    ArtRef checkbox_art_;
 
     /// The bottom bar's three groups - the glyph and the word beside it. The layout authors four;
     /// `invitefriend` is Xbox Live and is left out.

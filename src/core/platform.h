@@ -12,6 +12,10 @@ namespace tl::core {
 /// Android's `/sdcard/Android/data/<package>/files/`.
 const std::string& platform_data_root();
 
+/// The desktop's: the folder the running program is in, ending in a separator, or empty
+/// when it cannot be told. The devices keep what comes with the program elsewhere.
+std::string platform_program_folder();
+
 /// What `Ogre::Root::createRenderWindow` needs added to its parameters: nothing but on
 /// Android (`externalWindowHandle`, `androidConfig`).
 void platform_window_params(std::map<std::string, std::string>& params);

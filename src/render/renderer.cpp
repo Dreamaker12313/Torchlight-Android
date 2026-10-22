@@ -525,7 +525,7 @@ void parse_material_script(const std::string& script, std::vector<std::string>* 
                 // and names them `<DIRECTORY>/<name>`
                 // (`CScriptListener::createObject`, `CMeshListener::processMaterialName`).
                 // A later script's `create` of a taken name throws,
-                // and `MaterialTranslator::translate` (0x2bd000) catches it,
+                // and `MaterialTranslator::translate` catches it,
                 // logs "failed to find or create material" and skips just that
                 // material. So `menu_billboard_sky.material`'s scrolling
                 // `billboard_wind*_mat` survive `menu_billboard_terrain2
@@ -1879,35 +1879,6 @@ void log_animation_states(const Ogre::Entity* entity) {
     }
 }
 
-/// Links an animation skeleton, named by full archive path, onto one entity.
-///
-/// Bones are matched by **handle**, not by name: Animation::apply(Skeleton*)
-/// binds each track to skel->getBone(track.first) (OgreAnimation.cpp:336). An
-/// earlier comment here said the opposite, which would have made this safe for
-/// any subset of bones; it is not.
-///
-/// It is safe for Torchlight because the handles agree. Idle.SKELETON carries 39
-/// bones to the body's 43, and the four it lacks are the tag_zfish* fishing-pole
-/// tags at the end of the list, which no animation tracks. Every worn set shares
-/// the body's 43 bones under the same handles. A rig that did not agree would
-/// deform into nonsense rather than fail, so this is worth re-checking
-/// before adding a class or a creature.
-/// Whether an authored `ANIMATION` names the mesh's own bind pose.
-///
-/// Case-insensitively, because the archive spells it `bind` on 205 nodes and
-/// `Bind` on 102 of them. An empty string means the same thing - a `Monster`
-/// whose source omits `ANIMATION` compiles to the empty string on all 54 of the
-/// nodes that omit it - and there is no `bind.SKELETON` anywhere in the archive.
-bool names_the_bind_pose(const std::string& animation) {
-    if (animation.empty()) return true;
-    if (animation.size() != 4) return false;
-    std::string lowered;
-    for (char c : animation) {
-        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-    return lowered == "bind";
-}
-
 /// Whether a `.SKELETON` carries any animation *track*, as opposed to only a
 /// pose.
 ///
@@ -2001,64 +1972,6 @@ size_t pose_from_skeleton(Ogre::Entity* entity, const Ogre::SkeletonPtr& pose) {
 /// are mapped **by name**; the handles happen to agree throughout the archive,
 /// but a rig that disagreed would silently deform under a handle map and is
 /// caught by a name one.
-/// Copy animations onto a skeleton, keeping only the tracks it has bones for.
-///
-/// **`Skeleton::_mergeSkeletonAnimations()` grows the destination**, and that is
-/// fatal here. Read it in `external/ogre/OgreMain/src/OgreSkeleton.cpp`: any
-/// source bone whose mapped handle is past the end of the destination is
-/// `createBone()`d into it, re-parented, and then `deriveRootBone()` runs. Every
-/// `SkeletonInstance` already cloned from that master keeps the bone list it
-/// built at clone time, and every `Entity` sized its bone-matrix array from
-/// `getNumBones()` when it was created - so the next `_getBoneMatrices()` writes
-/// past the end of that array. That is the segfault the Vanquisher's chain and
-/// assassin sets produced the moment their idle was linked.
-///
-/// The bones in question are real and the mismatch is ordinary: a worn set is
-/// rigged only for the part of the body it covers, so `Vanquisher_chain_set.
-/// skeleton` genuinely lacks bones that `Idle.SKELETON` animates. A track for a
-/// bone a mesh does not have has nothing to move, so dropping it is not an
-/// approximation - it is what the piece would do anyway if the bone existed and
-/// nothing were skinned to it.
-///
-/// Returns the number of tracks left out, so the caller can say so.
-size_t merge_shared_animations(const Ogre::SkeletonPtr& master, const Ogre::Skeleton* source,
-                               const Ogre::Skeleton::BoneHandleMap& bones,
-                               const Ogre::StringVector& wanted) {
-    const unsigned short destination_bones = master->getNumBones();
-    size_t dropped = 0;
-    for (const Ogre::String& name : wanted) {
-        const Ogre::Animation* from = source->getAnimation(name);
-        if (from == nullptr) continue;
-        Ogre::Animation* to = master->createAnimation(name, from->getLength());
-        to->setInterpolationMode(from->getInterpolationMode());
-        to->setRotationInterpolationMode(from->getRotationInterpolationMode());
-
-        for (const auto& entry : from->_getNodeTrackList()) {
-            const Ogre::NodeAnimationTrack* track = entry.second;
-            const unsigned short source_handle = track->getHandle();
-            if (source_handle >= bones.size()) continue;
-            const unsigned short handle = bones[source_handle];
-            if (handle >= destination_bones) {
-                ++dropped;
-                continue;
-            }
-            Ogre::NodeAnimationTrack* copy = to->createNodeTrack(handle, master->getBone(handle));
-            // `getNodeKeyFrame` takes an unsigned short: a count past 65535
-            // could not be indexed, and would have made this loop endless.
-            const auto key_count = static_cast<unsigned short>(std::min<size_t>(
-                track->getNumKeyFrames(), std::numeric_limits<unsigned short>::max()));
-            for (unsigned short k = 0; k < key_count; ++k) {
-                const Ogre::TransformKeyFrame* key = track->getNodeKeyFrame(k);
-                Ogre::TransformKeyFrame* made = copy->createNodeKeyFrame(key->getTime());
-                made->setTranslate(key->getTranslate());
-                made->setRotation(key->getRotation());
-                made->setScale(key->getScale());
-            }
-        }
-    }
-    return dropped;
-}
-
 bool link_path_onto(Ogre::Entity* entity, const std::string& path) {
     if (!entity || !entity->hasSkeleton()) return false;
 
@@ -2436,8 +2349,8 @@ bool Renderer::init(const RendererConfig& config) {
     Ogre::Viewport* viewport = m.window->addViewport(m.camera);
     viewport->setVisibilityMask(kVisibilityWorld);
     m.apply_scheme(viewport);
-    m.camera->setAspectRatio(static_cast<Ogre::Real>(viewport->getActualWidth()) /
-                             static_cast<Ogre::Real>(viewport->getActualHeight()));
+    m.fit_camera_to_window();
+    m.watch_window_surface();
 
     // Brightness and contrast: the window's last viewport.
     //
@@ -2670,26 +2583,25 @@ Ogre::Entity* Renderer::Impl::attach_worn_mesh(const std::string& mesh_name) {
                               m.subject_dir);
     }
 
-    ensure_skeleton(mesh, mesh_name, dir);
-    // INVENTED: a worn mesh naming a skeleton no archive ships - the Xbox's
-    // console-only sets (`media/wardrobe/<class>/360_set.mesh` asks for
-    // `360_set.skeleton`, which the Xbox archive does not carry) - takes the
-    // body's own. How the console binds them is not read; every PC set mesh
-    // ships a copy of its class's skeleton beside it, which is what this stands
-    // in for.
-    // OGRE forgets the name of a skeleton it could not load, so "skinned" is
-    // read off the bone assignments.
+    // A skinned piece is bound to the body's skeleton, never to the one it names:
+    // `CWardrobe::update` gives its merged mesh the base
+    // model's skeleton. The pieces' bone indices count the body's bones, so a set's own
+    // skeleton that lacks one (the ponytail) moves every later bone's vertices onto the next.
+    // "Skinned" is read off the bone assignments: OGRE forgets a skeleton it could not load
+    // (the Xbox's `360_set.mesh` names one its archive does not carry).
     bool skinned = !mesh->getBoneAssignments().empty();
     for (const Ogre::SubMesh* sub : mesh->getSubMeshes()) {
         skinned = skinned || !sub->getBoneAssignments().empty();
     }
-    if (skinned && !mesh->getSkeleton() && m.subject != nullptr &&
-        m.subject->getMesh()->hasSkeleton() && m.subject->getMesh()->getSkeleton()) {
-        mesh->setSkeletonName(m.subject->getMesh()->getSkeletonName());
-        if (mesh->getSkeleton()) {
-            TL_LOG_INFO("  '%s' has no skeleton of its own; it takes the body's (%s)",
-                        mesh_name.c_str(), m.subject->getMesh()->getSkeletonName().c_str());
+    const Ogre::Mesh* body = m.subject != nullptr ? m.subject->getMesh().get() : nullptr;
+    if (skinned && body != nullptr && body->getSkeleton()) {
+        if (mesh->getSkeletonName() != body->getSkeletonName()) {
+            mesh->setSkeletonName(body->getSkeletonName());
+            TL_LOG_INFO("  '%s' bound to the body's skeleton (%s)", mesh_name.c_str(),
+                        body->getSkeletonName().c_str());
         }
+    } else {
+        ensure_skeleton(mesh, mesh_name, dir);
     }
 
     Ogre::Entity* entity = m.scene->createEntity(mesh);
@@ -3162,118 +3074,21 @@ bool Renderer::apply_animation(const std::string& name, float time) {
     return impl_->apply_subject_animation(name, time, /*quiet=*/false);
 }
 
-/// The orientation a layout node carries, as a rotation.
-///
-/// A placeable node stores a position and then three unit vectors, and the
-/// TorchED source names them: `FORWARD`, `RIGHT`, `UP`, in that order. **The
-/// basis matrix wants its columns in the order (RIGHT, UP, FORWARD)**, not in
-/// the order the file stores them - OGRE's convention is that a rotation
-/// matrix's columns are the local X, Y and Z axes in world space, and FORWARD
-/// is the local +Z.
-///
-/// Written that way it is right-handed and checks out on every case that looked
-/// absurd under the two orderings tried in earlier sessions:
-///
-///  * the default room piece - FORWARD (0,0,1), RIGHT (1,0,0), UP (0,1,0) - is
-///    the **identity**, rather than the 120-degree turn about (1,1,1) that
-///    using the file's order as the column order produces;
-///  * a turned room piece - FORWARD (0,0,-1), RIGHT (-1,0,0), UP (0,1,0) - is a
-///    half-turn about the vertical, which is what a tileset needs;
-///  * the menu camera's basis has determinant 1 and agrees with its own look
-///    direction.
-///
-/// A node shorter than four vectors, or one whose vectors are not a rotation,
-/// gets the identity. That is not paranoia: the basis is checked for
-/// orthonormality and for a positive determinant, because a reflection handed to
-/// `Ogre::Quaternion(Matrix3)` yields an arbitrary rotation rather than an
-/// error, and a silently arbitrary orientation is the worst of the three
-/// outcomes.
+// PORT: the layout maths in OGRE's types (core/layout_maths.h).
 Ogre::Quaternion orientation_from_basis(const Ogre::Vector3& forward, const Ogre::Vector3& right,
                                         const Ogre::Vector3& up) {
-    // Unit length, to within the precision the editor wrote them at.
-    for (const Ogre::Vector3& axis : {forward, right, up}) {
-        const float length = axis.length();
-        if (length < 0.99f || length > 1.01f) return Ogre::Quaternion::IDENTITY;
-    }
-
-    // Columns are the local axes: X = RIGHT, Y = UP, Z = FORWARD.
-    Ogre::Matrix3 basis;
-    basis.SetColumn(0, right);
-    basis.SetColumn(1, up);
-    basis.SetColumn(2, forward);
-
-    // A left-handed triple is a reflection, and no rotation represents it.
-    if (right.crossProduct(up).dotProduct(forward) < 0.9f) return Ogre::Quaternion::IDENTITY;
-
-    return Ogre::Quaternion(basis);
+    return to_ogre(
+        tl::core::orientation_from_basis(from_ogre(forward), from_ogre(right), from_ogre(up)));
 }
 
+// PORT: the layout maths in OGRE's types (core/layout_maths.h).
 Ogre::Quaternion node_orientation(const tl::formats::CmpNode& node) {
-    if (node.vec3s.size() < 4) return Ogre::Quaternion::IDENTITY;
-
-    auto vec = [&](size_t i) {
-        const tl::formats::CmpVec3& v = node.vec3s[i];
-        return Ogre::Vector3(v.x, v.y, v.z);
-    };
-    return orientation_from_basis(vec(1), vec(2), vec(3));
+    return to_ogre(tl::core::node_orientation(node));
 }
 
-/// The authored per-axis scale of a placeable node, or unit scale.
-///
-/// `Generic Model` and `Room Piece` each carry `SCALE X/Y/Z` at their own
-/// indices; both default to 1, so a node shorter than its schema, or one whose
-/// scale fields are absent, keeps unit scale rather than collapsing to zero.
-///
-/// A room piece also carries a uniform `SCALE` at index 10, which is the
-/// editor's slider and drives the three per-axis values. The per-axis three are
-/// read because they are the ones that can disagree; throughout the shipped
-/// data they do not.
+// PORT: the layout maths in OGRE's types (core/layout_maths.h).
 Ogre::Vector3 layout_scale(const tl::formats::CmpNode& node, float unit_scale) {
-    // A `Monster` carries one uniform `SCALE` rather than three per-axis ones -
-    // creatures are resized as wholes - so it is read on its own and applied to
-    // all three axes. 151 of the archive's monsters author it.
-    //
-    // **A unit has a `SCALE` of its own, in its `.DAT`**, and the node's is an
-    // override rather than the whole answer: every merchant in the town authors
-    // `SCALE: 1.1` in its unit file and nothing in the layout repeats it, so a
-    // node with no scale of its own has to fall back to the unit's or the whole
-    // cast stands a tenth too short.
-    if (node.type == tl::formats::cmp_type::kMonster) {
-        const tl::formats::CmpField* f = node.field(tl::formats::cmp_field::monster::kScale);
-        float value = unit_scale;
-        if (f != nullptr && f->count() == 1) {
-            const float authored = f->as_float();
-            // 1 is the descriptor's default and means "nothing said here", not
-            // "exactly life size": a node that authors it is not overriding the
-            // unit, which is why the unit's own value still wins.
-            if (authored > 0.0f && authored < 1000.0f && std::fabs(authored - 1.0f) > 1e-4f) {
-                value = authored;
-            }
-        }
-        if (!(value > 0.0f) || value >= 1000.0f) return Ogre::Vector3::UNIT_SCALE;
-        return Ogre::Vector3(value, value, value);
-    }
-
-    size_t first = 0;
-    if (node.type == tl::formats::cmp_type::kModel) {
-        first = tl::formats::cmp_field::model::kScaleX;
-    } else if (node.type == tl::formats::cmp_type::kRoomPiece) {
-        first = tl::formats::cmp_field::room_piece::kScaleX;
-    } else {
-        return Ogre::Vector3::UNIT_SCALE;
-    }
-
-    Ogre::Vector3 scale = Ogre::Vector3::UNIT_SCALE;
-    for (size_t axis = 0; axis < 3; ++axis) {
-        const tl::formats::CmpField* f = node.field(first + axis);
-        if (!f || f->count() != 1) continue;
-        const float value = f->as_float();
-        // A scale of zero would draw nothing at all, and a negative one turns
-        // the mesh inside out. Neither occurs in the archive, so either is a
-        // misread field rather than an authored intent.
-        if (value > 0.0f && value < 1000.0f) scale[axis] = value;
-    }
-    return scale;
+    return to_ogre(tl::core::layout_scale(node, unit_scale));
 }
 
 /// Load a layout's mesh: its submeshes' texture paths qualified by its own
@@ -3457,9 +3272,9 @@ Ogre::Entity* Renderer::Impl::place_mesh(const MeshPlacement& placement) {
     // address-dependent than the distance sort it replaced.
 
     Ogre::SceneNode* node = scene->getRootSceneNode()->createChildSceneNode();
-    node->setPosition(placement.position);
-    node->setOrientation(placement.orientation);
-    node->setScale(placement.scale);
+    node->setPosition(to_ogre(placement.position));
+    node->setOrientation(to_ogre(placement.orientation));
+    node->setScale(to_ogre(placement.scale));
     node->attachObject(entity);
     // `VISIBLE:false` at placement - see MeshPlacement::start_hidden. Set on
     // the node rather than left for a caller to notice, so nothing that
@@ -3698,24 +3513,6 @@ void Renderer::Impl::write_entity_animation(EntityAnimation& model) {
         if (now.enabled != was.enabled) state->setEnabled(now.enabled);
         was = now;
     }
-}
-
-bool Renderer::Impl::animator_owns(Ogre::Entity* entity, const Ogre::AnimationState* state) const {
-    const auto it = entity_animations.find(entity);
-    if (it == entity_animations.end()) return false;
-    return std::find(it->second.states.begin(), it->second.states.end(), state) !=
-           it->second.states.end();
-}
-
-bool Renderer::Impl::step_entity_animation(Ogre::Entity* entity, float delta) {
-    // `CGenericModel::updateAnimation` on the
-    // entity's animator: each record's own speed, the blends on the frame's
-    // time as it is.
-    const auto it = entity_animations.find(entity);
-    if (it == entity_animations.end()) return false;
-    it->second.animator.update(delta, false);
-    write_entity_animation(it->second);
-    return true;
 }
 
 bool Renderer::Impl::play_scene_animation(Ogre::Entity* entity, const std::string& mesh_path,
@@ -4080,15 +3877,6 @@ void Renderer::Impl::arm_particle_timer(size_t first, size_t last) {
     }
 }
 
-bool Renderer::Impl::particle_universe_takes(const std::string& layout_path) const {
-    const std::string path = tl::core::upper_ascii(layout_path);
-    for (const std::string& prefix : config.pu_particle_layouts) {
-        if (prefix == "*") return true;
-        if (path.compare(0, prefix.size(), prefix) == 0) return true;
-    }
-    return false;
-}
-
 bool Renderer::Impl::place_torchlight_particle(const tl::formats::CmpScene& layout,
                                                const tl::formats::CmpNode& node,
                                                const Ogre::Vector3& position,
@@ -4098,13 +3886,13 @@ bool Renderer::Impl::place_torchlight_particle(const tl::formats::CmpScene& layo
     context.camera = camera;
     context.resource_group = kGameGroup;
     context.resolve_texture = [](const std::string& reference) {
-        return resolve_archive_path(reference);
+        return renderer_detail::resolve_archive_path(reference);
     };
     // The entity renderer's mesh, loaded as a layout's is, its own material
     // script first (a particle layout places no meshes, so place_layout() has
     // parsed none for it).
     context.load_mesh = [](const std::string& reference) {
-        const std::string path = resolve_archive_path(reference);
+        const std::string path = renderer_detail::resolve_archive_path(reference);
         if (path.empty()) {
             TL_LOG_WARN("particle mesh '%s' is not in the archive", reference.c_str());
             return std::string();
@@ -4152,6 +3940,7 @@ bool Renderer::Impl::place_torchlight_particle(const tl::formats::CmpScene& layo
                 static_cast<double>(position.z), system.pu.non_expiring ? ", does not expire" : "",
                 system.wrapper ? ", a wrapper of its layout: not started" : "");
     particle_systems.push_back(std::move(system));
+    particle_index_add(particle_systems.size() - 1);
     return true;
 }
 
@@ -4195,148 +3984,6 @@ namespace renderer_detail {
 Ogre::Vector3 default_camera_offset(float camera_mult) {
     const float distance = kDefaultCameraDistance * camera_mult;
     return Ogre::Vector3(0.5f * distance, 0.75f * distance, -0.5f * distance);
-}
-
-/// Log how much of the process's memory budget is gone, if the platform knows.
-///
-/// Silent on the desktop, which has no meaningful ceiling. On the console this
-/// is the number M4 and M5 both listed as outstanding, and the reason a real
-/// level can now be the console's default instead of a small stand-in scene:
-/// the question stops being "will it fit?" and becomes a figure in the log.
-void log_memory(const char* when) {
-    unsigned long long used = 0, total = 0;
-    if (!tl::core::memory_usage(used, total)) return;
-
-    const double mb = 1024.0 * 1024.0;
-    TL_LOG_INFO("memory %s: %.1f MB used of %.1f MB (%.1f%%), %.1f MB free", when,
-                static_cast<double>(used) / mb, static_cast<double>(total) / mb,
-                total ? 100.0 * static_cast<double>(used) / static_cast<double>(total) : 0.0,
-                static_cast<double>(total - used) / mb);
-}
-
-/// Where the character stands when a level is entered.
-///
-/// Two spellings, and only knowing both finds the town's.
-///
-/// The main-menu layouts carry a `Property Node` *named* `Player Start`, and
-/// that is what the menu scene has always been read by. The playable town
-/// carries one *typed* `Player Start` - a node called `Property Node0` whose
-/// TYPE string is `Player Start`, at (-31.98, 0.79, 17.15) - and searching by
-/// name misses it completely. `Property Node` is the editor's general-purpose
-/// marker and its TYPE is the thing that says what it marks: across the shipped
-/// layouts the types run `No Spawn Region` (597), `Quest Boss` (163), `Editor
-/// Player Start` (156), `Quest Item` (153), `Player Start` (24), `Town Portal`,
-/// `Waypoint Start` and a dozen more.
-///
-/// So this looks at the name first, then at the type, then at the two other
-/// authored places a player is known to arrive - a town portal and a waypoint,
-/// which is where the game puts a character coming back to town. Which rule
-/// matched is logged: a character standing somewhere odd is otherwise
-/// indistinguishable from a placement bug.
-// INVENTED: the marker the player stands on: the node named `Player Start`,
-// else the first marker of these types, in this order; the console's choice of
-// an arrival point is not transcribed for this path.
-const tl::formats::CmpNode* find_spawn(const tl::formats::CmpScene& layout) {
-    auto same = [](const std::string& a, const char* b) {
-        const size_t n = std::strlen(b);
-        if (a.size() != n) return false;
-        for (size_t i = 0; i < n; ++i) {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i]))) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (const tl::formats::CmpNode* start = layout.find("Player Start")) return start;
-
-    // By marker type, in the order of how directly each names a place a player
-    // stands. `Editor Player Start` is the editor's own preview spawn and is the
-    // most common of the three, so it is a good fallback for a level that has
-    // no runtime one.
-    for (const char* type :
-         {"Player Start", "Editor Player Start", "Town Portal", "Waypoint Start"}) {
-        for (const tl::formats::CmpNode& node : layout.nodes) {
-            if (!node.has_position()) continue;
-            for (const std::string& text : node.strings) {
-                if (!same(text, type)) continue;
-                TL_LOG_INFO("no node named Player Start; using the '%s' marker '%s'", type,
-                            node.name.c_str());
-                return &node;
-            }
-        }
-    }
-    return nullptr;
-}
-
-/// A mesh's bounds over its vertices, in its own space: `CCollisionList+0x1c` /
-/// `+0x10` after `CCollisionModel::loadModel`.
-bool mesh_local_bounds(const Ogre::MeshPtr& mesh, tl::core::Vec3& low, tl::core::Vec3& high) {
-    bool have = false;
-    auto take = [&](const Ogre::VertexData* data) {
-        if (data == nullptr) return;
-        const Ogre::VertexElement* element =
-            data->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-        if (element == nullptr) return;
-        Ogre::HardwareVertexBufferSharedPtr buffer =
-            data->vertexBufferBinding->getBuffer(element->getSource());
-        if (!buffer) return;
-        Ogre::HardwareBufferLockGuard lock(buffer, Ogre::HardwareBuffer::HBL_READ_ONLY);
-        const unsigned char* base = static_cast<const unsigned char*>(lock.pData);
-        for (size_t v = 0; v < data->vertexCount; ++v) {
-            const float* p = nullptr;
-            element->baseVertexPointerToElement(
-                const_cast<unsigned char*>(base + v * buffer->getVertexSize()), &p);
-            if (!have) {
-                low = {p[0], p[1], p[2]};
-                high = low;
-                have = true;
-                continue;
-            }
-            low = {std::min(low.x, p[0]), std::min(low.y, p[1]), std::min(low.z, p[2])};
-            high = {std::max(high.x, p[0]), std::max(high.y, p[1]), std::max(high.z, p[2])};
-        }
-    };
-    take(mesh->sharedVertexData);
-    for (const Ogre::SubMesh* sub : mesh->getSubMeshes()) {
-        if (!sub->useSharedVertices) take(sub->vertexData);
-    }
-    return have;
-}
-
-/// The grid as a gdb dump of the original is written: a
-/// header, then one line per x column, '.' for an open cell.
-void write_passability_dump(const tl::core::PassabilityMap& grid, const std::string& path) {
-    FILE* out = std::fopen(path.c_str(), "w");
-    if (out == nullptr) {
-        TL_LOG_WARN("could not open passability dump '%s'", path.c_str());
-        return;
-    }
-    std::fprintf(out, "# passability origin_x=%.6f origin_z=%.6f width=%d height=%d passable=%u\n",
-                 static_cast<double>(grid.origin_x()), static_cast<double>(grid.origin_z()),
-                 grid.width(), grid.height(), grid.passable_cells());
-    std::string column(static_cast<size_t>(std::max(grid.height(), 0)), '#');
-    for (int x = 0; x < grid.width(); ++x) {
-        for (int z = 0; z < grid.height(); ++z) {
-            column[static_cast<size_t>(z)] = grid.map_passable(x, z) ? '.' : '#';
-        }
-        std::fprintf(out, "%s\n", column.c_str());
-    }
-    std::fclose(out);
-    TL_LOG_INFO("  passability dumped to %s", path.c_str());
-}
-
-/// The passability lines `CLevel::calculatePassability` and `CLevel::populate`
-/// print, plus the grid's size and how long the bake took.
-void log_passability(const tl::core::PassabilityMap& grid, double seconds) {
-    for (const tl::core::PassabilityMap::Pass& pass : grid.passes()) {
-        TL_LOG_INFO("  Level Pathnode Ray Casts :%u (%u cell(s) open)", pass.ray_casts,
-                    pass.passable);
-    }
-    TL_LOG_INFO("  passability: %d x %d cell(s) of %.1f, Pathable Area:%g m^2, in %.2f s",
-                grid.width(), grid.height(), static_cast<double>(tl::core::PassabilityMap::kCell),
-                static_cast<double>(grid.pathable_area()), seconds);
 }
 
 void for_each_triangle(
@@ -4502,257 +4149,6 @@ void Renderer::Impl::aim_camera(const tl::formats::CmpScene& layout, const Ogre:
 
     TL_LOG_INFO("camera from layout: eye (%.2f, %.2f, %.2f) -> target (%.2f, %.2f, %.2f)",
                 eye_pos.x, eye_pos.y, eye_pos.z, target_pos.x, target_pos.y, target_pos.z);
-}
-
-void Renderer::Impl::load_tileset() {
-    if (tileset_loaded) return;
-    tileset_loaded = true;
-
-    // `media/massfile.dat.ADM` is the master index: every room piece and prop in
-    // the game, each a PIECE section carrying a GUID and the mesh that draws it.
-    // A layout refers to pieces only by GUID, so this is the one table that
-    // turns a menu backdrop into geometry.
-    const std::string path = archive_path_unique("massfile.dat.ADM");
-    if (path.empty()) {
-        TL_LOG_WARN("no massfile.dat.ADM; room pieces cannot be resolved");
-        return;
-    }
-
-    const std::vector<uint8_t> bytes = read_resource(path);
-    if (bytes.empty()) return;
-
-    const tl::formats::AdmFile index = tl::formats::parse_adm(bytes.data(), bytes.size());
-    if (!index.ok) {
-        TL_LOG_ERROR("could not parse '%s': %s", path.c_str(), index.error.c_str());
-        return;
-    }
-
-    index.visit([&](const tl::formats::AdmSection& section) {
-        const int64_t guid = section.guid_or("GUID", 0);
-        if (guid == 0) return;
-        tileset_known.insert(guid);
-        if (tl::core::upper_ascii(section.string_or("NAME", "")) == "ERROR") {
-            tileset_default_guid = guid;
-        }
-        // Every FILE and COLLISIONFILE, in order, as
-        // `CRoomPieceDataInformation::ParseRoomPieceData`
-        // fills its two lists
-        // (`FillArrayList`): 89 of the 1,619 pieces list several.
-        std::vector<std::string> files;
-        std::vector<std::string> collision_files;
-        for (const tl::formats::AdmRecord& record : section.records) {
-            if (record.text.empty()) continue;
-            if (record.key == "FILE") files.push_back(record.text);
-            if (record.key == "COLLISIONFILE") collision_files.push_back(record.text);
-        }
-        if (!files.empty()) tileset.emplace(guid, std::move(files));
-
-        // The collision geometry, from the same record. TorchED's plaintext
-        // twin of this file shows the pairing:
-        //
-        //     <STRING>FILE:media/levelsets/town1/blend_brick.mesh
-        //     <STRING>COLLISIONFILE:media/levelsets/town1/collision_terrain.mesh
-        //
-        // Most pieces have none - only 5 of town1's 277 do, because the town's
-        // collision is a handful of large hand-authored meshes rather than one
-        // per tile - so its absence is normal and not worth a warning.
-        if (!collision_files.empty()) tileset_collision.emplace(guid, std::move(collision_files));
-
-        // `PRERENDER` / `POSTRENDER` (`CRoomPieceDataInformation`): which of
-        // `CLevel::bake`'s three batches the piece goes to.
-        if (section.bool_or("PRERENDER", false)) {
-            tileset_render_phase.emplace(guid, -1);
-        } else if (section.bool_or("POSTRENDER", false)) {
-            tileset_render_phase.emplace(guid, 1);
-        }
-    });
-
-    TL_LOG_INFO("tileset index: %zu piece(s) from %s, %zu with collision", tileset.size(),
-                path.c_str(), tileset_collision.size());
-}
-
-const Renderer::Impl::CollisionModel& Renderer::Impl::collision_model(const std::string& path) {
-    const auto found = collision_models.find(path);
-    if (found != collision_models.end()) return found->second;
-    CollisionModel& model = collision_models[path];
-
-    Ogre::MeshManager& meshes = Ogre::MeshManager::getSingleton();
-    SubmeshMaterialNames names;
-    Ogre::MeshSerializerListener* const previous_listener = meshes.getListener();
-    meshes.setListener(&names);
-    // A prop may name its own drawn mesh as its collision file; that one is
-    // loaded already and must stay so (see the unload below).
-    const Ogre::MeshPtr existing = meshes.getByName(path, kGameGroup);
-    const bool was_loaded = existing && existing->isLoaded();
-    Ogre::MeshPtr mesh;
-    try {
-        mesh = meshes.load(path, kGameGroup);
-    } catch (const Ogre::Exception& e) {
-        meshes.setListener(previous_listener);
-        model.state = CollisionModel::State::Threw;
-        model.error = e.getDescription();
-        return model;
-    }
-    meshes.setListener(previous_listener);
-    if (!mesh) return model;
-    model.state = CollisionModel::State::Loaded;
-
-    // CCollisionModel::loadModel: every
-    // submesh's faces, each taking its submesh's material (100 for `nocollide`,
-    // else the submesh's index). The walk is for_each_triangle()'s, kept in the
-    // mesh's own space: a submesh with no geometry still takes its index, and a
-    // corner past the vertex count drops its triangle.
-    uint32_t submesh_index = 0;
-    for (const Ogre::SubMesh* sub : mesh->getSubMeshes()) {
-        CollisionModel::Submesh piece;
-        const std::string& name = submesh_index < names.names.size() ? names.names[submesh_index]
-                                                                     : sub->getMaterialName();
-        piece.material = tl::core::collision_material(name, submesh_index);
-        ++submesh_index;
-
-        const Ogre::VertexData* vertex_data =
-            sub->useSharedVertices ? mesh->sharedVertexData : sub->vertexData;
-        if (!vertex_data || !sub->indexData) continue;
-        const Ogre::VertexElement* pos_elem =
-            vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-        if (!pos_elem) continue;
-        Ogre::HardwareVertexBufferSharedPtr vbuf =
-            vertex_data->vertexBufferBinding->getBuffer(pos_elem->getSource());
-        Ogre::HardwareIndexBufferSharedPtr ibuf = sub->indexData->indexBuffer;
-        if (!vbuf || !ibuf) continue;
-
-        piece.points.resize(vertex_data->vertexCount);
-        {
-            Ogre::HardwareBufferLockGuard lock(vbuf, Ogre::HardwareBuffer::HBL_READ_ONLY);
-            const unsigned char* base = static_cast<const unsigned char*>(lock.pData);
-            for (size_t v = 0; v < vertex_data->vertexCount; ++v) {
-                const float* p = nullptr;
-                pos_elem->baseVertexPointerToElement(
-                    const_cast<unsigned char*>(base + v * vbuf->getVertexSize()), &p);
-                piece.points[v] = Ogre::Vector3(p[0], p[1], p[2]);
-            }
-        }
-
-        Ogre::HardwareBufferLockGuard lock(ibuf, Ogre::HardwareBuffer::HBL_READ_ONLY);
-        const bool wide = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-        const uint32_t* i32 = static_cast<const uint32_t*>(lock.pData);
-        const uint16_t* i16 = static_cast<const uint16_t*>(lock.pData);
-        const size_t triangles = sub->indexData->indexCount / 3;
-        piece.corners.reserve(triangles * 3);
-        for (size_t t = 0; t < triangles; ++t) {
-            const size_t a = wide ? i32[t * 3 + 0] : i16[t * 3 + 0];
-            const size_t b = wide ? i32[t * 3 + 1] : i16[t * 3 + 1];
-            const size_t c = wide ? i32[t * 3 + 2] : i16[t * 3 + 2];
-            if (a >= piece.points.size() || b >= piece.points.size() || c >= piece.points.size()) {
-                continue;
-            }
-            piece.corners.push_back(static_cast<uint32_t>(a));
-            piece.corners.push_back(static_cast<uint32_t>(b));
-            piece.corners.push_back(static_cast<uint32_t>(c));
-        }
-        model.submeshes.push_back(std::move(piece));
-    }
-    model.has_bounds = mesh_local_bounds(mesh, model.low, model.high);
-
-    // Loaded meshes are kept in memory by the MeshManager, and a collision mesh
-    // is never drawn. Applet mode is the tighter of the two budgets and
-    // `collision_Terrain.Mesh` alone is 175 KB on disk, so give the buffers back
-    // rather than holding a second copy of the level: what is kept above is
-    // positions and indices only. Not a mesh something had loaded before: an
-    // entity may be drawing it, and unloading it under the entity frees the
-    // submeshes the static scenery then reads (Molten Prison, floor 21,
-    // crashed in bake_static_scenery on `stalacmite_tall02.MESH`).
-    if (!was_loaded) mesh->unload();
-    return model;
-}
-
-/// Fold one collision mesh into the level's collision soup, in world space.
-///
-/// The mesh is loaded but never made into an entity: a collision mesh is an
-/// untextured stand-in for the geometry beside it, and putting one in the scene
-/// would drape the level in grey. All that is wanted is its triangles.
-///
-/// Nothing is logged per mesh on purpose. A cave tileset gives every tile its
-/// own collision file, so a real dungeon would put hundreds of lines in a log
-/// whose whole value is that a person can read it; the counts are reported once
-/// by place_layout() instead. A mesh that will not load *is* logged, because
-/// that is a hole in the floor.
-void Renderer::Impl::add_collision_mesh(const std::string& path, const Ogre::Matrix4& to_world,
-                                        int64_t group, const Ogre::Vector3* piece_at) {
-    collision.set_group(group);
-    struct GroupGuard {
-        tl::core::CollisionWorld& world;
-        ~GroupGuard() { world.set_group(0); }
-    } group_guard{collision};
-
-    const CollisionModel& model = collision_model(path);
-    if (model.state == CollisionModel::State::Threw) {
-        TL_LOG_WARN("  collision mesh '%s' would not load: %s", path.c_str(), model.error.c_str());
-        ++collision_skipped;
-        return;
-    }
-    if (model.state == CollisionModel::State::Missing) {
-        ++collision_skipped;
-        return;
-    }
-
-    std::vector<Ogre::Vector3> points;
-    for (const CollisionModel::Submesh& piece : model.submeshes) {
-        points.resize(piece.points.size());
-        for (size_t v = 0; v < piece.points.size(); ++v) points[v] = to_world * piece.points[v];
-        for (size_t i = 0; i + 2 < piece.corners.size(); i += 3) {
-            const Ogre::Vector3& a = points[piece.corners[i + 0]];
-            const Ogre::Vector3& b = points[piece.corners[i + 1]];
-            const Ogre::Vector3& c = points[piece.corners[i + 2]];
-            collision.add_triangle({a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z},
-                                   piece.material);
-        }
-    }
-    ++collision_meshes;
-
-    // CLevel::bakeCollision: a room layout's
-    // passability box is the union, over its collision-enabled pieces, of four
-    // corners of each collision list's own bounds put through the piece's
-    // transform - its minimum, its maximum, (max x, min y, min z) and (min x,
-    // max y, max z).
-    if (group == 0 && collision_section >= 0 &&
-        collision_section < static_cast<int>(collision_sections.size()) && model.has_bounds) {
-        const tl::core::Vec3& low = model.low;
-        const tl::core::Vec3& high = model.high;
-        const Ogre::Vector3 corners[4] = {
-            to_world * Ogre::Vector3(low.x, low.y, low.z),
-            to_world * Ogre::Vector3(high.x, high.y, high.z),
-            to_world * Ogre::Vector3(high.x, low.y, low.z),
-            to_world * Ogre::Vector3(low.x, high.y, high.z),
-        };
-        tl::core::Vec3 box_low{corners[0].x, corners[0].y, corners[0].z};
-        tl::core::Vec3 box_high = box_low;
-        for (const Ogre::Vector3& c : corners) {
-            box_low = {std::min(box_low.x, c.x), std::min(box_low.y, c.y),
-                       std::min(box_low.z, c.z)};
-            box_high = {std::max(box_high.x, c.x), std::max(box_high.y, c.y),
-                        std::max(box_high.z, c.z)};
-        }
-        collision_sections[static_cast<size_t>(collision_section)].merge(box_low, box_high);
-    }
-
-    // `CLevel::populate`: a section per room piece, its
-    // position plus the collision mesh's own bounds - no turn, no scale - with
-    // the height pushed 1000 either way. The first corner is the list's `+0x1c`,
-    // its minimum (`calculateFaceBounds` hands
-    // `+0x1c` to `MATH::expandBounds` as the low end), and the rolls between the corners
-    // run from it.
-    if (piece_at != nullptr && model.has_bounds) {
-        tl::core::PopulateSection section;
-        section.first = {piece_at->x + model.low.x, piece_at->y + model.low.y - 1000.0f,
-                         piece_at->z + model.low.z};
-        section.second = {piece_at->x + model.high.x, piece_at->y + model.high.y + 1000.0f,
-                          piece_at->z + model.high.z};
-        population_sections.push_back(section);
-        if (collision_section >= 0 && collision_section < static_cast<int>(level_rooms.size())) {
-            level_rooms[static_cast<size_t>(collision_section)].add(section);
-        }
-    }
 }
 
 }  // namespace tl::render

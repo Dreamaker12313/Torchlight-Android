@@ -18,6 +18,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
+#include <vector>
 
 namespace tl::render {
 namespace {
@@ -69,12 +71,17 @@ std::string element_name(size_t index, const char* suffix) {
 DeathScreen::~DeathScreen() { destroy(); }
 
 const DeathScreen::Sprite* DeathScreen::sprite(const std::string& name) const {
-    const auto found = sprites_.find(lowered(name));
+    auto found = sprites_.find(lowered(name));
+    // A console image the sheets lack, drawn in the PC's like of it.
+    if (found == sprites_.end()) found = sprites_.find(lowered(pc_image_for(name)));
     return found == sprites_.end() ? nullptr : &found->second;
 }
 
 bool DeathScreen::load_art(const std::string& group) {
-    for (const char* path : kImagesets) {
+    // The PC's sets after the console's, so a name both hold keeps the console's.
+    std::vector<const char*> paths(std::begin(kImagesets), std::end(kImagesets));
+    for (const char* path : pc_imagesets()) paths.push_back(path);
+    for (const char* path : paths) {
         std::vector<uint8_t> bytes;
         if (!read_menu_resource(path, group, bytes) || bytes.empty()) continue;
         tl::formats::Imageset parsed = tl::formats::parse_imageset(bytes.data(), bytes.size());

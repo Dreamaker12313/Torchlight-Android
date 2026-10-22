@@ -75,9 +75,15 @@ private:
     };
 
     bool hand_over(Ogre::Entity* entity);
+    /// step()'s answer to an entity on the GPU whose materials no longer fit it: handed over
+    /// again (true), or left to OGRE to skin on the CPU.
+    bool refit(Ogre::Entity* entity);
     /// For guard(): the technique of a marked copy of a GPU-skinned submesh's material that
     /// skins for its weight count and bones, when its own does not; null otherwise.
     Ogre::Technique* fitting_technique(Ogre::SubEntity* sub) const;
+    /// Whether a submesh's material skins for its weights and at least its bones (or is
+    /// not marked at all).
+    bool material_fits(const Ogre::SubEntity* sub) const;
     /// Whether every submesh of an entity on the GPU still wears a material
     /// marked for its own weight count.
     bool weights_agree(const Ogre::Entity* entity) const;

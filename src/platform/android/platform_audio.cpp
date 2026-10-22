@@ -6,10 +6,13 @@
 // close() stops the stream (waking the writer), waits until it has left write(), then closes.
 // A disconnected stream (output changed) is reopened at the same rate by write().
 // `audio_silent` in the data root runs the stream exactly as usual but feeds it zeros.
+// In the background the stream is paused: the mixer's writes wait, so the music is
+// where it was when the app comes back.
 #include "core/audio.h"
 
 #include "core/log.h"
 #include "core/platform.h"
+#include "platform/android/android_glue.h"
 
 #include <aaudio/AAudio.h>
 #include <sys/resource.h>
@@ -41,6 +44,8 @@ struct Device {
     std::atomic<bool> closing{false};
     /// Threads inside write(): close() waits for none before closing.
     std::atomic<int> writers{0};
+    /// The app is in the background: write() waits.
+    std::atomic<bool> paused{false};
 };
 
 Device g_device;
@@ -130,6 +135,9 @@ namespace {
 
 /// write()'s body, with the writer counted in (below).
 bool write_counted(Device& d, const int16_t* interleaved, size_t frames) {
+    while (d.paused.load() && !d.closing.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     if (d.closing.load() || d.stream == nullptr) return false;
     if (d.silent) {
         d.zeros.assign(frames * 2, 0);
@@ -191,3 +199,20 @@ void prepare_mixer_thread() {
 }
 
 }  // namespace tl::core::audio_device
+
+namespace tl::core::android {
+
+void set_audio_paused(bool paused) {
+    audio_device::Device& d = audio_device::g_device;
+    d.paused.store(paused);
+    AAudioStream* stream = d.stream;
+    if (stream == nullptr || d.closing.load()) return;
+    const aaudio_result_t done =
+        paused ? AAudioStream_requestPause(stream) : AAudioStream_requestStart(stream);
+    if (done != AAUDIO_OK) {
+        TL_LOG_WARN("aaudio: the stream would not %s (%s)", paused ? "pause" : "resume",
+                    AAudio_convertResultToText(done));
+    }
+}
+
+}  // namespace tl::core::android

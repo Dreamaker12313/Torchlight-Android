@@ -44,10 +44,9 @@ bool g_archive_indexed = false;
 // the first script in the archive's order that declares it (parse_material_declaring).
 std::unordered_map<std::string, std::string> g_material_scripts;
 bool g_material_scripts_indexed = false;
-
-/// `spawn_class_path`'s index, built on first use and dropped with the rest.
-std::unordered_map<std::string, std::string> g_spawn_class_paths;
-bool g_spawn_classes_indexed = false;
+// PORT: asset lookup. archive_paths_under()'s answers, by directory and suffix: a unit's
+// animation is looked up there every time it changes, and the archive does not change.
+std::unordered_map<std::string, std::vector<std::string>> g_paths_under;
 
 bool ends_with_lower(const std::string& text, const char* suffix) {
     const size_t n = std::strlen(suffix);
@@ -72,8 +71,7 @@ void forget_archive_index() {
     g_material_scripts.clear();
     g_material_scripts_indexed = false;
     g_archive_indexed = false;
-    g_spawn_class_paths.clear();
-    g_spawn_classes_indexed = false;
+    g_paths_under.clear();
 }
 
 /// Build the index if it does not exist yet. Idempotent and cheap after the
@@ -135,7 +133,12 @@ const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename) 
 std::vector<std::string> archive_paths_under(const std::string& dir, const char* suffix) {
     ensure_archive_index();
     const std::string prefix = lowered(dir);
-    std::vector<std::string> out;
+    std::string key = prefix;
+    key += '|';
+    key += suffix;
+    const auto known = g_paths_under.find(key);
+    if (known != g_paths_under.end()) return known->second;
+    std::vector<std::string>& out = g_paths_under[key];
     for (const auto& entry : g_archive_index) {
         for (const Ogre::FileInfo& info : entry.second) {
             if (!ends_with_lower(info.basename, suffix)) continue;
@@ -169,38 +172,6 @@ std::vector<std::string> archive_paths_in_listing_order(const std::string& dir,
         out.push_back(info.path + info.basename);
     }
     return out;
-}
-
-// `CSpawnClassParser::CSpawnClassParser`
-// starts both its maps empty and runs `CSpawnClassParser::reloadFromDirectory`
-// at once:
-// every file of `media/SpawnClasses/` (`CFileSystem::getFileList`) through
-// `CSpawnClassParser::createEmptySpawnClass`
-// first, then `fillEmptySpawnClass` on each. The first pass files a class
-// under its `NAME`, upper-cased - not under its file's name: 39 shipped files
-// are spelt `...SPWAN...` and name themselves `...SPAWN...`, which is how the
-// random dungeons' monster classes and the general merchant's stock ask for
-// them. A file with an empty `NAME`, or `DONOTSPAWN`, makes none; a name
-// already filed keeps its first file. `CSpawnClassParser::getSpawnClass` is
-// then a lookup by the upper-cased name. The port parses a class's objects
-// the first time it is asked for, from the file this finds.
-std::string spawn_class_path(const std::string& name) {
-    if (!g_spawn_classes_indexed) {
-        g_spawn_classes_indexed = true;
-        for (const std::string& path :
-             archive_paths_in_listing_order("media/spawnclasses/", ".dat.adm")) {
-            const std::vector<uint8_t> bytes = read_resource(path);
-            if (bytes.empty()) continue;
-            const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
-            if (!file.ok) continue;
-            const std::string key = tl::core::upper_ascii(file.root.string_or("NAME", ""));
-            if (key.empty() || file.root.bool_or("DONOTSPAWN", false)) continue;
-            g_spawn_class_paths.emplace(key, path);
-        }
-        TL_LOG_INFO("spawn classes: %zu by name", g_spawn_class_paths.size());
-    }
-    const auto it = g_spawn_class_paths.find(tl::core::upper_ascii(name));
-    return it == g_spawn_class_paths.end() ? std::string() : it->second;
 }
 
 // PORT: asset lookup. Fill g_material_scripts: every script in the archive
@@ -417,3 +388,75 @@ std::string resolve_texture(const std::string& name, const std::string& dir,
 }
 
 }  // namespace tl::render::renderer_detail
+
+namespace tl::render {
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::archive_animation_in_dir(const std::string& dir,
+                                                     const std::string& state, bool armed,
+                                                     int variation) const {
+    return renderer_detail::archive_animation_in_dir(dir, state, armed, variation);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::archive_path_in_dir(const std::string& basename,
+                                                const std::string& dir) const {
+    return renderer_detail::archive_path_in_dir(basename, dir);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::archive_path_unique(const std::string& basename) const {
+    return renderer_detail::archive_path_unique(basename);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::vector<std::string> Renderer::Impl::archive_paths_under(const std::string& dir,
+                                                             const char* suffix) const {
+    return renderer_detail::archive_paths_under(dir, suffix);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+bool Renderer::Impl::console_game_data() const { return tl::render::console_game_data(); }
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::dir_of_asset(const std::string& name) const {
+    return renderer_detail::dir_of_asset(name);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+tl::core::DungeonManager& Renderer::Impl::loaded_dungeon_manager() const {
+    return tl::render::loaded_dungeon_manager();
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::vector<uint8_t> Renderer::Impl::read_resource(const std::string& path) const {
+    return renderer_detail::read_resource(path);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::resolve_archive_path(const std::string& reference) const {
+    return renderer_detail::resolve_archive_path(reference);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+tl::core::DungeonFiles Renderer::Impl::archive_dungeon_files() const {
+    return tl::render::archive_dungeon_files();
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::class_unit_path(const std::string& class_name, bool* console) const {
+    return renderer_detail::class_unit_path(class_name, console);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::string Renderer::Impl::resolve_archive_path_quiet(const std::string& reference) const {
+    return renderer_detail::resolve_archive_path_quiet(reference);
+}
+
+// PORT: the archive hook (core/world.h) answered by the mounted archive.
+std::vector<std::string> Renderer::Impl::archive_paths_in_listing_order(const std::string& dir,
+                                                                        const char* suffix) const {
+    return renderer_detail::archive_paths_in_listing_order(dir, suffix);
+}
+
+}  // namespace tl::render

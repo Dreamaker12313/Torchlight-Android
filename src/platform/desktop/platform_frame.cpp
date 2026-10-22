@@ -6,6 +6,10 @@
 
 #include <cstdio>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX  // libstdc++'s <string> defines it on MinGW
@@ -20,6 +24,23 @@ namespace tl::core {
 const std::string& platform_data_root() {
     static const std::string root;
     return root;
+}
+
+std::string platform_program_folder() {
+    std::string path;
+#if defined(_WIN32)
+    char buffer[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return {};
+    path.assign(buffer, length);
+#else
+    char buffer[4096] = {};
+    const ssize_t length = readlink("/proc/self/exe", buffer, sizeof buffer - 1);
+    if (length <= 0) return {};
+    path.assign(buffer, static_cast<size_t>(length));
+#endif
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
 }
 
 // OGRE makes the window itself.

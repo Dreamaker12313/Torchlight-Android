@@ -11,6 +11,9 @@
 #include <OgreTechnique.h>
 #include <OgreTextureUnitState.h>
 
+#include <map>
+#include <string>
+
 namespace tl::render {
 
 Ogre::MaterialPtr build_menu_material(const std::string& name, const Ogre::TexturePtr& texture,
@@ -54,6 +57,70 @@ bool g_console_game_data = false;
 
 void set_console_game_data(bool console) { g_console_game_data = console; }
 bool console_game_data() { return g_console_game_data; }
+
+// PORT: the PC sets a console-style screen falls back to.
+std::vector<const char*> pc_imagesets() {
+    if (g_console_game_data) return {};
+    return {kLogoImageset, kGuiImageset, kUi2Imageset, kUiIconsImageset};
+}
+
+// PORT: the PC image in place of a console one. DIVERGENCE (data): the console screens drawn on
+// a PC pak by the port's interface pack, in the PC's own art where it has the like.
+std::string pc_image_for(const std::string& console_image) {
+    static const std::map<std::string, std::string> kEquivalents = {
+        {"bag", "ButtonInventory"},
+        {"icon_defense", "IconDefense"},
+        {"icon_dexterity", "IconRanged"},
+        {"icon_magic", "IconMagic"},
+        {"icon_strength", "IconMelee"},
+        {"item_transmute_window", "ItemSlot"},
+        {"pet_aggressive", "PetStanceAggressiveSelected"},
+        {"pet_aggressive_inactive", "PetStanceAggressiveUnselected"},
+        {"pet_defensive", "PetStanceDefensiveSelected"},
+        {"pet_defensive_inactive", "PetStanceDefensiveUnselected"},
+        {"pet_passive", "PetStancePassiveSelected"},
+        {"pet_passive_inactive", "PetStancePassiveUnselected"},
+        {"pethealth", "TargetHealthBar"},
+        {"petmana", "PetManaBar"},
+        {"petstance_aggressive", "PetStanceAggressiveSelected"},
+        {"petstance_aggressive_inactive", "PetStanceAggressiveUnselected"},
+        {"petstance_aggressive_rollover", "PetStanceAggressiveHover"},
+        {"petstance_defensive", "PetStanceDefensiveSelected"},
+        {"petstance_defensive_inactive", "PetStanceDefensiveUnselected"},
+        {"petstance_defensive_rollover", "PetStanceDefensiveHover"},
+        {"petstance_passive", "PetStancePassiveSelected"},
+        {"petstance_passive_inactive", "PetStancePassiveUnselected"},
+        {"petstance_passive_rollover", "PetStancePassiveHover"},
+        {"plus", "SkillPointPlus"},
+        {"plus_glow", "SkillPointPlusLit"},
+        {"quest_button_incomplete", "ButtonStandardRed"},
+        {"quest_button_rollover", "ButtonStandardRedHighlight"},
+        {"skills_window_active", "ActiveSkillHousing"},
+        {"skills_window_passive", "PassiveSkillHousing"},
+        {"slider_bar", "SliderBar"},
+        {"slider_bar_rollover", "SliderBar"},
+        {"slider_tab", "sliderthumb"},
+        {"slider_tab_rollover", "sliderthumb"},
+        {"spells_window", "SkillSlot"},
+        {"spells_windowb", "SkillSlot"},
+        {"stat_icon_defense", "IconDefense"},
+        {"stat_icon_dexterity", "IconRanged"},
+        {"stat_icon_magic", "IconMagic"},
+        {"stat_icon_strength", "IconMelee"},
+        {"traycolor_blank", "ItemSlot"},
+        {"traycolor_blue", "blueslotglow"},
+        {"traycolor_gold", "goldslotglow"},
+        {"traycolor_green", "greenslotglow"},
+        {"traycolor_red", "redslotglow"},
+        {"xbarfill", "PlayerXPBar"},
+    };
+    std::string key = console_image;
+    for (char& c : key) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    const auto found = kEquivalents.find(key);
+    return found == kEquivalents.end() ? std::string() : found->second;
+}
 
 bool read_menu_resource(const std::string& path, const std::string& group,
                         std::vector<uint8_t>& bytes) {

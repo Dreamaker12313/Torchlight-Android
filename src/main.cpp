@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "console_interface.h"
 #include "core/asset_path.h"
 #include "core/audio.h"
 #include "core/input.h"
@@ -611,8 +612,7 @@ void apply_device_defaults(Options& o) {
     // beside the program, at the root itself.
     o.game_data = root;
 
-    // The console interface for a PC archive, which has none; not mounted beside
-    // the Xbox 360 pak (told apart by content). Absent: no HUD, the menus as lists.
+    // A PC archive's console interface (none beside the Xbox pak); else the built-in pack.
     o.console_ui = root + "console_ui";
 
     // Starts at the main menu, then plays. One frame each side of the menu is
@@ -1529,7 +1529,7 @@ int main(int argc, char** argv) {
     rc.pu_particle_layouts = opts.pu_particle_layouts;
     rc.fov_degrees = opts.fov;
     rc.extra_data = opts.extra_data;
-    rc.console_ui = opts.console_ui;
+    rc.console_ui = console_interface(opts.console_ui, opts.extra_data);
     rc.game_hud = !opts.no_hud;
     rc.minimap = !opts.no_minimap;
     rc.stats_overlay = opts.fps_overlay == 1 || (opts.fps_overlay == -1 && !rc.headless);

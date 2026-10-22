@@ -1,9 +1,13 @@
 // The effects a placed character holds: its CEffectManager (+0x1b8), the gate on the way in
 // (CCharacter::applyEffectOnUnit) and the per-frame half of CCharacter::update (updateEffects,
 // updateHP). The player's own manager is elsewhere.
-#include "render/renderer_impl.h"
+#include "core/world.h"
 
-namespace tl::render {
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+namespace tl::core {
 
 namespace {
 // `EEFFECT_TYPE` rows of `media/EffectsList.dat` this file branches on.
@@ -33,8 +37,7 @@ constexpr int kStunResistance = 0x8b;
 constexpr int kPercentBlind = 0x90;
 }  // namespace
 
-tl::core::EffectManager* Renderer::Impl::unit_effect_manager(tl::core::LevelScript* machine,
-                                                             int64_t node) {
+tl::core::EffectManager* World::unit_effect_manager(tl::core::LevelScript* machine, int64_t node) {
     if (machine == nullptr) return nullptr;
     refresh_skill_effects();
     load_unit_themes();
@@ -59,8 +62,40 @@ tl::core::EffectManager* Renderer::Impl::unit_effect_manager(tl::core::LevelScri
     return manager;
 }
 
-bool Renderer::Impl::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t node,
-                                         tl::core::Effect& effect) {
+tl::core::Vec3 World::knock_back_push(tl::core::EffectManager& effects, float resistance, float dt,
+                                      const std::string& who) {
+    // CCharacter::updateEffects: KNOCK BACK EFFECT (0x2b)
+    // force less PERCENT KNOCK BACK RESISTANCE (0x35, held to 0..1) along its direction
+    // onto the outside push (+0x240); the force falls to a thousandth per second.
+    float share = resistance / 100.0f;
+    if (!(share < 1.0f)) share = 1.0f;
+    const float kept = 1.0f - (0.0f < share ? share : 0.0f);
+    tl::core::Vec3 add;
+    for (tl::core::LiveEffect* live : effects.live_effects_of_type(kKnockBackEffect)) {
+        if (live->dead || live->expired()) continue;
+        if (live->effect.activation != tl::core::EffectActivation::Dynamic) continue;
+        const float force = live->value * kept;
+        if (live->elapsed <= dt) {
+            TL_LOG_INFO(
+                "effects: %s is knocked back, force %.2f along (%.2f, %.2f), resistance "
+                "kept %.2f",
+                who.c_str(), static_cast<double>(live->value),
+                static_cast<double>(live->effect.direction[0]),
+                static_cast<double>(live->effect.direction[2]), static_cast<double>(kept));
+        }
+        add.x = live->effect.direction[0] * force + add.x;
+        add.y = live->effect.direction[1] * force + add.y;
+        add.z = live->effect.direction[2] * force + add.z;
+        // `+0xc4 = powf(0.001, dt) * value()`, then `calculateBaseValue`:
+        // with no graph the base value is that number.
+        live->effect.values[0] = std::pow(0.001f, dt) * live->value;
+        live->value = live->effect.values[0];
+    }
+    return add;
+}
+
+bool World::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t node,
+                                tl::core::Effect& effect) {
     // CCharacter::applyEffectOnUnit, the player as source;
     // true copies it. INVENTED:
     // isEffectValidForUnit (vtable +0x238) passes every effect on a living unit.
@@ -146,7 +181,7 @@ bool Renderer::Impl::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t
                 tl::core::Vec3 where;
                 if (machine->unit_position(node, where)) {
                     play_sound(stats_for_unit(unit).sounds[tl::core::SoundSlot::Flee],
-                               Ogre::Vector3(where.x, where.y, where.z));
+                               ogre::Vector3(where.x, where.y, where.z));
                 }
                 copy = true;
             }
@@ -212,8 +247,8 @@ bool Renderer::Impl::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t
     return copy;
 }
 
-void Renderer::Impl::unit_instant_effect(tl::core::LevelScript* machine, int64_t node,
-                                         const tl::core::Effect& effect, float value) {
+void World::unit_instant_effect(tl::core::LevelScript* machine, int64_t node,
+                                const tl::core::Effect& effect, float value) {
     // `CCharacter::applyInstantEffect` on a
     // placed character, the cases a player skill reaches it with.
     const std::string unit = machine->unit_of(node);
@@ -243,7 +278,7 @@ void Renderer::Impl::unit_instant_effect(tl::core::LevelScript* machine, int64_t
             // the `Blocked!` text over the target and its block sound.
             tl::core::Vec3 at;
             if (machine->unit_position(node, at)) {
-                add_combat_text(tl::core::CombatText::Blocked, Ogre::Vector3(at.x, at.y, at.z));
+                add_combat_text(tl::core::CombatText::Blocked, ogre::Vector3(at.x, at.y, at.z));
             }
             TL_LOG_INFO("combat: %s blocked '%s'", unit.c_str(), effect.name.c_str());
             return;
@@ -330,39 +365,7 @@ void Renderer::Impl::unit_instant_effect(tl::core::LevelScript* machine, int64_t
                 info != nullptr ? info->name.c_str() : "?", unit.c_str());
 }
 
-tl::core::Vec3 Renderer::Impl::knock_back_push(tl::core::EffectManager& effects, float resistance,
-                                               float dt, const std::string& who) {
-    // CCharacter::updateEffects: KNOCK BACK EFFECT (0x2b)
-    // force less PERCENT KNOCK BACK RESISTANCE (0x35, held to 0..1) along its direction
-    // onto the outside push (+0x240); the force falls to a thousandth per second.
-    float share = resistance / 100.0f;
-    if (!(share < 1.0f)) share = 1.0f;
-    const float kept = 1.0f - (0.0f < share ? share : 0.0f);
-    tl::core::Vec3 add;
-    for (tl::core::LiveEffect* live : effects.live_effects_of_type(kKnockBackEffect)) {
-        if (live->dead || live->expired()) continue;
-        if (live->effect.activation != tl::core::EffectActivation::Dynamic) continue;
-        const float force = live->value * kept;
-        if (live->elapsed <= dt) {
-            TL_LOG_INFO(
-                "effects: %s is knocked back, force %.2f along (%.2f, %.2f), resistance "
-                "kept %.2f",
-                who.c_str(), static_cast<double>(live->value),
-                static_cast<double>(live->effect.direction[0]),
-                static_cast<double>(live->effect.direction[2]), static_cast<double>(kept));
-        }
-        add.x = live->effect.direction[0] * force + add.x;
-        add.y = live->effect.direction[1] * force + add.y;
-        add.z = live->effect.direction[2] * force + add.z;
-        // `+0xc4 = powf(0.001, dt) * value()`, then `calculateBaseValue`:
-        // with no graph the base value is that number.
-        live->effect.values[0] = std::pow(0.001f, dt) * live->value;
-        live->value = live->effect.values[0];
-    }
-    return add;
-}
-
-void Renderer::Impl::update_unit_effects(float dt) {
+void World::update_unit_effects(float dt) {
     if (!(dt > 0.0f)) return;
     load_recharge_rates();
     for (const MachineView& view : machines()) {
@@ -382,7 +385,7 @@ void Renderer::Impl::update_unit_effects(float dt) {
             tl::core::Vec3 feet;
             if (machine->unit_position(node, feet)) {
                 play_effect_fx(*effects,
-                               Ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z),
+                               ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z),
                                unit);
             }
             bool stunned = false;
@@ -500,4 +503,4 @@ void Renderer::Impl::update_unit_effects(float dt) {
     }
 }
 
-}  // namespace tl::render
+}  // namespace tl::core

@@ -71,6 +71,7 @@ add_executable(tl_tests
     equipment_tooltip_test.cpp
     skills_test.cpp
     skills_tab_test.cpp
+    skill_grid_test.cpp
     active_range_test.cpp
     light_override_test.cpp
     effects_test.cpp

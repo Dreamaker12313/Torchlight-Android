@@ -138,7 +138,7 @@ public:
     /// The level list's own bounds, over the vertices of group 0:
     /// `CCollisionList+0x1c` / `+0x10` as `calculateFaceBounds`
     /// leaves them, which is what the
-    /// passability grid is sized from.
+    /// passability grid of a level with no rooms is sized from.
     bool level_bounds(Vec3& low, Vec3& high) const;
 
     /// `CLevel::sortForCollision`: collect

@@ -12,6 +12,8 @@ The folder - `build-linux/package/Torchlight/` - holds:
   torchlight.sh       starts it from its own folder, which is where it reads the
                       game and keeps config.txt, saves and its log
   RTShaderLib/        OGRE's shader library, `Main/` inside (OGRE's own files)
+  ui_pack/            the port's own interface pack, which the build makes:
+                      what a PC Pak.zip is drawn with (no file of the game's)
   LICENSE.txt, README.txt, licenses/
                       the licences of the engine and of everything built into
                       it, and where its source is (package_notices.py)
@@ -69,6 +71,14 @@ def main() -> int:
             if f.is_file():
                 shutil.copy2(f, dest / f.name)
 
+    # The port's interface pack, which the build made beside the program
+    # (cmake/ui_pack.cmake): what a PC pak is drawn with when no console_ui/ is beside it.
+    pack = BINARY.parent / "ui_pack"
+    if not (pack / "media" / "UI").is_dir():
+        raise SystemExit(f"no interface pack at {pack}: build the target again (CMake makes it)")
+    shutil.rmtree(out / "ui_pack", ignore_errors=True)
+    shutil.copytree(pack, out / "ui_pack")
+
     if args.pak:
         shutil.copy2(args.pak, out / "pak.zip")
     if args.music:
@@ -77,7 +87,7 @@ def main() -> int:
 
     problems = write_notices(out, "Linux")
 
-    print(f"{out}: torchlight, torchlight.sh, RTShaderLib/"
+    print(f"{out}: torchlight, torchlight.sh, RTShaderLib/, ui_pack/"
           + (", pak.zip" if (out / "pak.zip").is_file() else "")
           + (", music/" if (out / "music").is_dir() else ""))
     report(problems)

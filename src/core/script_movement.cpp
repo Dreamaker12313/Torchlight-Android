@@ -3,6 +3,7 @@
 #include "core/script.h"
 
 #include "core/ogre_math.h"
+#include "core/section_profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -106,6 +107,7 @@ bool LevelScript::set_destination(Character& c, const UnitStats& stats, float x,
 // `CCharacter::updatePathing(float)`.
 void LevelScript::update_pathing(Character& c, const UnitStats& stats, float delta) {
     if (!c.pathing) return;
+    const SectionScope timed(Section::Pathing);
     Vec3 nearest;
     float along = 0.0f;
     c.route.find_nearest_point(c.motion.position, nearest, along);

@@ -173,7 +173,9 @@ void InventoryMenu::set_skill_map_open(bool open) {
 void InventoryMenu::set_widget_alpha(const std::string& widget_name, float alpha) {
     const int root = find_node_index_by_widget(widget_name);
     if (root < 0) return;
-    // A CEGUI window's `Alpha` multiplies everything under it.
+    // A CEGUI window's `Alpha` multiplies everything under it; it replaces the root's own.
+    const float own = nodes_[static_cast<size_t>(root)].own_alpha;
+    const float factor = own > 0.0f ? alpha / own : alpha;
     for (size_t i = 0; i < nodes_.size(); ++i) {
         int p = static_cast<int>(i);
         bool under = false;
@@ -189,29 +191,32 @@ void InventoryMenu::set_widget_alpha(const std::string& widget_name, float alpha
         if (n.panel != nullptr && !n.image.empty()) {
             const Sprite* s = sprite(n.image);
             if (s != nullptr && s->texture) {
-                if (alpha >= 1.0f) {
-                    n.panel->setMaterialName(s->material->getName());
-                } else {
-                    char key[32];
-                    std::snprintf(key, sizeof(key), "@a%03d",
-                                  static_cast<int>(alpha * 100.0f + 0.5f));
-                    const std::string name = s->material->getName() + key;
-                    auto found = alpha_materials_.find(name);
-                    if (found == alpha_materials_.end()) {
-                        found = alpha_materials_
-                                    .emplace(name, build_menu_material(name, s->texture, alpha))
-                                    .first;
-                    }
-                    n.panel->setMaterialName(found->second->getName());
-                }
+                n.panel->setMaterialName(material_for(*s, n.alpha * factor));
             }
         }
         if (n.text != nullptr) {
             Ogre::ColourValue colour = n.colour;
-            colour.a *= alpha;
+            colour.a *= factor;
             n.text->setColour(colour);
         }
     }
+}
+
+float InventoryMenu::alpha_of(int node) const {
+    return node < 0 ? 1.0f : nodes_[static_cast<size_t>(node)].alpha;
+}
+
+std::string InventoryMenu::material_for(const Sprite& sprite, float alpha) {
+    if (alpha >= 1.0f) return sprite.material->getName();
+    char key[32];
+    std::snprintf(key, sizeof(key), "@a%03d", static_cast<int>(alpha * 100.0f + 0.5f));
+    const std::string name = sprite.material->getName() + key;
+    auto found = alpha_materials_.find(name);
+    if (found == alpha_materials_.end()) {
+        Ogre::MaterialPtr faded = build_menu_material(name, sprite.texture, alpha);
+        found = alpha_materials_.emplace(name, faded).first;
+    }
+    return found->second->getName();
 }
 
 void InventoryMenu::draw_rich_text(const std::string& text_widget, const std::string& frame_widget,
@@ -452,8 +457,8 @@ void InventoryMenu::update_skill_legend(const tl::core::KnownSkill* skill,
         set_widget_visible(dialog, false);
         return;
     }
-    // Beside the cell under the cursor: its right edge less seven, centred on
-    // it vertically, in the coordinates of the window the panes share.
+    // Under the cell under the cursor: its bottom edge less seven, centred on it
+    // horizontally, in the coordinates of the window the panes share.
     const std::string bg = skill_cursor_.in_spells ? spell_cell("spellbg", skill_cursor_.spell)
                                                    : cell("skillbg", skill_cursor_.pane,
                                                           skill_cursor_.row, skill_cursor_.column);
@@ -463,8 +468,8 @@ void InventoryMenu::update_skill_legend(const tl::core::KnownSkill* skill,
         const Node& c = nodes_[static_cast<size_t>(cell_idx)];
         const float parent_x = c.parent >= 0 ? nodes_[static_cast<size_t>(c.parent)].off_x : 0.0f;
         const float parent_y = c.parent >= 0 ? nodes_[static_cast<size_t>(c.parent)].off_y : 0.0f;
-        help->off_x = parent_x + c.off_x + c.wide - 7.0f;
-        help->off_y = parent_y + c.off_y - (help->tall - c.tall) * 0.5f;
+        help->off_x = parent_x + c.off_x - (help->wide - c.wide) * 0.5f;
+        help->off_y = parent_y + c.off_y + c.tall - 7.0f;
     }
     set_widget_visible(dialog, true);
     set_widget_visible("skills/HideButtons", true);

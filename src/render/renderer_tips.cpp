@@ -10,50 +10,12 @@
 
 namespace tl::render {
 
-namespace {
-
-/// CGameGlobals::reload: media/GLOBALS.DAT, the
-/// console's copy (worded for a pad) first.
-constexpr const char* kGlobalsFiles[] = {"xbox/media/GLOBALS.DAT.adm", "media/GLOBALS.DAT.adm"};
-constexpr const char* kContextTipsGroup = "CONTEXTTIPS";
-
-}  // namespace
-
 void Renderer::Impl::create_tip_screen() {
     // Over the modal message and under the death screen.
     tip_screen.create(kGameGroup, config.width, config.height, "media/UI/tipmenu_xenon.layout",
                       "tl/tip", 596);
     tip_queue.clear();
     tip_open = false;
-}
-
-// CGameGlobals::reload, the `[CONTEXTTIPS]`
-// loop
-void Renderer::Impl::load_context_tips() {
-    if (tip_texts_loaded) return;
-    tip_texts_loaded = true;
-    for (const char* path : kGlobalsFiles) {
-        const std::vector<uint8_t> bytes = read_resource(resolve_archive_path(path));
-        if (bytes.empty()) continue;
-        const tl::formats::AdmFile globals = tl::formats::parse_adm(bytes.data(), bytes.size());
-        if (!globals.ok) continue;
-        size_t found = 0;
-        globals.visit([&](const tl::formats::AdmSection& section) {
-            if (section.name != kContextTipsGroup) return;
-            for (const tl::formats::AdmRecord& record : section.records) {
-                const int tip = tl::core::context_tip_by_name(record.key);
-                if (tip < 0 || record.text.empty()) continue;
-                // The texts carry colour runs (`|cFFFFBA00...|u`); the window
-                // draws one colour, so they come out.
-                tip_texts[static_cast<size_t>(tip)] = tl::core::strip_markup(record.text);
-                ++found;
-            }
-        });
-        if (found == 0) continue;
-        TL_LOG_INFO("tips: %zu context tip(s) from %s", found, path);
-        return;
-    }
-    TL_LOG_WARN("tips: no [CONTEXTTIPS] in GLOBALS.DAT; no tip will open");
 }
 
 // CGameUI::modalDialogOpenPartial; its list is filled in
@@ -94,17 +56,6 @@ void Renderer::Impl::queue_tip(tl::core::ContextTip tip) {
     }
 }
 
-// CPlayer::update, the tips at
-//
-void Renderer::Impl::queue_player_update_tips() {
-    if (!player_control || subject_node == nullptr) return;
-    const std::vector<tl::core::ContextTip> tips = tl::core::player_update_tips(
-        static_cast<int>(player_health.current), static_cast<int>(player_health.max),
-        static_cast<int>(player_character.mp()), static_cast<int>(player_character.max_mp()),
-        pet.alive(), pet.near_death());
-    for (tl::core::ContextTip tip : tips) queue_tip(tip);
-}
-
 // TIP_INVENTORY from the setOpen of CInventoryMenuXenon, CMerchantMenuXenon,
 // CStashMenuXenon (not the PC's
 // CMerchantMenu::setOpen and kin). TIP_STATS while stat points are unspent,
@@ -123,21 +74,6 @@ void Renderer::Impl::queue_menu_tips() {
     }
     if (up && mode == MenuMode::Skills && player_character.unspent_skill_points() > 0) {
         queue_tip(tl::core::ContextTip::Skills);
-    }
-}
-
-// CCharacter::equipmentPickedUp, called by
-// CInventory::pickupEquipment for every item taken.
-void Renderer::Impl::queue_pet_bag_tip() {
-    if (!pet.alive()) return;
-    const tl::core::Inventory& bag = pet.bag();
-    const uint32_t pickups = bag.pickups();
-    if (pickups == tip_pet_pickups) return;
-    tip_pet_pickups = pickups;
-    if (tl::core::pet_bag_full_tip(bag.players_pet(),
-                                   bag.items_in_pane(tl::core::InventoryPane::Backpack),
-                                   bag.pane_size(tl::core::InventoryPane::Backpack))) {
-        queue_tip(tl::core::ContextTip::PetInventoryFull);
     }
 }
 

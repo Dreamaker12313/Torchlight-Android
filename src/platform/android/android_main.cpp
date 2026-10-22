@@ -6,6 +6,10 @@
 // `adb push` sets a run's switches, where the desktop has a command line), and
 // hands over to the engine's main(), which on this target is tl_main().
 //
+// The window going away (the app sent to the background) does not end the
+// run: the engine's thread waits in pump_events() until a window is back, with
+// the GL context kept and only its surface released (the renderer's hooks).
+//
 // When the engine returns, the activity is finished and the process ends with
 // it: OGRE's singletons and the engine's statics are made for one run per
 // process, and Android would otherwise start the next launch in the same one.
@@ -16,11 +20,15 @@
 
 #include <android/log.h>
 #include <android_native_app_glue.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <utility>
 #include <vector>
 
 // main.cpp's main() on this target.
@@ -32,20 +40,46 @@ namespace {
 
 android_app* g_app = nullptr;
 bool g_started = false;
-bool g_window_lost = false;
+bool g_in_background = false;
+SurfaceHooks g_hooks;
+
+int g_screen_width = 0;
+int g_screen_height = 0;
+float g_render_scale = 1.0f;
+char g_scaling_factor[32] = {};
+
+// The window's own size. A size OGRE set for its buffers (a render scale)
+// stays on the window and is what ANativeWindow_getWidth() reports, so it is
+// put back to the window's own first.
+void measure_window(ANativeWindow* window) {
+    ANativeWindow_setBuffersGeometry(window, 0, 0, 0);
+    g_screen_width = ANativeWindow_getWidth(window);
+    g_screen_height = ANativeWindow_getHeight(window);
+}
 
 void on_command(android_app* glue, int32_t command) {
     switch (command) {
         case APP_CMD_INIT_WINDOW:
-            __android_log_print(ANDROID_LOG_INFO, "torchlight", "window up: %dx%d",
-                                ANativeWindow_getWidth(glue->window),
-                                ANativeWindow_getHeight(glue->window));
+            measure_window(glue->window);
+            __android_log_print(ANDROID_LOG_INFO, "torchlight", "window up: %dx%d", g_screen_width,
+                                g_screen_height);
+            if (g_in_background) {
+                g_in_background = false;
+                if (g_hooks.restored) g_hooks.restored(glue->window, glue->config);
+                set_audio_paused(false);
+                __android_log_print(ANDROID_LOG_INFO, "torchlight", "back from the background");
+            }
             break;
         case APP_CMD_TERM_WINDOW:
+            // The surface must be gone before this returns: the glue lets the
+            // system take the window as soon as the command has been handled.
             if (g_started) {
-                g_window_lost = true;
+                g_in_background = true;
+                if (g_hooks.lost) g_hooks.lost();
+                set_audio_paused(true);
+                release_pad();
                 __android_log_print(ANDROID_LOG_INFO, "torchlight",
-                                    "window taken away: ending the run");
+                                    "window taken away: waiting for it to come back");
             }
             break;
         case APP_CMD_LOST_FOCUS:
@@ -58,8 +92,8 @@ void on_command(android_app* glue, int32_t command) {
 }
 
 // The pad's events are the game's (platform_input.cpp); everything else -
-// the phone's own Back gesture first - stays the system's, and Back finishes
-// the activity, which ends the run.
+// the phone's own Back gesture first - stays the system's. Back sends the game
+// to the background (android/java, GameActivity), as Home does.
 int32_t on_input(android_app* glue, AInputEvent* event) {
     (void)glue;
     return handle_input_event(event) ? 1 : 0;
@@ -123,19 +157,45 @@ std::string shader_library_root() {
     return platform_data_root();
 }
 
-std::vector<std::string> read_arguments(ANativeWindow* window) {
+// The launcher's resolution choice: a percentage of the screen's width and
+// height, 100 without the file. OGRE takes it as the factor the screen is
+// larger than the buffer by, and renders at its window size times 1/factor;
+// the same arithmetic here, so the engine is told the size OGRE makes.
+void read_render_scale() {
+    const std::string line = first_line(platform_data_root() + "render_scale.txt");
+    const int percent = std::clamp(line.empty() ? 100 : std::atoi(line.c_str()), 25, 100);
+    if (percent == 100) return;
+    std::snprintf(g_scaling_factor, sizeof g_scaling_factor, "%.6f", 100.0 / percent);
+    g_render_scale = 1.0f / static_cast<float>(std::strtod(g_scaling_factor, nullptr));
+}
+
+// The console interface for a PC pak: `console_ui/` beside it when the player
+// put one there, else the port's own interface pack, which the launcher
+// unpacked from the APK into the app's internal files. Beside the Xbox pak
+// neither is mounted (the pak has its own).
+std::string console_interface(const std::string& data) {
+    struct stat info {};
+    const std::string beside = data + "console_ui";
+    if (stat(beside.c_str(), &info) == 0 && S_ISDIR(info.st_mode)) return beside;
+    const char* internal = app()->activity->internalDataPath;
+    if (internal == nullptr) return beside;
+    const std::string pack = std::string(internal) + "/ui_pack";
+    return stat(pack.c_str(), &info) == 0 && S_ISDIR(info.st_mode) ? pack : beside;
+}
+
+std::vector<std::string> read_arguments() {
     const std::string data = game_data_folder();
     std::vector<std::string> args{"torchlight",
                                   "--width",
-                                  std::to_string(ANativeWindow_getWidth(window)),
+                                  std::to_string(render_width()),
                                   "--height",
-                                  std::to_string(ANativeWindow_getHeight(window)),
+                                  std::to_string(render_height()),
                                   "--ogre-media",
                                   shader_library_root(),
                                   "--game-data",
                                   data,
                                   "--console-ui",
-                                  data + "console_ui"};
+                                  console_interface(data)};
     const std::string path = platform_data_root() + "args.txt";
     std::FILE* in = std::fopen(path.c_str(), "rb");
     if (in == nullptr) return args;
@@ -164,7 +224,30 @@ std::vector<std::string> read_arguments(ANativeWindow* window) {
 
 android_app* app() { return g_app; }
 
-bool window_lost() { return g_window_lost; }
+void wait_for_window() {
+    wait_for(g_app,
+             [](android_app* g) { return g->window != nullptr || g->destroyRequested != 0; });
+}
+
+void set_surface_hooks(SurfaceHooks hooks) { g_hooks = std::move(hooks); }
+
+float render_scale() { return g_render_scale; }
+
+const char* content_scaling_factor() {
+    return g_scaling_factor[0] != '\0' ? g_scaling_factor : nullptr;
+}
+
+int screen_width() { return g_screen_width; }
+int screen_height() { return g_screen_height; }
+
+int render_width() { return static_cast<int>(static_cast<float>(g_screen_width) * g_render_scale); }
+int render_height() {
+    return static_cast<int>(static_cast<float>(g_screen_height) * g_render_scale);
+}
+
+void measure_screen() {
+    if (g_app != nullptr && g_app->window != nullptr) measure_window(g_app->window);
+}
 
 }  // namespace tl::core::android
 
@@ -177,7 +260,8 @@ void android_main(android_app* glue) {
     wait_for(glue, [](android_app* g) { return g->window != nullptr || g->destroyRequested != 0; });
     if (glue->destroyRequested != 0) return;
 
-    std::vector<std::string> args = read_arguments(glue->window);
+    read_render_scale();
+    std::vector<std::string> args = read_arguments();
     std::vector<char*> argv;
     for (std::string& arg : args) argv.push_back(arg.data());
     argv.push_back(nullptr);
@@ -187,13 +271,14 @@ void android_main(android_app* glue) {
 
     // The on-screen pad (core/touch_pad.h) starts off the screen: a tap puts
     // it there, and a controller's first press takes it off again.
-    tl::core::touch_pad().set_screen(static_cast<float>(ANativeWindow_getWidth(glue->window)),
-                                     static_cast<float>(ANativeWindow_getHeight(glue->window)));
+    tl::core::touch_pad().set_screen(static_cast<float>(render_width()),
+                                     static_cast<float>(render_height()));
 
     g_started = true;
     const int result = tl_main(static_cast<int>(args.size()), argv.data());
     __android_log_print(ANDROID_LOG_INFO, "torchlight", "the engine returned %d", result);
 
+    g_hooks = SurfaceHooks{};
     ANativeActivity_finish(glue->activity);
     wait_for(glue, [](android_app* g) { return g->destroyRequested != 0; });
     _exit(result);

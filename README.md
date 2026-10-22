@@ -61,39 +61,67 @@ The engine needs two things from your copy of the game:
 
 | file | where it comes from |
 | --- | --- |
-| `pak.zip` | the game archive. The Xbox 360 release's `pak.zip` is the reference and carries the console interface. A PC release's `Pak.zip` (from its install folder) also works, together with `console_ui/` (see [Using a PC pak with the Xbox interface](#using-a-pc-pak-with-the-xbox-interface)) |
+| `pak.zip` | the game archive, from either release: the Xbox 360's `pak.zip` or a PC release's `Pak.zip` (from its install folder). See [PC or Xbox 360 game data](#pc-or-xbox-360-game-data) for which to use |
 | `music/` | the music folder from your game install. The level themes are not inside the archive. The game runs without it, silently |
 
 Either spelling, `pak.zip` or `Pak.zip`, is accepted.
 
-### Using a PC pak with the Xbox interface
+## PC or Xbox 360 game data
 
-The HUD and menus the engine draws are the Xbox 360 ones. A PC archive does not
-have them: it carries the PC's mouse-driven interface instead. To play with a
-PC `Pak.zip`, take the console interface (ten files, about 4 MB) from the Xbox
-release's `pak.zip` with `scripts/extract_console_ui.py`:
+Both releases' archives are supported, and the engine tells them apart by their
+contents. There are three ways to play:
 
-```bash
-python scripts/extract_console_ui.py <path to the Xbox 360 pak.zip> console_ui
-```
+1. **The Xbox 360 `pak.zip`.** This is the reference: the engine follows the
+   Xbox 360 release, and its archive carries the console's own HUD, menus and
+   fonts. Nothing else is needed.
 
-The first argument is the Xbox archive and the second is the folder to write.
-The script will not write into the repository's source folders (`src/`,
-`scripts/`, `tests/`, ...). `console_ui/` at the repository root is ignored by
-git.
+2. **A PC `Pak.zip` on its own.** It works on every platform, but a PC archive
+   has no console interface: it carries the PC's mouse-driven one instead. The
+   engine therefore draws the port's own interface pack, built in. Its art and
+   layouts are drawn for this port by `scripts/build_ui_pack.py`, with nothing
+   taken from the game. Every build makes it: the Switch `.nro` carries it
+   inside, the Android APK carries it and unpacks it, and the Windows and Linux
+   builds put it beside the program as `ui_pack/`. **This interface is basic
+   and still under construction.**
 
-Then put `console_ui/` beside the PC `Pak.zip`:
+3. **Hybrid: a PC `Pak.zip` with the Xbox 360 interface.** The game's assets
+   come from the PC archive, and the HUD and menus from the Xbox release's
+   `pak.zip` (ten files, about 4 MB), taken out with
+   `scripts/extract_console_ui.py`:
 
-- **Switch and Android** pick up a `console_ui/` folder beside the archive by
-  themselves.
-- **Windows and Linux** need it named on the command line:
-  `--console-ui console_ui` (a path relative to where the program runs, or an
-  absolute one).
+   ```bash
+   python scripts/extract_console_ui.py <path to the Xbox 360 pak.zip> console_ui
+   ```
 
-The engine identifies the archive by its contents. If the archive is the Xbox
-360's own, `console_ui/` is not used, because the archive already has the
-console interface. If the archive is a PC one and no `console_ui/` is given,
-the game has no HUD and the menus are plain lists.
+   The first argument is the Xbox archive and the second is the folder to
+   write. The script will not write into the repository's source folders
+   (`src/`, `scripts/`, `tests/`, ...). `console_ui/` at the repository root is
+   ignored by git. Put `console_ui/` beside the PC `Pak.zip`, and it is used in
+   place of the built-in pack. On Windows and Linux that is when the program
+   runs from its own folder; from anywhere else, name it:
+   `--console-ui console_ui` (a path relative to where the program runs, or an
+   absolute one). Besides the console's own art and fonts, it brings what only
+   the Xbox release has: the Chakawary pet, the three Xbox 360 armour sets and
+   two fish.
+
+With the Xbox 360 archive, `console_ui/` and the built-in pack are not used:
+the archive already has the console interface. `--console-ui none` runs a PC
+archive with neither: no HUD, and the menus as plain lists.
+
+| | Xbox 360 `pak.zip` | PC `Pak.zip` | PC `Pak.zip` + `console_ui/` |
+| --- | --- | --- | --- |
+| HUD and menus | the console's own | the port's built-in pack: basic, under construction | the console's own |
+| main menu and character creation | the console's | the built-in pack's | the console's |
+| levels, monsters, items, quests | the Xbox 360's | the PC's | the PC's |
+| monsters on a floor | fewer | about half as many again (on one late floor, 137 against 87) | as the PC's |
+| Chakawary pet, Xbox 360 armour sets and fish | yes | no | yes |
+| materials, lights and effects | the Xbox 360's | the PC's (a few props and effects look different) | the PC's |
+| archive size | about 140 MB | about 320 MB (Steam) | about 320 MB, plus 4 MB |
+
+**On lower-spec machines, such as the Switch, the Xbox 360 archive is the
+better choice.** It places fewer monsters on a floor, and a crowd fight is what
+costs a frame most: on the Switch, the same floor ran at about twice the frame
+rate on the Xbox 360 data.
 
 ## Configuration: `config.txt`
 
@@ -213,6 +241,13 @@ python scripts/apply_patches.py    # patches external/ogre and external/particle
 Each platform then builds OGRE once (`scripts/build_ogre.py`) and the engine
 after it. **Ninja is required everywhere:** on Windows, GNU Make reads the `C:`
 in paths as a rule separator and fails.
+
+**Every build also needs Python 3 with [Pillow](https://pypi.org/project/pillow/)**
+(`python -m pip install pillow`): it draws the port's own interface pack, which
+every build carries (`cmake/ui_pack.cmake`). CMake looks for one on `PATH` and in
+Windows' usual install folders, and stops at configure when none has Pillow;
+`-DTL_PYTHON=<path to python>` names one. The Switch build uses a Windows
+Python, since devkitPro's shell has none of its own.
 
 ### Windows (desktop)
 

@@ -15,7 +15,10 @@ Usage:
     python scripts/build_apk.py game             # the engine: the whole tree -> build-android/
     python scripts/build_apk.py game --clean     # configure from scratch
 
-The APK holds no game data: that is pushed beside it by the deploy step.
+The APK holds no game data: that is pushed beside it by the deploy step. It
+does carry OGRE's shader library and the port's own interface pack (which the
+native build makes, cmake/ui_pack.cmake), and the launcher unpacks both into the
+app's files.
 """
 import argparse
 import pathlib
@@ -37,7 +40,7 @@ TARGETS = {
         "lib": "torchlight",
         "cmake_target": "torchlight",
         "label": "Torchlight Rekindled",
-        "version": "1.0.0",
+        "version": "1.0.1",
     },
 }
 
@@ -147,8 +150,11 @@ def compile_java(tools: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
     return dex / "classes.dex"
 
 
-def stage_assets(out: pathlib.Path) -> pathlib.Path:
-    """`assets/RTShaderLib/` (with `Main/`), OGRE's own files - not the game's."""
+def stage_assets(out: pathlib.Path, ui_pack: pathlib.Path) -> pathlib.Path:
+    """`assets/RTShaderLib/` (with `Main/`), OGRE's own files, and `assets/ui_pack/`,
+    the port's interface pack, which the native build made (cmake/ui_pack.cmake):
+    the interface a PC pak is drawn with when no console_ui/ is beside it.
+    Neither is the game's."""
     assets = out / "assets"
     shutil.rmtree(assets, ignore_errors=True)
     for source, dest in (("RTShaderLib", "RTShaderLib"), ("Main", "RTShaderLib/Main")):
@@ -156,6 +162,9 @@ def stage_assets(out: pathlib.Path) -> pathlib.Path:
         for f in (OGRE_MEDIA / source).iterdir():
             if f.is_file():
                 shutil.copy2(f, assets / dest / f.name)
+    if not (ui_pack / "media" / "UI").is_dir():
+        raise SystemExit(f"no interface pack at {ui_pack}: the native build makes it")
+    shutil.copytree(ui_pack, assets / "ui_pack")
     return assets
 
 
@@ -167,7 +176,7 @@ def package(target: dict, library: pathlib.Path) -> pathlib.Path:
 
     icons = compile_icons(tools, out)
     dex = compile_java(tools, out)
-    assets = stage_assets(out)
+    assets = stage_assets(out, target["build"] / "native" / "ui_pack")
 
     linked = out / "linked.apk"
     run([tools / "aapt2.exe", "link", "-o", linked, "--manifest", manifest,
@@ -176,10 +185,16 @@ def package(target: dict, library: pathlib.Path) -> pathlib.Path:
          "--target-sdk-version", str(android_sdk.TARGET_SDK),
          "-A", assets, *icons])
 
+    # The APK carries the library without its symbols and debug information
+    # (which also name the folders it was built in); the unstripped one stays
+    # in the build directory for reading a crash.
+    stripped = out / library.name
+    run([android_sdk.llvm_strip(), "--strip-all", "-o", stripped, library])
+
     # No game data here, ever: the player's own pak.zip and music/ stay in a
     # folder the launcher asks for.
     with zipfile.ZipFile(linked, "a", compression=zipfile.ZIP_DEFLATED) as apk:
-        apk.write(library, f"lib/{android_sdk.ABI}/{library.name}")
+        apk.write(stripped, f"lib/{android_sdk.ABI}/{library.name}")
         apk.write(dex, "classes.dex")
 
     aligned = out / "aligned.apk"

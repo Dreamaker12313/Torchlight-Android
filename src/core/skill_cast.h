@@ -360,6 +360,9 @@ struct SkillConstruction {
     /// (`CSoundBank::addSample`), which keeps only `g_Rand`'s low word.
     RunicRandom* game_rng = nullptr;
     std::function<bool(const std::string& file)> layout_adds_sample;
+    /// An event's `FILE` loaded into its own `CLayout` (`CLayout::loadLayoutFile`):
+    /// counted and seeded while a level is loaded.
+    std::function<void(const std::string& file)> load_event_file;
 };
 
 /// The draws of `CSkill::CSkill(CResourceManager*, CDataGroup*)`, run by

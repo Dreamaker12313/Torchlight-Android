@@ -22,20 +22,6 @@ tl::core::PortalLevel Renderer::Impl::portal_level() const {
     return level;
 }
 
-// PORT: the level as `WarpOrigin` reads it (`CDungeon +0x80`, the parent dungeon).
-tl::core::WarpOrigin Renderer::Impl::warp_origin() const {
-    tl::core::WarpOrigin from;
-    from.dungeon = level_dungeon;
-    from.depth = level_depth;
-    if (level_dungeon.empty()) return from;
-    // `CDungeon +0x80`, the dungeon's `PARENT_DUNGEON`.
-    if (const tl::core::Dungeon* dungeon =
-            loaded_dungeon_manager().dungeon_by_name(level_dungeon)) {
-        from.parent = dungeon->def.parent_dungeon;
-    }
-    return from;
-}
-
 void Renderer::Impl::disable_portal(OpenPortal& portal) {
     destroy_particle_holders(portal.holders);
     portal.holders.clear();
@@ -80,11 +66,11 @@ void Renderer::Impl::create_portals() {
         portal.unit = placement.unit;
         portal.display_name = prop.display_name;
         portal.unittype = prop.unittype;
-        portal.at = Ogre::Vector3(placement.at.x, placement.at.y, placement.at.z);
+        portal.at = ogre::Vector3(placement.at.x, placement.at.y, placement.at.z);
         // Drawn by its LAYOUTFILE: its own kind-0 CLayout (CTriggerUnit::unitInit
         // +0x240), not a CParticle.
         portal.holders =
-            place_particle_layout(prop_layout_path(placement.unit), portal.at,
+            place_particle_layout(prop_layout_path(placement.unit), to_ogre(portal.at),
                                   Ogre::Quaternion::IDENTITY, nullptr, ParticleStart::Live);
         TL_LOG_INFO("portal: '%s' at (%.2f, %.2f, %.2f)", portal.display_name.c_str(),
                     static_cast<double>(portal.at.x), static_cast<double>(portal.at.y),
@@ -130,7 +116,7 @@ void Renderer::Impl::start_portal_sounds(OpenPortal& portal) {
         held.voice = "portal/" + portal.unit + "/" + std::to_string(node.id);
         held.definition = guid->as_text();
         if (node.has_position()) {
-            held.at = Ogre::Vector3(node.position().x, node.position().y, node.position().z);
+            held.at = ogre::Vector3(node.position().x, node.position().y, node.position().z);
         }
         held.at += portal.at;
         held.volume = definition->volume * number(node, f::kVolume, 1.0f);
@@ -150,7 +136,7 @@ void Renderer::Impl::start_portal_sounds(OpenPortal& portal) {
         }
         float gain = 0.0f;
         float pan = 0.0f;
-        positional_mix(held.volume, held.radius, held.at, gain, pan);
+        positional_mix(held.volume, held.radius, to_ogre(held.at), gain, pan);
         tl::core::SamplePtr sample = sample_for(definition->files.front());
         if (!sample) continue;
         // A one-shot plays and is done; a loop is held and re-mixed as the
@@ -168,32 +154,10 @@ void Renderer::Impl::step_portal_sounds() {
         for (const OpenPortal::HeldSound& held : portal.sounds) {
             float gain = 0.0f;
             float pan = 0.0f;
-            positional_mix(held.volume, held.radius, held.at, gain, pan);
+            positional_mix(held.volume, held.radius, to_ogre(held.at), gain, pan);
             tl::core::audio_set_voice_mix(held.voice, gain, pan);
         }
     }
-}
-
-void Renderer::Impl::open_town_portal() {
-    // `CCharacter::applyInstantEffect`: the character's `openPortal`
-    // (vtable +0x3e8) on its own level, `CPlayer::openPortal`.
-    //
-    if (config.travel == nullptr) return;
-    const tl::core::Vec3 me = player.position();
-    const bool opened = tl::core::open_portal(*config.travel, portal_level(), [&] {
-        // `CLevel::randomOpenPosition(position, 3.0, false)`.
-        return tl::core::random_open_position(
-            me, 0.0f, 3.0f,
-            [this](const tl::core::Vec3& p) {
-                return !passability.ready() ||
-                       (passability.map_passable(p) && passability.position_passable(p));
-            },
-            tl::core::volatile_random());
-    });
-    if (!opened) return;
-    delete_open_portals();
-    create_portals();
-    TL_LOG_INFO("portal: opened on %s depth %d", level_dungeon.c_str(), level_depth);
 }
 
 bool Renderer::Impl::add_map_portal(const Ogre::Vector3& at, const std::string& warp,
@@ -211,14 +175,14 @@ bool Renderer::Impl::add_map_portal(const Ogre::Vector3& at, const std::string& 
     portal.unit = tl::core::kMapPortalUnit;
     portal.display_name = prop.display_name;
     portal.unittype = prop.unittype;
-    portal.at = at;
+    portal.at = from_ogre(at);
     portal.warp = warp;
     portal.enabled = enabled;
     if (enabled) {
         // Drawn by its `LAYOUTFILE` (`media/particles/objects/townPortal`), as
         // the town portal's props are (`create_portals`).
         portal.holders =
-            place_particle_layout(prop_layout_path(portal.unit), portal.at,
+            place_particle_layout(prop_layout_path(portal.unit), to_ogre(portal.at),
                                   Ogre::Quaternion::IDENTITY, nullptr, ParticleStart::Live);
     }
     TL_LOG_INFO("portal: '%s' to %s at (%.2f, %.2f, %.2f)%s", portal.display_name.c_str(),
@@ -309,19 +273,6 @@ void Renderer::Impl::use_targeted_portal() {
 // Waypoints
 // ---------------------------------------------------------------------------
 
-void Renderer::Impl::activate_waypoint() {
-    // CWaypointActivator::activate: the player adds the
-    // level's dungeon and depth; a new one raises g_WaypointActivated as the
-    // big text for 1.0.
-    if (config.travel == nullptr) return;
-    const bool added = tl::core::add_waypoint(*config.travel, level_dungeon, level_depth);
-    TL_LOG_INFO("waypoint: %s depth %d %s", level_dungeon.c_str(), level_depth,
-                added ? "activated" : "not added (known already, or no tracker)");
-    if (!added) return;
-    set_big_text("Waypoint Activated", 1.0f);
-    set_small_text(std::string(), 1.0f);
-}
-
 void Renderer::Impl::toggle_waypoint_menu() {
     // CGameUI::toggleWaypointMenu: unPause, closeAll,
     // then setOpen(!open). A reaches a prop only while no menu has the pad.
@@ -330,22 +281,6 @@ void Renderer::Impl::toggle_waypoint_menu() {
     } else {
         open_waypoint_menu();
     }
-}
-
-std::string Renderer::Impl::waypoint_label(const tl::core::WaypointRow& row,
-                                           const tl::core::DungeonFiles& files) {
-    // CWaypointMenu::setOpen: LEVELNAME, with
-    // " - Floor <depth + 1>" when SHOWFLOORNUMBER - CLevel::getName's formula.
-    tl::core::Dungeon* dungeon =
-        files.dungeon_by_name ? files.dungeon_by_name(row.dungeon) : nullptr;
-    if (dungeon == nullptr) return row.dungeon;
-    // The dungeon's kept template for that depth, built on `g_Rand` as it
-    // stands if this is the first asking.
-    const tl::core::LevelTemplate* found = dungeon->get_level_template_for_depth(
-        static_cast<uint32_t>(std::max(0, row.depth)), files, tl::core::game_random());
-    if (found == nullptr) return row.dungeon;
-    return tl::core::level_display_name(tl::core::strip_markup(found->level_name),
-                                        found->show_floor_number, row.depth);
 }
 
 void Renderer::Impl::open_waypoint_menu() {
@@ -396,48 +331,6 @@ void Renderer::Impl::refresh_waypoint_menu() {
         waypoint_screen.set_hover("Button" + std::to_string(i + 1), i == waypoint_selected);
     }
     waypoint_screen.refresh();
-}
-
-void Renderer::Impl::drive_waypoint_menu(const tl::core::InputState& in, bool confirm_edge,
-                                         bool skip_edge) {
-    // The console's dropdown: up and down move the highlight over the filled
-    // rows, A is `onClick` on it, B is the close button (`handle_CloseButton`).
-    const int rows = static_cast<int>(waypoint_rows.size());
-    if (std::abs(in.move_y) > 0.5f) {
-        if (!waypoint_stick_held && rows > 0) {
-            waypoint_selected = (waypoint_selected + (in.move_y > 0.5f ? rows - 1 : 1)) % rows;
-            play_ui(tl::core::InterfaceSound::Navigate);
-            refresh_waypoint_menu();
-        }
-        waypoint_stick_held = true;
-    } else {
-        waypoint_stick_held = false;
-    }
-    if (skip_edge) {
-        close_waypoint_menu();
-        return;
-    }
-    if (!confirm_edge) return;
-    // `CWaypointMenu::onClick`: a row past the filled ones
-    // does nothing, and `setOpen(false)` follows every click.
-    const tl::core::WaypointRow* row = tl::core::waypoint_choice(waypoint_rows, waypoint_selected);
-    if (row != nullptr) warp_to_waypoint(*row);
-    close_waypoint_menu();
-}
-
-void Renderer::Impl::warp_to_waypoint(const tl::core::WaypointRow& row) {
-    // `CGameClient::warpLevels(dungeon, 0, depth, true, L"", false)`; the warp
-    // is main.cpp's (`Renderer::dungeon_transition`). `performWarp` plays client
-    // slot 0x1c, `TOWNPORTALENTER`, for a waypoint warp.
-    TL_LOG_INFO("waypoints: warp to %s depth %d", row.dungeon.c_str(), row.depth);
-    play_ui(tl::core::InterfaceSound::TownPortalEnter);
-    warp_pending = true;
-    warp_dungeon = row.dungeon;
-    warp_floor = row.depth + 1;
-    warp_level_delta = 0;
-    warp_level_absolute = row.depth;
-    warp_waypoint = true;
-    dungeon_transition_pending = true;
 }
 
 void Renderer::activate_waypoint() { impl_->activate_waypoint(); }
@@ -584,7 +477,7 @@ bool Renderer::walk_into_stairs(bool up) {
         TL_LOG_INFO("--portal %s: not on a generated floor", up ? "up" : "down");
         return false;
     }
-    const Ogre::Vector3 at = up ? m.dungeon_entrance_point : m.dungeon_exit_point;
+    const Ogre::Vector3 at = to_ogre(up ? m.dungeon_entrance_point : m.dungeon_exit_point);
     place_player_at(at.x, at.z);
     advance_scene(0.25f);
     press_a();
@@ -605,7 +498,7 @@ bool Renderer::walk_into_portal() {
         TL_LOG_INFO("--portal enter: no portal on this level");
         return false;
     }
-    const Ogre::Vector3 at = chosen->at;
+    const Ogre::Vector3 at = to_ogre(chosen->at);
     place_player_at(at.x, at.z);
     advance_scene(0.25f);
     return press_a() && m.dungeon_transition_pending;

@@ -8,6 +8,8 @@ project(torchlight-switch CXX C)
 # Ninja is required on both. GNU Make parses the "C:" in Windows paths as a rule
 # separator and fails with "multiple target patterns". See ADR 0001.
 
+include(cmake/file_prefix_map.cmake)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -24,6 +26,11 @@ else()
     set(TL_PLATFORM desktop)
 endif()
 message(STATUS "Torchlight: building for ${TL_PLATFORM}")
+
+# The port's own interface pack, which every build carries (cmake/ui_pack.cmake):
+# the Python that makes it is found now, or the configure stops.
+include(cmake/ui_pack.cmake)
+tl_find_ui_pack_python()
 
 # ---------------------------------------------------------------------------
 # Warnings are errors on our own code, never on OGRE. Applied per-target via
@@ -144,9 +151,9 @@ file(GLOB_RECURSE TL_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
 
 if(ANDROID)
     # What a NativeActivity loads: libtorchlight.so (cmake/android.cmake).
-    add_library(torchlight SHARED src/main.cpp ${TL_RENDER_SOURCES})
+    add_library(torchlight SHARED src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
 else()
-    add_executable(torchlight src/main.cpp ${TL_RENDER_SOURCES})
+    add_executable(torchlight src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
 endif()
 target_include_directories(torchlight PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(torchlight PRIVATE tl_core)
@@ -160,6 +167,13 @@ if(TL_HAVE_PARTICLEUNIVERSE)
 endif()
 
 tl_configure_platform(torchlight)   # defined in cmake/<platform>.cmake
+
+# The interface pack beside the program: `ui_pack/` in the build tree, which the
+# desktop packages copy and scripts/build_apk.py packs. The Switch's goes into
+# its RomFS instead (cmake/switch.cmake).
+if(NOT NINTENDO_SWITCH)
+    tl_add_ui_pack(torchlight "${CMAKE_BINARY_DIR}/ui_pack")
+endif()
 
 # ---------------------------------------------------------------------------
 # Desktop-only measurement build: every function of the port's own code counts

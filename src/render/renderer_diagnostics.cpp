@@ -1,5 +1,6 @@
 // The renderer's diagnostics: timing windows, long frames and the scene, for the log.
 #include "core/platform.h"
+#include "core/section_profile.h"
 #include "render/gl_thread.h"
 #include "render/renderer_impl.h"
 
@@ -65,16 +66,6 @@ void Renderer::Impl::log_driver_costs(bool print, unsigned frames) {
     }
 }
 
-// PORT: diagnostics, a stutter the five-second averages would hide: a frame
-// over 50 ms, split as run() times it.
-void Renderer::Impl::log_long_frame(unsigned long long drive_us, unsigned long long advance_us,
-                                    unsigned long long render_us, unsigned long long total_us) {
-    if (total_us <= 50000) return;
-    TL_LOG_INFO("long frame: %.1f ms (drive %.1f, advance %.1f, render %.1f)",
-                static_cast<double>(total_us) * 0.001, static_cast<double>(drive_us) * 0.001,
-                static_cast<double>(advance_us) * 0.001, static_cast<double>(render_us) * 0.001);
-}
-
 // PORT: diagnostics, what the scene holds; logged every timing window and as a
 // level begins (what the last one left behind).
 void Renderer::Impl::log_scene_census(const char* when) const {
@@ -97,6 +88,67 @@ void Renderer::Impl::log_scene_census(const char* when) const {
         "%zu billboard sets, %zu lights, %zu manual objects; automap %zu billboards",
         when, nodes, count("Entity"), pu_total, pu_started, pu_attached, count("BillboardSet"),
         count("Light"), count("ManualObject"), map_billboards);
+}
+
+// PORT: diagnostics, the end of a timing window: its sections (printed when `print`), and
+// both they and OGRE's phases start over.
+void Renderer::Impl::log_sections(unsigned frames, bool print) {
+    if (print) print_sections(frames);
+    tl::core::section_totals() = tl::core::SectionTotals{};
+    frame_phases.reset();
+}
+
+// PORT: diagnostics, a headless run's own timing windows, every 300 frames (it never reaches
+// run()'s).
+void Renderer::Impl::step_headless_sections() {
+    if (!config.headless || ++headless_profile_frames <= 300) return;
+    log_sections(headless_profile_frames - 1, true);
+    headless_profile_frames = 1;
+}
+
+// PORT: diagnostics, the update's sections (core/section_profile.h) and OGRE's phases a frame
+// over a timing window, and what the level holds that they scale with.
+void Renderer::Impl::print_sections(unsigned frames) {
+    const double n = frames > 0 ? static_cast<double>(frames) : 1.0;
+    const tl::core::SectionTotals& totals = tl::core::section_totals();
+    char line[512];
+    int used = std::snprintf(line, sizeof line, "  sections (ms a frame):");
+    for (int i = 0; i < static_cast<int>(tl::core::Section::Count); ++i) {
+        if (used >= static_cast<int>(sizeof line)) break;
+        used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " %s %.2f",
+                              tl::core::section_name(static_cast<tl::core::Section>(i)),
+                              static_cast<double>(totals.ns[i]) / n / 1e6);
+    }
+    TL_LOG_INFO("%s", line);
+    // Per character: how many ran a frame and what each cost.
+    using tl::core::Section;
+    const auto per = [&](Section s) {
+        const int i = static_cast<int>(s);
+        return totals.calls[i] > 0
+                   ? static_cast<double>(totals.ns[i]) / static_cast<double>(totals.calls[i]) / 1e3
+                   : 0.0;
+    };
+    const auto calls = [&](Section s) {
+        return static_cast<double>(totals.calls[static_cast<int>(s)]) / n;
+    };
+    TL_LOG_INFO(
+        "  per character: ai %.1f a frame at %.1f us, pathing %.1f at %.1f us, "
+        "motion %.1f at %.1f us; render: particles+controllers %.2f, scene graph %.2f, "
+        "cull+animate %.2f, draw calls %.2f ms",
+        calls(Section::Ai), per(Section::Ai), calls(Section::Pathing), per(Section::Pathing),
+        calls(Section::Motion), per(Section::Motion),
+        static_cast<double>(frame_phases.controllers) / n / 1000.0,
+        static_cast<double>(frame_phases.scene_graph) / n / 1000.0,
+        static_cast<double>(frame_phases.cull) / n / 1000.0,
+        static_cast<double>(frame_phases.draw) / n / 1000.0);
+    const size_t running = static_cast<size_t>(
+        std::count_if(nested_scripts.begin(), nested_scripts.end(),
+                      [](const NestedScript& machine) { return machine.running; }));
+    TL_LOG_INFO(
+        "  held: %zu linked machine(s), %zu running, %zu on the level's list; %zu "
+        "particle system(s), %zu waiting to die out; %zu skill event(s), %zu missile(s)",
+        nested_scripts.size(), running, level_machines.size(), particle_systems.size(),
+        transient_particles.size(), live_skill_events.size(), missiles.size());
 }
 
 }  // namespace tl::render

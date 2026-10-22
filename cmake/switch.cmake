@@ -154,7 +154,7 @@ function(tl_configure_platform target)
     nx_generate_nacp(${target}.nacp
         NAME    "${TL_NRO_NAME}"
         AUTHOR  "SwampDweller"
-        VERSION "1.0.0"
+        VERSION "1.0.1"
     )
     # OGRE's shader library, inside the .nro: its RomFS holds `RTShaderLib/`
     # with OGRE's `Main/` inside it, read at run time as `romfs:/RTShaderLib`
@@ -181,6 +181,11 @@ function(tl_configure_platform target)
             list(APPEND _tl_romfs_files "${_tl_dst}")
         endforeach()
     endforeach()
+    # The port's own interface pack, `romfs:/ui_pack`: what a PC pak is drawn
+    # with when no `console_ui/` is beside it (main.cpp). Made into the RomFS by
+    # every build (cmake/ui_pack.cmake); the .nro waits for it.
+    tl_add_ui_pack(${target} "${_tl_romfs}/ui_pack")
+    list(APPEND _tl_romfs_files "${${target}_UI_PACK_STAMP}")
     add_custom_target(${target}_romfs_files DEPENDS ${_tl_romfs_files})
     dkp_add_asset_target(${target}_romfs "${_tl_romfs}")
     set_property(TARGET ${target}_romfs APPEND PROPERTY DKP_ASSET_FILES ${_tl_romfs_files})

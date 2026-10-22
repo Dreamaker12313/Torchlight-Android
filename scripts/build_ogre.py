@@ -252,7 +252,9 @@ def main() -> int:
 
     # Ninja is mandatory: GNU Make reads the "C:" in Windows paths as a rule
     # separator and dies with "multiple target patterns".
-    cmd = [cmake, "-S", source_dir, "-B", build_dir, "-G", "Ninja", *COMMON, *extra]
+    # Source paths in OGRE's objects relative to this checkout, as in the engine's.
+    prefix_map = f"-DCMAKE_PROJECT_INCLUDE_BEFORE={as_path(ROOT / 'cmake' / 'file_prefix_map.cmake')}"
+    cmd = [cmake, "-S", source_dir, "-B", build_dir, "-G", "Ninja", *COMMON, *extra, prefix_map]
 
     def run(command) -> int:
         if args.platform != "switch":

@@ -14,9 +14,17 @@
 
 namespace tl::core {
 
+/// PORT: where `get_tick_count` reads instead of the clock when set (a test replaying another run's
+/// clock); null, the clock.
+inline int32_t (*&tick_count_source())() {
+    static int32_t (*source)() = nullptr;
+    return source;
+}
+
 /// `GetTickCount()`: milliseconds since the epoch in
 /// 32-bit arithmetic, wrapping as the original's does.
 inline int32_t get_tick_count() {
+    if (tick_count_source() != nullptr) return tick_count_source()();
     const auto since_epoch = std::chrono::system_clock::now().time_since_epoch();
     const int64_t micros =
         std::chrono::duration_cast<std::chrono::microseconds>(since_epoch).count();

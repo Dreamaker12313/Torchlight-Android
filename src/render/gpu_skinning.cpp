@@ -428,20 +428,7 @@ void GpuSkinning::step(Ogre::SceneManager* scene) {
                 ++on_gpu;
                 continue;
             }
-            // Back to the CPU for now, and looked at afresh next frame.
-            if (active_) {
-                std::string why = "its weight or bone counts no longer agree";
-                for (Ogre::SubEntity* sub : entity->getSubEntities()) {
-                    if (!skins(sub->getMaterial()->getBestTechnique(0, sub))) {
-                        why = "no longer skins: " + describe(sub);
-                        break;
-                    }
-                }
-                note(entity, "went back to the CPU, " + why);
-            }
-            entity->getUserObjectBindings().eraseUserAny(kTriedKey);
-            entity->getUserObjectBindings().eraseUserAny(kHandedKey);
-            reconsider(entity);
+            if (refit(entity)) ++handed;
             continue;
         }
         if (!active_) continue;
@@ -483,6 +470,37 @@ void GpuSkinning::step(Ogre::SceneManager* scene) {
     }
 }
 
+bool GpuSkinning::refit(Ogre::Entity* entity) {
+    entity->getUserObjectBindings().eraseUserAny(kTriedKey);
+    entity->getUserObjectBindings().eraseUserAny(kHandedKey);
+    std::string why = "its weight or bone counts no longer agree";
+    bool skins_all = true;
+    for (Ogre::SubEntity* sub : entity->getSubEntities()) {
+        if (!skins(sub->getMaterial()->getBestTechnique(0, sub))) {
+            why = "no longer skins: " + describe(sub);
+            skins_all = false;
+            break;
+        }
+    }
+    // A material that still skins keeps OGRE skinning the entity on the GPU, whatever this
+    // says: with a shader for other weights (vertices thrown off as spikes) or fewer bones
+    // (OGRE writes the submesh's bone matrices past the shader's array, into the heap). So
+    // fitted again now, as a fresh hand-over does it.
+    if (active_ && skins_all) {
+        refusal_ = nullptr;
+        if (hand_over(entity)) {
+            note(entity, "was fitted again, " + why);
+            return true;
+        }
+        why += std::string(", and could not be fitted again: ") +
+               (refusal_ != nullptr ? refusal_ : "?");
+    }
+    // Back to the CPU for now, and looked at afresh next frame.
+    if (active_) note(entity, "went back to the CPU, " + why);
+    reconsider(entity);
+    return false;
+}
+
 void GpuSkinning::note(const Ogre::Entity* entity, const std::string& what) {
     // Once a run for each mesh and message.
     const std::string& mesh = entity->getMesh()->getName();
@@ -520,6 +538,15 @@ Ogre::Technique* GpuSkinning::cpu_technique(Ogre::Renderable* renderable) {
     return copy.getBestTechnique(0, renderable);
 }
 
+bool GpuSkinning::material_fits(const Ogre::SubEntity* sub) const {
+    SubmeshSkin skin;
+    if (!submesh_skin(sub->getParent(), sub->getSubMesh(), skin)) return true;
+    const auto found = marked_.find(sub->getMaterial().get());
+    // Unmarked: nothing is known of its shader, and it is left as it is.
+    return found == marked_.end() ||
+           (found->second.weights == skin.weights && found->second.bones >= skin.bones);
+}
+
 Ogre::Technique* GpuSkinning::fitting_technique(Ogre::SubEntity* sub) const {
     SubmeshSkin skin;
     if (!submesh_skin(sub->getParent(), sub->getSubMesh(), skin)) return nullptr;
@@ -554,7 +581,15 @@ void GpuSkinning::guard(Ogre::Renderable* renderable, Ogre::Technique** techniqu
         // material set since step() looked (the wardrobe's, the inventory doll copying the
         // player's every frame). That shader throws the vertices off as spikes; the copy
         // marked for this submesh draws it as it is.
-        if (Ogre::Technique* fitting = fitting_technique(sub)) *technique = fitting;
+        if (Ogre::Technique* fitting = fitting_technique(sub)) {
+            *technique = fitting;
+            return;
+        }
+        // Nothing fits it yet (step() fits it at the frame's end): its shader's bone array may be
+        // smaller than the submesh's bones, and OGRE would write past it. Unskinned this once.
+        if (!material_fits(sub)) {
+            if (Ogre::Technique* plain = cpu_technique(renderable)) *technique = plain;
+        }
         return;
     }
     if (Ogre::Technique* plain = cpu_technique(renderable)) *technique = plain;

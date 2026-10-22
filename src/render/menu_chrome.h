@@ -108,6 +108,20 @@ float authored_height(const tl::formats::Imageset& reference, float fallback);
 void set_console_game_data(bool console);
 bool console_game_data();
 
+inline constexpr const char* kUi2Imageset = "media/UI/ui2.imageset";
+inline constexpr const char* kUiIconsImageset = "media/UI/uiicons.imageset";
+
+/// The PC's own `Logo`, `GuiLook`, `ui2` and `UIIcons`, which a console-style screen loads after
+/// its own sheets on a PC pak: the art the port's interface pack leaves out (the logo bars, the
+/// buttons, the panel looks, the HUD's slots and bars), found by name where a sheet lacks it.
+/// Empty on the Xbox 360 pak, which carries none of them.
+std::vector<const char*> pc_imagesets();
+
+/// The PC image that stands for a console one the mounted sheets lack (`skills_window_active` is
+/// `ActiveSkillHousing`), or empty when the PC has none like it. Looked up only after the console
+/// name is not found, so the console's own art always wins.
+std::string pc_image_for(const std::string& console_image);
+
 /// Read a whole file out of the mounted game archive. False, with a logged reason, when it is
 /// not there.
 bool read_menu_resource(const std::string& path, const std::string& group,

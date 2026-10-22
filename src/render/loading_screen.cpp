@@ -144,6 +144,11 @@ void LoadingScreen::choose_tip() {
 // draws nothing of the PC's (no `logo.imageset`, which the Xbox 360 pak does
 // not carry), so it is tried first.
 bool LoadingScreen::build_console(const std::string& group) {
+    // Absent beside a PC pak (the interface pack carries none): the PC's screen is drawn instead.
+    if (!Ogre::ResourceGroupManager::getSingleton().resourceExists(group, kConsoleLoadingFile)) {
+        TL_LOG_INFO("loading screen: no %s, the PC's screen instead", kConsoleLoadingFile);
+        return false;
+    }
     console_ = std::make_unique<LayoutScreen>();
     if (!console_->create_export(group, width_, height_, kConsoleLoadingFile, "tl/loading/console",
                                  450)) {

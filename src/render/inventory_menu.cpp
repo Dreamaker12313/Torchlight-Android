@@ -30,8 +30,10 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace tl::render {
 namespace {
@@ -99,7 +101,6 @@ int anchor_of(const std::string& word) {
     if (word == "RIGHT" || word == "BOTTOM") return 2;
     return 0;
 }
-
 float font_points(const std::string& name) {
     if (name == "SerifSmall") return kSmallFontSize;
     if (name == "Serif14") return 14.0f;
@@ -183,12 +184,18 @@ std::string wrap_ui_text(const std::string& text, size_t max_chars = 25) {
 InventoryMenu::~InventoryMenu() { destroy(); }
 
 const InventoryMenu::Sprite* InventoryMenu::sprite(const std::string& name) const {
-    const auto found = sprites_.find(lowered(name));
+    auto found = sprites_.find(lowered(name));
+    // A console image the sheets lack, drawn in the PC's like of it.
+    if (found == sprites_.end()) found = sprites_.find(lowered(pc_image_for(name)));
     return found == sprites_.end() ? nullptr : &found->second;
 }
 
 bool InventoryMenu::load_art(const std::string& group) {
-    sets_.reserve(std::size(kConsoleImagesets) + std::size(kItemIconImagesets));
+    // The item icons, then the PC's own sets (the panel looks the interface pack leaves out),
+    // both optional.
+    std::vector<const char*> extra(std::begin(kItemIconImagesets), std::end(kItemIconImagesets));
+    for (const char* path : pc_imagesets()) extra.push_back(path);
+    sets_.reserve(std::size(kConsoleImagesets) + extra.size());
 
     // 1. Console widgets imagesets
     for (const char* path : kConsoleImagesets) {
@@ -224,7 +231,7 @@ bool InventoryMenu::load_art(const std::string& group) {
     }
 
     // 2. Item icons imagesets (from main game data)
-    for (const char* path : kItemIconImagesets) {
+    for (const char* path : extra) {
         std::vector<uint8_t> bytes;
         if (!read_menu_resource(path, group, bytes) || bytes.empty()) {
             continue;
@@ -918,9 +925,12 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
 
     // The five windows that float over the rest of the screen, and everything under them (in
     // CEGUI each is a separate top-level window, so the data has no key for it); also the quest
-    // tab's selection frame and its `Abandon Quest` tray, `ALWAYS ON TOP` over the next title.
+    // tab's selection frame and its `Abandon Quest` tray, `ALWAYS ON TOP` over the next title;
+    // and the skills tab's legend, which the console moves to the front each time it shows it
+    // (`Window::moveToFront_impl`), over the panes after it.
     const bool floating = inherited_floating || widget == "StrHelp" || widget == "DexHelp" ||
                           widget == "MagicHelp" || widget == "DefHelp" || widget == "spendPoints" ||
+                          widget == "HelpSkillDialog" ||
                           (prefix == "quest/" && widget == "moveframe");
 
     Node node;
@@ -949,6 +959,9 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
     node.hidden = !object.bool_or("VISIBLE", true);
     node.runtime_hidden = node.hidden;
     node.always_on_top = inherited_always_on_top || object.bool_or("ALWAYS ON TOP", false);
+    // The identify window's text ships `ALPHA:2`, which CEGUI clamps.
+    node.own_alpha = std::clamp(object.float_or("ALPHA", 1.0f), 0.0f, 1.0f);
+    node.alpha = node.own_alpha * alpha_of(parent);
 
     auto& overlays = Ogre::OverlayManager::getSingleton();
     const std::string name = prefix + indexed("node_", serial);
@@ -971,6 +984,7 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
                 Ogre::ColourValue(((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f,
                                   (argb & 0xFF) / 255.0f, ((argb >> 24) & 0xFF) / 255.0f);
         }
+        colour.a *= node.alpha;
 
         std::string text_str = clean_ui_text(raw_text);
         if (object.bool_or("WORD WRAP", false)) {
@@ -991,7 +1005,8 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
         };
 
         if (descriptor == "Text Outlined") {
-            node.drop = make(name + "/drop", Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.75f));
+            node.drop =
+                make(name + "/drop", Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.75f * node.alpha));
         }
         node.text = make(name + "/text", colour);
         node.colour = colour;
@@ -1019,7 +1034,7 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
 
             const Sprite* hit = sprite(node.image);
             if (hit != nullptr && hit->texture) {
-                panel->setMaterialName(hit->material->getName());
+                panel->setMaterialName(material_for(*hit, node.alpha));
                 const float tw = static_cast<float>(hit->texture->getWidth());
                 const float th = static_cast<float>(hit->texture->getHeight());
                 const float u0 = static_cast<float>(hit->rect.x) / tw;
@@ -1078,17 +1093,18 @@ void InventoryMenu::build(const tl::formats::UiObject& object, int parent,
             const char* image;
             float ox, oy, wide, tall;
         };
-        // A frame sized by its parent alone (no absolute size, `SCALE WIDTH`/`SCALE HEIGHT`
-        // set, as the replace-spell dialog's `CEGUI Object`) takes that size; any other keeps the
-        // fitted sizes below.
+        // A frame sized by its parent (`SCALE WIDTH`/`SCALE HEIGHT` set over a parent of absolute
+        // size, as the replace-spell dialog's `CEGUI Object` and the skill legend's) is CEGUI's
+        // unified size, scale times the parent's plus the offset; any other keeps the fitted
+        // sizes below.
         const Node* parent_node = parent >= 0 ? &nodes_[static_cast<size_t>(parent)] : nullptr;
-        const bool by_parent = parent_node != nullptr && node.wide == 0.0f && node.tall == 0.0f &&
-                               node.scale_wide > 0.0f && node.scale_tall > 0.0f &&
-                               parent_node->scale_wide == 0.0f && parent_node->scale_tall == 0.0f;
-        const float bw = by_parent            ? node.scale_wide * parent_node->wide
+        const bool by_parent = parent_node != nullptr && node.scale_wide > 0.0f &&
+                               node.scale_tall > 0.0f && parent_node->scale_wide == 0.0f &&
+                               parent_node->scale_tall == 0.0f;
+        const float bw = by_parent            ? node.scale_wide * parent_node->wide + node.wide
                          : (node.wide > 0.0f) ? node.wide
                                               : 265.0f;
-        float bh = by_parent            ? node.scale_tall * parent_node->tall
+        float bh = by_parent            ? node.scale_tall * parent_node->tall + node.tall
                    : (node.tall > 0.0f) ? node.tall
                                         : 90.0f;
         if (node.widget.find("Help") != std::string::npos) {
@@ -1362,7 +1378,7 @@ void InventoryMenu::set_widget_image(const std::string& widget_name,
     const Sprite* s = sprite(image_name);
     if (s != nullptr && s->texture) {
         n->panel->setTransparent(false);
-        n->panel->setMaterialName(s->material->getName());
+        n->panel->setMaterialName(material_for(*s, n->alpha));
         const float tw = static_cast<float>(s->texture->getWidth());
         const float th = static_cast<float>(s->texture->getHeight());
         const float u0 = static_cast<float>(s->rect.x) / tw;

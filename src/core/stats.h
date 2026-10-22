@@ -120,6 +120,7 @@ public:
     float value(const std::string& name, float x, float fallback = 0.0f) const;
 
     size_t size() const { return by_name_.size(); }
+    const std::map<std::string, StatGraph>& all() const { return by_name_; }
 
     // CGraphManager::clear
     void clear();

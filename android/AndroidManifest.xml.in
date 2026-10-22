@@ -6,9 +6,10 @@
   Two activities. The launcher (android/java/port/android/Launcher.java) is the
   icon's: it asks for the folder with the player's own pak.zip and music/,
   checks it, unpacks OGRE's shader library from the APK, and starts the game.
-  The game is a NativeActivity: the engine owns its loop, and the activity's
-  only job is to load lib@LIB@.so and call its android_main(). It stays
-  exported so `adb shell am start` can start it directly.
+  The game is a NativeActivity (port.android.GameActivity, which only makes
+  Back send it to the background rather than end it): the engine owns its
+  loop, and the activity's only job is to load lib@LIB@.so and call its
+  android_main(). It stays exported so `adb shell am start` can start it directly.
   configChanges lists what a foldable phone does when it is folded or unfolded,
   so that is a resize the native side handles rather than an activity torn down
   and rebuilt.
@@ -19,7 +20,7 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           package="@PACKAGE@"
-          android:versionCode="1"
+          android:versionCode="2"
           android:versionName="@VERSION@">
 
     <uses-feature android:glEsVersion="0x00030002" android:required="true" />
@@ -38,7 +39,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name="android.app.NativeActivity"
+        <activity android:name="port.android.GameActivity"
                   android:exported="true"
                   android:screenOrientation="sensorLandscape"
                   android:resizeableActivity="true"

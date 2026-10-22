@@ -51,8 +51,11 @@ function(tl_configure_platform target)
     # runtime. On desktop it can be used straight out of the source tree; the
     # Switch build has to ship these files to the SD card, so this is a define
     # rather than a hardcoded path in the engine. --ogre-media overrides it.
-    target_compile_definitions(${target} PRIVATE
-        TL_OGRE_MEDIA_DIR="${CMAKE_SOURCE_DIR}/external/ogre/Media")
+    # A player folder reads the RTShaderLib/ beside the program instead, so a
+    # release build passes -DTL_OGRE_MEDIA_DIR=. and names no folder of its own.
+    set(TL_OGRE_MEDIA_DIR "${CMAKE_SOURCE_DIR}/external/ogre/Media" CACHE STRING
+        "Where a build run from the source tree finds RTShaderLib/")
+    target_compile_definitions(${target} PRIVATE TL_OGRE_MEDIA_DIR="${TL_OGRE_MEDIA_DIR}")
 
     # OGRE_STATIC_LIB switches OGRE's headers from dllimport to static linkage.
     # Without it every symbol resolves to an import stub that does not exist.
@@ -72,6 +75,9 @@ function(tl_configure_platform target)
     target_link_directories(${target} PRIVATE "${TL_OGRE_BUILD_DIR}/lib")
     target_link_libraries(${target} PRIVATE
         -Wl,--start-group ${TL_OGRE_LIBS} -Wl,--end-group)
+    # OGRE is linked statically, so the build-tree RUNPATH CMake derives from
+    # the link directory serves nothing and would name the build machine's path.
+    set_target_properties(${target} PROPERTIES SKIP_BUILD_RPATH ON)
 
     # FreeType, for the interface layer's font: the game's own
     # `Torchlight Regular.ttf` out of its own archive. OGRE's Overlay component

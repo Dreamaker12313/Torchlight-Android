@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace tl::core {
 
@@ -10,6 +11,26 @@ namespace {
 // `CLevel::mapPassable`: a cell of `+0x40` / `+0x48`
 // is open below 1.
 bool open_cell(int8_t v) { return v < 1; }
+
+// `calculate`'s four probes at chest height, 0.3 out along +x, -x, +z and -z: meeting a
+// `nocollide` face blocks the cell.
+bool probe_meets_nocollide(const CollisionWorld& world, const CollisionHit& ground) {
+    const Vec3 from{ground.point.x, ground.point.y + 1.5f, ground.point.z};
+    const Vec3 ends[4] = {
+        {ground.point.x + 0.3f, from.y + 0.0f, ground.point.z + 0.0f},
+        {from.x + -0.3f, from.y + 0.0f, from.z + 0.0f},
+        {from.x + 0.0f, from.y + 0.0f, from.z + 0.3f},
+        {from.x + 0.0f, from.y + 0.0f, from.z + -0.3f},
+    };
+    for (const Vec3& end : ends) {
+        CollisionHit probe;
+        if (world.pre_sorted_ray_collision(from, end, false, probe) &&
+            probe.material == kNoCollideMaterial) {
+            return true;
+        }
+    }
+    return false;
+}
 
 }  // namespace
 
@@ -74,12 +95,25 @@ void PassabilityMap::clear_passability_data() {
     std::fill(object_.begin(), object_.end(), static_cast<int8_t>(0));
 }
 
-void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* sections) {
+void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* sections,
+                          const std::vector<Box>* recalculate) {
     // CLevel::bakeCollision, from
     // "Passability Calculation Time" back to the grid's allocation.
     clear();
     Vec3 low, high;
-    if (!world.level_bounds(low, high)) return;
+    if (sections != nullptr) {
+        // the grid's box is the rooms' boxes merged (the Linux
+        // build sizes it from the level list's bounds).
+        Box rooms;
+        for (const Box& box : *sections) {
+            if (box.finite) rooms.merge(box.low, box.high);
+        }
+        if (!rooms.finite) return;
+        low = rooms.low;
+        high = rooms.high;
+    } else if (!world.level_bounds(low, high)) {
+        return;
+    }
 
     // all in single precision, the size truncated.
     origin_x_ = std::floor(low.x * kInverseCell) * kCell;
@@ -104,10 +138,30 @@ void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* s
         // No chunks (`CLevel+0x1e8` empty): the whole list at once.
         passes_.push_back(calculate(world, low, high));
     } else {
+        // after each room's pass its four edges, 4 wide, join the
+        // boxes cast again: west, south, east, north.
+        std::vector<Box> again;
+        if (recalculate != nullptr) again = *recalculate;
         for (const Box& box : *sections) {
             // A null box - a room layout with no collision-enabled piece - is skipped.
             if (!box.finite) continue;
-            passes_.push_back(calculate(world, box.low, box.high));
+            passes_.push_back(calculate(world, box.low, box.high, &box.cached));
+            const Vec3& lo = box.low;
+            const Vec3& hi = box.high;
+            const float dx = hi.x - lo.x;
+            const float dz = hi.z - lo.z;
+            const Box strips[4] = {
+                {lo, {lo.x + kStrip, lo.y, lo.z + dz}, true, {}},
+                {lo, {dx + lo.x, lo.y, lo.z + kStrip}, true, {}},
+                {{hi.x - kStrip, hi.y, hi.z - dz}, hi, true, {}},
+                {{hi.x - dx, hi.y, hi.z - kStrip}, hi, true, {}},
+            };
+            for (const Box& strip : strips) again.push_back(strip);
+        }
+        // each cast again from open, without a `.pth`.
+        for (const Box& box : again) {
+            if (!box.finite) continue;
+            passes_.push_back(calculate(world, box.low, box.high, nullptr, true));
         }
     }
 
@@ -117,8 +171,57 @@ void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* s
     }
 }
 
+// the room's `.pth` - a width and a height (little-endian words)
+// and a byte a cell, z by z - is used when its size is the box's, or within one cell of it each
+// way (then the box takes the file's size); otherwise the cells are cast.
+bool PassabilityMap::take_cached(const std::vector<uint8_t>& cached, int x0, int z0, int& x1,
+                                 int& z1, Pass& pass) {
+    if (cached.size() < 8) return false;
+    const auto word = [&cached](size_t at) {
+        return static_cast<int>(static_cast<uint32_t>(cached[at]) |
+                                static_cast<uint32_t>(cached[at + 1]) << 8 |
+                                static_cast<uint32_t>(cached[at + 2]) << 16 |
+                                static_cast<uint32_t>(cached[at + 3]) << 24);
+    };
+    const int file_width = word(0);
+    const int file_height = word(4);
+    if (!(std::abs(file_width - (x1 - x0)) < 2 && std::abs(file_height - (z1 - z0)) < 2 &&
+          0 < file_width && 0 < file_height &&
+          8 + static_cast<size_t>(file_width) * static_cast<size_t>(file_height) <=
+              cached.size())) {
+        return false;
+    }
+    x1 = x0 + file_width;
+    z1 = z0 + file_height;
+    // each cell the file's, open ones counted; the pass that closes
+    // one-cell gaps is not run.
+    for (int x = x0; x < x1; ++x) {
+        for (int z = z0; z < z1; ++z) {
+            if (z < 0 || x < 0 || width_ <= x || height_ <= z) continue;
+            const auto value = static_cast<int8_t>(
+                cached[8 + static_cast<size_t>(z - z0) * static_cast<size_t>(file_width) +
+                       static_cast<size_t>(x - x0)]);
+            map_[index_of(x, z)] = value;
+            if (value == 0) ++pass.passable;
+        }
+    }
+    passable_ += pass.passable;
+    return true;
+}
+
+// cast again, every cell of the box is made open first.
+void PassabilityMap::open_cells(int x0, int z0, int x1, int z1) {
+    for (int x = x0; x < x1; ++x) {
+        for (int z = z0; z < z1; ++z) {
+            if (z < 0 || x < 0 || width_ <= x || height_ <= z) continue;
+            map_[index_of(x, z)] = 0;
+        }
+    }
+}
+
 PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, const Vec3& low,
-                                               const Vec3& high) {
+                                               const Vec3& high, const std::vector<uint8_t>* cached,
+                                               bool zero_first) {
     // CLevel::calculatePassability
     Pass pass;
     if (!ready()) return pass;
@@ -126,8 +229,11 @@ PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, cons
     // times 2.5 as every cell index is.
     const int x0 = static_cast<int>(std::floor((low.x - origin_x_) * kInverseCell)) - 1;
     const int z0 = static_cast<int>(std::floor((low.z - origin_z_) * kInverseCell)) - 1;
-    const int x1 = static_cast<int>(std::ceil((high.x - origin_x_) * kInverseCell)) + 1;
-    const int z1 = static_cast<int>(std::ceil((high.z - origin_z_) * kInverseCell)) + 1;
+    int x1 = static_cast<int>(std::ceil((high.x - origin_x_) * kInverseCell)) + 1;
+    int z1 = static_cast<int>(std::ceil((high.z - origin_z_) * kInverseCell)) + 1;
+
+    if (cached != nullptr && take_cached(*cached, x0, z0, x1, z1, pass)) return pass;
+    if (zero_first) open_cells(x0, z0, x1, z1);
 
     // First pass: cast every cell, and count the ones left open.
     for (int x = x0; x < x1; ++x) {
@@ -160,23 +266,7 @@ PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, cons
                 ground.material == kNoCollideMaterial) {
                 value = 1;
             } else {
-                // Four probes at chest height, 0.3 out along +x, -x, +z and -z:
-                // meeting a `nocollide` face blocks the cell.
-                const Vec3 from{ground.point.x, ground.point.y + 1.5f, ground.point.z};
-                const Vec3 ends[4] = {
-                    {ground.point.x + 0.3f, from.y + 0.0f, ground.point.z + 0.0f},
-                    {from.x + -0.3f, from.y + 0.0f, from.z + 0.0f},
-                    {from.x + 0.0f, from.y + 0.0f, from.z + 0.3f},
-                    {from.x + 0.0f, from.y + 0.0f, from.z + -0.3f},
-                };
-                for (const Vec3& end : ends) {
-                    CollisionHit probe;
-                    if (world.pre_sorted_ray_collision(from, end, false, probe) &&
-                        probe.material == kNoCollideMaterial) {
-                        value = 1;
-                        break;
-                    }
-                }
+                if (probe_meets_nocollide(world, ground)) value = 1;
                 ground_[index_of(x, z)] = ground.point.y;
             }
             cell = value;

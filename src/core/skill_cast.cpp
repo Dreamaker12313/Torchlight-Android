@@ -392,6 +392,7 @@ void roll_property(const SkillProperty& property, const SkillConstruction& with)
                     // that is not empty is loaded into the event's own
                     // `CLayout`, its objects made.
                     const std::string file = child.string_or("FILE", std::string());
+                    if (!file.empty() && with.load_event_file) with.load_event_file(file);
                     if (!file.empty() && with.game_rng != nullptr && with.layout_adds_sample &&
                         with.layout_adds_sample(file)) {
                         with.game_rng->set_seed(

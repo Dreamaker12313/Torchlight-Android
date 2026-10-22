@@ -1,5 +1,6 @@
-// Android frame lifecycle. pump_events() drains the glue's looper once a frame; the window going
-// away or the activity being destroyed is what should_keep_running() reports.
+// Android frame lifecycle. pump_events() drains the glue's looper once a frame, and while the app
+// is in the background (no window) waits in it for the window to come back; the activity being
+// destroyed is what should_keep_running() reports.
 #include "core/platform.h"
 
 #include "core/log.h"
@@ -28,11 +29,20 @@ void platform_error_message(const std::string& summary, const std::string& detai
     TL_LOG_ERROR("%s: %s", summary.c_str(), detail.c_str());
 }
 
-// The activity owns the window; OGRE's AndroidEGLWindow reads both as numbers.
+// The activity owns the window; OGRE's AndroidEGLWindow reads both as numbers. A window
+// made while the app is in the background waits for it to return. The GL context is kept
+// when the window goes (only its surface is released), so nothing the game loaded is lost.
 void platform_window_params(std::map<std::string, std::string>& params) {
+    android::wait_for_window();
     android_app* glue = android::app();
+    if (glue->window == nullptr) return;
+    android::measure_screen();
     params["externalWindowHandle"] = std::to_string(reinterpret_cast<std::size_t>(glue->window));
     params["androidConfig"] = std::to_string(reinterpret_cast<std::size_t>(glue->config));
+    params["preserveContext"] = "true";
+    if (const char* factor = android::content_scaling_factor()) {
+        params["contentScalingFactor"] = factor;
+    }
 }
 
 void pump_events() {
@@ -43,17 +53,15 @@ void pump_events() {
            ALooper_pollOnce(0, nullptr, &events, reinterpret_cast<void**>(&source)) >= 0) {
         if (source != nullptr) source->process(glue, source);
     }
-    // The window's size is the space touches arrive in, and a foldable phone
-    // changes it when it folds.
-    if (glue->window != nullptr) {
-        touch_pad().set_screen(static_cast<float>(ANativeWindow_getWidth(glue->window)),
-                               static_cast<float>(ANativeWindow_getHeight(glue->window)));
-    }
+    // In the background: nothing is drawn or advanced until the window is back.
+    android::wait_for_window();
+    // The pad is laid out in the frame's pixels (touches are scaled to them),
+    // and a foldable phone changes the frame's size when it folds.
+    touch_pad().set_screen(static_cast<float>(android::render_width()),
+                           static_cast<float>(android::render_height()));
 }
 
-bool should_keep_running() {
-    return android::app()->destroyRequested == 0 && !android::window_lost();
-}
+bool should_keep_running() { return android::app()->destroyRequested == 0; }
 
 bool memory_usage(unsigned long long& used, unsigned long long& total) {
     // What the program has allocated, against the phone's memory. GL objects
