@@ -188,6 +188,9 @@ elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/external/ogre/Media/Main"
             "$<TARGET_BUNDLE_DIR:torchlight>/RTShaderLib/Main"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/ui_pack"
+            "$<TARGET_BUNDLE_DIR:torchlight>/ui_pack"
         COMMAND /usr/bin/xcrun actool
             --platform iphoneos
             --minimum-deployment-target 15.0

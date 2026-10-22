@@ -595,6 +595,8 @@ struct Renderer::Impl : tl::core::World {
     std::string archive_path_unique(const std::string& basename) const override;
     std::vector<std::string> archive_paths_under(const std::string& dir,
                                                  const char* suffix) const override;
+    std::vector<std::string> data_paths_under(const std::string& dir) const override;
+    tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) const override;
     bool console_game_data() const override;
     std::string dir_of_asset(const std::string& name) const override;
     tl::core::DungeonManager& loaded_dungeon_manager() const override;
@@ -2742,6 +2744,14 @@ void ensure_skeleton(const Ogre::MeshPtr& mesh, const std::string& mesh_name,
 std::string resolve_archive_path(const std::string& reference);
 /// Keep read_resource()'s data files only while the same archives are mounted.
 void remember_mounts(const std::string& mounts);
+/// Absolute roots of extracted mod folders, in priority order; these filesystems
+/// are searched case-insensitively before the base archive on iOS.
+void set_mod_roots(const std::vector<std::string>& roots);
+bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes);
+std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix);
+std::vector<std::string> data_paths_under(const std::string& dir);
+tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size);
+std::vector<std::string> data_paths_in_listing_order(const std::string& dir);
 std::vector<uint8_t> read_resource(const std::string& path);
 /// The pet a new character starts with unless the creation screen says otherwise
 /// (`charactercreate.layout` lists `Dog` first).

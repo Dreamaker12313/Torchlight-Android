@@ -1752,6 +1752,9 @@ std::string resolve_archive_path_impl(const std::string& reference, bool quiet) 
         if (c == '\\') c = '/';
     }
 
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) return path;
+
     const size_t slash = path.find_last_of('/');
     const std::string basename = (slash == std::string::npos) ? path : path.substr(slash + 1);
     const std::string dir =
@@ -1824,6 +1827,15 @@ std::vector<uint8_t> read_resource(const std::string& path) {
     if (data_file) {
         const auto found = g_data_files.files.find(path);
         if (found != g_data_files.files.end()) return found->second;
+    }
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) {
+        TL_LOG_INFO("mod override: %s", path.c_str());
+        if (data_file && !mod_bytes.empty() && g_data_files.bytes + mod_bytes.size() <= kDataFileBudget) {
+            g_data_files.bytes += mod_bytes.size();
+            g_data_files.files.emplace(path, mod_bytes);
+        }
+        return mod_bytes;
     }
     auto& groups = Ogre::ResourceGroupManager::getSingleton();
     try {

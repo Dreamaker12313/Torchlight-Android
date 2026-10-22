@@ -2,14 +2,31 @@
 #import "OgreEAGL2View.h"
 #import "OgreEAGL2ViewController.h"
 #import <atomic>
+#import <cstdlib>
 #import <thread>
 #import <string>
+#import <vector>
+#import <algorithm>
+#include <cstring>
+#include <memory>
 #include "core/touch_pad.h"
+#include "platform/ios/ios_app.h"
 
 extern int tl_engine_main(int argc, char** argv);
 static std::atomic<bool> g_active{true};
 static std::atomic<bool> g_engine_started{false};
 static UIWindow* g_render_window = nil;
+static std::string g_program_folder;
+
+extern "C" const char* tl_ios_program_folder(void) {
+    @autoreleasepool {
+        if (g_program_folder.empty()) {
+            NSString* path = NSBundle.mainBundle.resourcePath;
+            g_program_folder = path != nil ? std::string(path.fileSystemRepresentation) + "/" : "";
+        }
+        return g_program_folder.c_str();
+    }
+}
 
 static void copyBundledGameData(const std::string& documents, const std::string& bundled) {
     @autoreleasepool {
@@ -26,6 +43,79 @@ static void copyBundledGameData(const std::string& documents, const std::string&
                 NSLog(@"Torchlight: could not copy bundled %@ into Documents: %@", name, error);
             }
         }
+    }
+}
+
+static NSString* findModRootWithMedia(NSString* start) {
+    NSFileManager* files = [NSFileManager defaultManager];
+    NSMutableArray<NSDictionary<NSString*, id>*>* pending = [NSMutableArray arrayWithObject:@{
+        @"path": start, @"depth": @0
+    }];
+    while (pending.count > 0) {
+        NSDictionary<NSString*, id>* entry = pending.firstObject;
+        [pending removeObjectAtIndex:0];
+        NSString* directory = entry[@"path"];
+        NSUInteger depth = [entry[@"depth"] unsignedIntegerValue];
+        NSError* error = nil;
+        NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:directory error:&error];
+        if (names == nil) continue;
+
+        for (NSString* name in names) {
+            if ([name caseInsensitiveCompare:@"media"] != NSOrderedSame) continue;
+            NSString* media = [directory stringByAppendingPathComponent:name];
+            BOOL isDirectory = NO;
+            if ([files fileExistsAtPath:media isDirectory:&isDirectory] && isDirectory)
+                return directory;
+        }
+
+        // Mod archives are often wrapped in one or more named folders (for
+        // example, mods/Baklahs Unique gear/Baklah_Unique/media). Find the
+        // folder immediately above MEDIA instead of assuming the ZIP was
+        // extracted directly into mods/<name>/.
+        if (depth >= 6) continue;
+        for (NSString* name in names) {
+            if ([name hasPrefix:@"."] || [name caseInsensitiveCompare:@"__MACOSX"] == NSOrderedSame)
+                continue;
+            NSString* child = [directory stringByAppendingPathComponent:name];
+            BOOL isDirectory = NO;
+            if ([files fileExistsAtPath:child isDirectory:&isDirectory] && isDirectory) {
+                [pending addObject:@{@"path": child, @"depth": @(depth + 1)}];
+            }
+        }
+    }
+    return nil;
+}
+
+static std::vector<std::string> discoverModMediaFolders(const std::string& documents) {
+    @autoreleasepool {
+        NSFileManager* files = [NSFileManager defaultManager];
+        NSString* documentsRoot = [NSString stringWithUTF8String:documents.c_str()];
+        NSString* modsRoot = [documentsRoot stringByAppendingPathComponent:@"mods"];
+        NSError* error = nil;
+        [files createDirectoryAtPath:modsRoot withIntermediateDirectories:YES attributes:nil error:&error];
+        if (error != nil) {
+            NSLog(@"Torchlight: could not create mods folder: %@", error);
+            return {};
+        }
+
+        NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:modsRoot error:&error];
+        if (names == nil) {
+            NSLog(@"Torchlight: could not list mods folder: %@", error);
+            return {};
+        }
+
+        std::vector<std::string> mediaFolders;
+        for (NSString* name in [names sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)]) {
+            NSString* modRoot = [modsRoot stringByAppendingPathComponent:name];
+            BOOL isDirectory = NO;
+            if (![files fileExistsAtPath:modRoot isDirectory:&isDirectory] || !isDirectory) continue;
+            NSString* mediaRoot = findModRootWithMedia(modRoot);
+            if (mediaRoot == nil) continue;
+            NSLog(@"Torchlight: found mod folder %@ at %@", name, mediaRoot);
+            mediaFolders.emplace_back(mediaRoot.fileSystemRepresentation);
+        }
+        if (mediaFolders.empty()) NSLog(@"Torchlight: no extracted mod folders found in %@", modsRoot);
+        return mediaFolders;
     }
 }
 
@@ -98,15 +188,23 @@ static void copyBundledGameData(const std::string& documents, const std::string&
             std::string(NSBundle.mainBundle.resourcePath.UTF8String) + "/GameData";
         std::thread([root, bundledGameData, width, height]() mutable {
             copyBundledGameData(root, bundledGameData);
-            std::string w = std::to_string(width), h = std::to_string(height);
-            char app[] = "torchlight";
-            char data_flag[] = "--game-data";
-            char width_flag[] = "--width";
-            char height_flag[] = "--height";
-            char media_flag[] = "--ogre-media";
+            const std::vector<std::string> modMediaFolders = discoverModMediaFolders(root);
             std::string media = std::string(NSBundle.mainBundle.resourcePath.UTF8String);
-            char* argv[] = {app, data_flag, root.data(), width_flag, w.data(), height_flag, h.data(), media_flag, media.data()};
-            (void)tl_engine_main(9, argv);
+            std::vector<std::string> arguments = {
+                "torchlight", "--game-data", root, "--width", std::to_string(width),
+                "--height", std::to_string(height), "--ogre-media", media};
+            for (const std::string& modMedia : modMediaFolders) {
+                arguments.emplace_back("--mod-data");
+                arguments.emplace_back(modMedia);
+            }
+            std::vector<char*> argv;
+            argv.reserve(arguments.size());
+            for (std::string& argument : arguments) argv.push_back(argument.data());
+            const int result = tl_engine_main(static_cast<int>(argv.size()), argv.data());
+            // UIKit's event loop outlives the engine thread. Once the engine
+            // has saved and shut down, terminate the process so Quit does not
+            // leave a live, black app window behind.
+            std::exit(result);
         }).detach();
     }
 }
@@ -137,6 +235,62 @@ extern "C" void* tl_ios_controller_handle(void) {
     return (__bridge void*)window.rootViewController;
 }
 extern "C" bool tl_ios_app_active(void) { return g_active.load(); }
+
+extern "C" bool tl_ios_text_entry(const char* title, const char* guide, const char* initial,
+                                  unsigned max_chars, char* output, size_t output_size) {
+    struct TextEntryResult {
+        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+        std::string value;
+        bool accepted = false;
+    };
+    auto result = std::make_shared<TextEntryResult>();
+    result->value = initial != nullptr ? initial : "";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow* window = g_render_window;
+        UIViewController* presenter = window.rootViewController;
+        if (presenter == nil) {
+            dispatch_semaphore_signal(result->semaphore);
+            return;
+        }
+        NSString* titleText = [NSString stringWithUTF8String:title != nullptr ? title : ""];
+        NSString* guideText = [NSString stringWithUTF8String:guide != nullptr ? guide : ""];
+        UIAlertController* alert = [UIAlertController alertControllerWithTitle:titleText
+                                                                         message:guideText
+                                                                  preferredStyle:UIAlertControllerStyleAlert];
+        __block UITextField* nameField = nil;
+        [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+            nameField = field;
+            field.text = [NSString stringWithUTF8String:result->value.c_str()];
+            field.autocorrectionType = UITextAutocorrectionTypeNo;
+            field.autocapitalizationType = UITextAutocapitalizationTypeWords;
+            field.clearButtonMode = UITextFieldViewModeWhileEditing;
+        }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:^(__unused UIAlertAction* action) {
+            dispatch_semaphore_signal(result->semaphore);
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Done"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(__unused UIAlertAction* action) {
+            NSString* value = nameField.text != nil ? nameField.text : @"";
+            if (value.length > max_chars) value = [value substringToIndex:max_chars];
+            const char* utf8 = value.UTF8String;
+            result->value = utf8 != nullptr ? utf8 : "";
+            result->accepted = true;
+            dispatch_semaphore_signal(result->semaphore);
+        }]];
+        [presenter presentViewController:alert animated:YES completion:^{
+            [alert.textFields.firstObject becomeFirstResponder];
+        }];
+    });
+    dispatch_semaphore_wait(result->semaphore, DISPATCH_TIME_FOREVER);
+    if (!result->accepted || output == nullptr || output_size == 0) return false;
+    const size_t count = std::min(output_size - 1, result->value.size());
+    std::memcpy(output, result->value.data(), count);
+    output[count] = '\0';
+    return true;
+}
 
 int main(int argc, char* argv[]) {
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(TorchlightAppDelegate.class)); }

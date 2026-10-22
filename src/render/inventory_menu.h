@@ -218,6 +218,7 @@ public:
     /// tray's tab; past either end the focus moves on and the tray it lands
     /// on starts at the tab on that side.
     void step_tray_tab(int direction);
+    void cycle_vendor_tab(int direction);
     /// The merchant tray's selected slot, -1 for none.
     int selected_vendor_slot() const;
 

@@ -1,5 +1,7 @@
 # iOS platform configuration. Build OGRE separately with its iOS toolchain.
 set(TL_OGRE_BUILD_DIR "${CMAKE_SOURCE_DIR}/build-ogre-ios-xcode" CACHE PATH "iOS OGRE build")
+set(TL_IOS_DEPENDENCIES_DIR "${TL_OGRE_BUILD_DIR}/Dependencies" CACHE PATH
+    "iOS OGRE dependency build (FreeType headers and libraries)")
 if(EXISTS "${TL_OGRE_BUILD_DIR}/lib")
     set(TL_HAVE_OGRE TRUE)
 else()
@@ -28,16 +30,10 @@ function(tl_configure_platform target)
         "${CMAKE_SOURCE_DIR}/external/ogre/Components/RTShaderSystem/include"
         "${CMAKE_SOURCE_DIR}/external/ogre/PlugIns/STBICodec/include"
         "${TL_OGRE_BUILD_DIR}/include")
-    target_link_directories(${target} PRIVATE "${TL_IOS_OGRE_LIB_DIR}" "${TL_OGRE_BUILD_DIR}/Dependencies/lib")
-    target_include_directories(${target} SYSTEM PRIVATE "${TL_OGRE_BUILD_DIR}/Dependencies/include"
-        "${TL_OGRE_BUILD_DIR}/Dependencies/include/freetype2")
-    set(TL_IOS_FREETYPE "${TL_OGRE_BUILD_DIR}/Dependencies/lib/libfreetype.a")
-    if(NOT EXISTS "${TL_IOS_FREETYPE}" AND EXISTS "${CMAKE_SOURCE_DIR}/build-ogre-ios/Dependencies/lib/libfreetype.a")
-        set(TL_IOS_FREETYPE "${CMAKE_SOURCE_DIR}/build-ogre-ios/Dependencies/lib/libfreetype.a")
-        target_include_directories(${target} SYSTEM PRIVATE
-            "${CMAKE_SOURCE_DIR}/build-ogre-ios/Dependencies/include"
-            "${CMAKE_SOURCE_DIR}/build-ogre-ios/Dependencies/include/freetype2")
-    endif()
+target_link_directories(${target} PRIVATE "${TL_IOS_OGRE_LIB_DIR}" "${TL_IOS_DEPENDENCIES_DIR}/lib")
+target_include_directories(${target} SYSTEM PRIVATE "${TL_IOS_DEPENDENCIES_DIR}/include"
+    "${TL_IOS_DEPENDENCIES_DIR}/include/freetype2")
+set(TL_IOS_FREETYPE "${TL_IOS_DEPENDENCIES_DIR}/lib/libfreetype.a")
     target_link_libraries(${target} PRIVATE ${TL_OGRE_LIBS} "${TL_IOS_FREETYPE}" z
         "-framework UIKit" "-framework Foundation" "-framework QuartzCore" "-framework OpenGLES"
         "-framework CoreGraphics" "-framework CoreFoundation" "-framework AVFoundation" "-framework AudioToolbox")

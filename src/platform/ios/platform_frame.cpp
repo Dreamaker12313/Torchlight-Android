@@ -7,6 +7,11 @@
 #include <thread>
 
 namespace tl::core {
+std::string platform_program_folder() {
+    const char* path = tl_ios_program_folder();
+    return path != nullptr ? path : "";
+}
+
 const std::string& platform_data_root() {
     static const std::string root = [] {
         const char* home = std::getenv("HOME");

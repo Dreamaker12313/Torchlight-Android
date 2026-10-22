@@ -889,11 +889,17 @@ void Renderer::Impl::drive_player(float delta) {
             const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
             const bool vendor_tray = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
             if (vendor_screen) {
-                // CMerchantMenuXenon's handler: RB/LB move the focus
-                // between trays; stick left/right step the tray's tab,
-                // past either end the focus.
-                if (tab_next_edge || tab_prev_edge) {
-                    inventory_menu.focus_next_tray(tab_next_edge ? 1 : -1);
+                // RB advances the vendor category (needed for Baklah's extra stock tabs);
+                // LB switches focus between vendor stock and the player's bag so items can
+                // be sold back. Stick left/right also steps the focused tray's category.
+                if (tab_next_edge) {
+                    inventory_menu.cycle_vendor_tab(1);
+                    play_ui(tl::core::InterfaceSound::Navigate);
+                    update_menu();
+                }
+                if (tab_prev_edge) {
+                    inventory_menu.focus_next_tray(1);
+                    play_ui(tl::core::InterfaceSound::Navigate);
                     update_menu();
                 }
                 if (std::abs(in.stick_x) > 0.5f) {
@@ -907,9 +913,14 @@ void Renderer::Impl::drive_player(float delta) {
                     inventory_stick_x_held = false;
                 }
             } else {
-                // CInventoryMenuXenon's handler: RB/LB swap bag and pet
-                // tray; stick left/right step the tab, past either end the swap.
-                if (tab_next_edge || tab_prev_edge) {
+                // Match the vendor controls: RB advances the focused tray's
+                // category; LB switches between the player's and pet's bags.
+                if (tab_next_edge) {
+                    inventory_menu.step_bag_tab(1);
+                    play_ui(tl::core::InterfaceSound::Navigate);
+                    update_menu();
+                }
+                if (tab_prev_edge) {
                     inventory_menu.swap_bag_focus(0);
                     play_ui(tl::core::InterfaceSound::Navigate);
                     update_menu();

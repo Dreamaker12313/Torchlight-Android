@@ -1,6 +1,10 @@
 #include "core/input.h"
 #include "core/touch_pad.h"
 #include <cmath>
+#include <array>
+#include <cstring>
+extern "C" bool tl_ios_text_entry(const char* title, const char* guide, const char* initial,
+                                  unsigned max_chars, char* output, size_t output_size);
 namespace tl::core {
 InputState poll_platform_input() {
     const TouchPad::State p = touch_pad().take();
@@ -36,6 +40,12 @@ InputState poll_platform_input() {
     return in;
 }
 bool text_entry(const std::string& title, const std::string& guide, std::string& text, unsigned max_chars) {
-    (void)title; (void)guide; (void)text; (void)max_chars; return false;
+    std::array<char, 1024> output{};
+    if (!tl_ios_text_entry(title.c_str(), guide.c_str(), text.c_str(), max_chars,
+                           output.data(), output.size())) {
+        return false;
+    }
+    text.assign(output.data(), ::strnlen(output.data(), output.size()));
+    return true;
 }
 }  // namespace tl::core

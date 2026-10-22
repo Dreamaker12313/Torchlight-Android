@@ -498,8 +498,10 @@ struct Options {
     /// More archives or directories to mount beside the install
     /// (`RendererConfig::extra_data`).
     std::vector<std::string> extra_data;
+    /// `--mod-data <dir>`: a mod root containing MEDIA/, mounted before base data.
+    std::vector<std::string> mod_data;
     /// `--console-ui DIR`: the console interface for a PC archive
-    /// (`RendererConfig::console_ui`), unused beside the Xbox 360 pak.
+    /// (`RendererConfig::console_ui`), mounted as an overlay when present.
     std::string console_ui;
 
     /// `--no-hud`: leave the game screen's HUD off.
@@ -793,6 +795,8 @@ Options parse_args(int argc, char** argv) {
             o.pet_fish.push_back(argv[++i]);
         } else if (arg == "--extra-data" && has_next) {
             o.extra_data.push_back(argv[++i]);
+        } else if (arg == "--mod-data" && has_next) {
+            o.mod_data.push_back(argv[++i]);
         } else if (arg == "--fps") {
             o.fps_overlay = 1;
         } else if (arg == "--no-fps") {
@@ -1174,6 +1178,8 @@ constexpr const char* kUsage =
     "                        install (repeatable). The console HUD's art\n"
     "                        ships only in the Xbox release; see\n"
     "                        scripts/extract_console_ui.py\n"
+    "  --mod-data <dir>      mount a mod folder containing MEDIA/ before base\n"
+    "                        (repeatable; same-path files override the game)\n"
     "  --auto-new-game       take New Game without anyone pressing it\n"
     "  --layout <path>       load a .cmp layout by archive path\n"
     "  --rng-trace <file>    append every seeding and draw of a --dungeon\n"
@@ -1456,6 +1462,10 @@ int main(int argc, char** argv) {
     // switches the boost off again (Renderer::Impl::FrameClock).
     tl::core::set_loading_boost(true);
     TL_LOG_INFO("game data: %s", opts.game_data.c_str());
+    TL_LOG_INFO("mod data: %zu folder(s)", opts.mod_data.size());
+    for (const std::string& mod : opts.mod_data) {
+        TL_LOG_INFO("mod data folder: %s", mod.c_str());
+    }
     tl::core::AssetIndex assets;
     if (!prepare_run(opts, assets)) {
         tl::core::log_shutdown();
@@ -1535,6 +1545,7 @@ int main(int argc, char** argv) {
     rc.fov_degrees = opts.fov;
     rc.extra_data = opts.extra_data;
     rc.console_ui = console_interface(opts.console_ui, opts.extra_data);
+    rc.mod_data = opts.mod_data;
     rc.game_hud = !opts.no_hud;
     rc.minimap = !opts.no_minimap;
     rc.stats_overlay = opts.fps_overlay == 1 || (opts.fps_overlay == -1 && !rc.headless);

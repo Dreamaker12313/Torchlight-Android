@@ -13,10 +13,10 @@ namespace tl::core {
 void World::ensure_skill_index() {
     if (skill_files_loaded) return;
     skill_files_loaded = true;
-    for (const std::string& path : archive_paths_under("media/skills/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/skills/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok || file.section() != "SKILL") continue;
         const std::string name = file.string_or("NAME", "");
         const std::string animation = file.string_or("ANIMATION", "");
@@ -42,11 +42,11 @@ void World::ensure_player_skill_files() {
     player_skill_files_loaded = true;
     size_t console = 0;
     for (const char* root : {"xbox/media/skills/", "media/skills/"}) {
-        for (const std::string& path : archive_paths_under(root, ".dat.adm")) {
+        for (const std::string& path : data_paths_under(root)) {
             const std::vector<uint8_t> bytes = read_resource(path);
             if (bytes.empty()) continue;
             auto entry = std::make_unique<PlayerSkillFile>();
-            entry->file = tl::formats::parse_adm(bytes.data(), bytes.size());
+            entry->file = parse_data_group(bytes.data(), bytes.size());
             if (!entry->file.ok || entry->file.section() != "SKILL") continue;
             const std::string name = tl::core::upper_ascii(entry->file.string_or("NAME", ""));
             if (name.empty() || player_skill_files.count(name) != 0) continue;
@@ -73,7 +73,7 @@ void World::ensure_effect_data() {
     if (!effects_path.empty()) {
         const std::vector<uint8_t> bytes = read_resource(effects_path);
         if (!bytes.empty()) {
-            const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+            const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
             if (file.ok) effect_types.load(file);
         }
     }
@@ -89,7 +89,7 @@ void World::ensure_effect_data() {
     std::map<std::string, std::string> rows;  // upper-cased path under media/ -> archive path
     for (const char* root : {"media/affixes/", "xbox/media/affixes/"}) {
         const std::string prefix = root;
-        for (const std::string& path : archive_paths_under(root, ".dat.adm")) {
+        for (const std::string& path : data_paths_under(root)) {
             std::string key = "media/affixes/" + path.substr(prefix.size());
             for (char& c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             rows[key] = path;
@@ -98,7 +98,7 @@ void World::ensure_effect_data() {
     for (const auto& [key, path] : rows) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok || file.section() != "AFFIX") continue;
         affixes.add(tl::core::parse_affix(file, effect_types, &unit_types));
     }
@@ -108,10 +108,10 @@ void World::ensure_effect_data() {
     // `CSets::reload`: one set per file under
     // media/sets/, each bonus resolved against the affix book just loaded.
     std::vector<tl::formats::AdmFile> set_files;
-    for (const std::string& path : archive_paths_under("media/sets/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/sets/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (file.ok) set_files.push_back(std::move(file));
     }
     std::vector<const tl::formats::AdmFile*> set_pointers;

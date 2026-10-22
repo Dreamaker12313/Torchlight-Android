@@ -1516,15 +1516,24 @@ void InventoryMenu::set_trade_figures(int gold, const float* price_bonus) {
 
 void InventoryMenu::focus_next_tray(int direction) {
     if (vendor_ == VendorScreen::None || direction == 0) return;
-    // `CEnchantMenuXenon`'s RB/LB (codes 10 and 12) swap the
-    // bag and the pet's tray; the pet's takes no focus here (below), so the
-    // bag keeps it.
-    if (enchanter_screen()) return;
-    // codes 10/12 -> (direction, false): the focus
-    // rotates over the three trays and wraps. INVENTED: the pet's tray takes
-    // no focus here yet (it has no selection of its own), so the rotation is
-    // over the vendor's and the bag.
-    focus_ = focus_ == Tray::Vendor ? Tray::Bag : Tray::Vendor;
+    if (enchanter_screen()) {
+        if (!pet_tray_available_) return;
+        focus_ = focus_ == Tray::Pet ? Tray::Bag : Tray::Pet;
+        return;
+    }
+
+    // On a merchant screen LB moves vendor -> player bag -> pet bag -> vendor;
+    // RB keeps its separate job of advancing the merchant's stock category.
+    const bool backwards = direction < 0;
+    if (backwards) {
+        if (focus_ == Tray::Vendor) focus_ = Tray::Bag;
+        else if (focus_ == Tray::Bag && pet_tray_available_) focus_ = Tray::Pet;
+        else focus_ = Tray::Vendor;
+    } else {
+        if (focus_ == Tray::Vendor && pet_tray_available_) focus_ = Tray::Pet;
+        else if (focus_ == Tray::Pet || focus_ == Tray::Vendor) focus_ = Tray::Bag;
+        else focus_ = Tray::Vendor;
+    }
 }
 
 void InventoryMenu::swap_bag_focus(int landing) {
@@ -1596,6 +1605,13 @@ void InventoryMenu::step_tray_tab(int direction) {
     } else {
         selected_index_ = 0;
     }
+}
+
+void InventoryMenu::cycle_vendor_tab(int direction) {
+    if (vendor_ == VendorScreen::None || direction == 0) return;
+    vendor_tab_ = (vendor_tab_ + (direction > 0 ? 1 : -1) +
+                   tl::core::kInventoryFilterCount) % tl::core::kInventoryFilterCount;
+    vendor_selected_ = 0;
 }
 
 // PORT: the vendor tray's slot under the cursor.
@@ -2988,7 +3004,7 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         // lists nothing.
         pet_tray_available_ = pet_here;
         if (!pet_tray_available_ && focus_ == Tray::Pet) focus_ = Tray::Bag;
-        const bool pet_focused = vendor_ == VendorScreen::None && focus_ == Tray::Pet;
+        const bool pet_focused = focus_ == Tray::Pet;
         set_widget_text("pet/filtername", tl::core::inventory_filter_name(pet_tab_));
         set_widget_image("pet/TopFrame", pet_focused ? "backroundbase_inventory_rollover"
                                                      : "backroundbase_inventory");
