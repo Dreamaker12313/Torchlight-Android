@@ -8,6 +8,7 @@
 #include "core/skill_text.h"
 #include "core/text.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -250,7 +251,7 @@ void InventoryMenu::lay_out_rich_texts() {
         const Node& text_node = nodes_[static_cast<size_t>(text_idx)];
         const Node& frame = nodes_[static_cast<size_t>(frame_idx)];
 
-        const float line = text_node.points * kPointsToPixels * scale_ / down;
+        const float line = text_node.points * ui_points_to_pixels() * scale_ / down;
         const std::vector<std::vector<TextSpan>> lines =
             wrap_runs(font, tl::core::markup_runs(rich.text), text_node.width, line, across, down);
         // CEGUI clips a window's text to its parent: the frame is the text
@@ -275,7 +276,7 @@ void InventoryMenu::lay_out_rich_texts() {
                 }
                 Ogre::TextAreaOverlayElement* area = (*rich.pool)[used++];
                 area->setCaption(span.text);
-                area->setCharHeight(line);
+                set_char_height(area, line);
                 area->setColour(span.coloured ? Ogre::ColourValue(span.r, span.g, span.b, span.a)
                                               : base);
                 area->setPosition(text_node.left + span.x, y);

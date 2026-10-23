@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "core/text.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -644,7 +645,7 @@ void QuestDialogScreen::lay_out_body() {
     float points = kBigFontSize;
     const int text_node = find_widget("DialogText");
     if (text_node >= 0) points = nodes_[static_cast<size_t>(text_node)].points;
-    const float line = points * kPointsToPixels * scale_ / down;
+    const float line = points * ui_points_to_pixels() * scale_ / down;
 
     Ogre::FontPtr font = Ogre::FontManager::getSingleton().getByName(kFontName, Ogre::RGN_INTERNAL);
     if (font && !font->isLoaded()) font->load();
@@ -662,7 +663,7 @@ void QuestDialogScreen::lay_out_body() {
             if (used >= body_.size()) break;
             Ogre::TextAreaOverlayElement* area = body_[used++];
             area->setCaption(span.text);
-            area->setCharHeight(line);
+            set_char_height(area, line);
             area->setColour(span.coloured ? Ogre::ColourValue(span.r, span.g, span.b, span.a)
                                           : Ogre::ColourValue::White);
             area->setPosition(box.left + span.x, box.top + static_cast<float>(row) * leading);
@@ -727,7 +728,7 @@ void QuestDialogScreen::layout() {
                 continue;
             }
             area->show();
-            const float line = node.points * kPointsToPixels * scale_;
+            const float line = node.points * ui_points_to_pixels() * scale_;
             float x = node.left;
             if (node.h_text == 1) x = node.left + node.width * 0.5f;
             else if (node.h_text == 2) x = node.left + node.width;
@@ -735,7 +736,7 @@ void QuestDialogScreen::layout() {
             if (node.v_text == 1) y = node.top + (tall - line) * 0.5f / down;
             else if (node.v_text == 2) y = node.top + (tall - line) / down;
             const float nudge = (area == node.drop) ? kLabelShadow * scale_ : 0.0f;
-            area->setCharHeight(line / down);
+            set_char_height(area, line / down);
             area->setPosition(x + nudge / across, y + nudge / down);
         }
     }

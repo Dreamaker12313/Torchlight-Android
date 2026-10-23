@@ -2242,7 +2242,7 @@ void Renderer::shutdown() {
     m.root.reset();
     // Nothing is loading once the renderer is gone.
     tl::core::set_loading_boost(false);
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     m.gles2_plugin.reset();
 #if defined(TL_SWITCH_GL3PLUS)
     m.gl3plus_plugin.reset();

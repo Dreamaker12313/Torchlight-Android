@@ -22,6 +22,10 @@ if(NINTENDO_SWITCH)
     set(TL_PLATFORM switch)
 elseif(ANDROID)
     set(TL_PLATFORM android)
+elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(TL_PLATFORM ios)
+    # Apply the deployment floor to every static target as well as the app.
+    set(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0")
 else()
     set(TL_PLATFORM desktop)
 endif()
@@ -43,6 +47,11 @@ function(tl_set_warnings target)
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Werror
             -Wno-unused-parameter)
+        if(APPLE)
+            # Xcode enables this non-portable warning globally; existing code
+            # intentionally passes container sizes into OGRE's uint APIs.
+            target_compile_options(${target} PRIVATE -Wno-shorten-64-to-32)
+        endif()
         # Not a warning, but the same per-target hook: transcribed arithmetic
         # must round the way the reference does. The Xbox 360 fuses a multiply
         # and an add only where its code says so (`fmadds` and the like), and
@@ -123,6 +132,9 @@ elseif(ANDROID)
     # The activity's glue (cmake/android.cmake) and AAudio, which platform/android uses.
     target_compile_definitions(tl_core PUBLIC TL_PLATFORM_ANDROID=1)
     target_link_libraries(tl_core PUBLIC tl_android_glue aaudio)
+elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_compile_definitions(tl_core PUBLIC TL_PLATFORM_IOS=1)
+    target_sources(tl_core PRIVATE src/platform/ios/platform_audio.mm)
 else()
     target_compile_definitions(tl_core PUBLIC TL_PLATFORM_DESKTOP=1)
     # The desktop reads an Xbox pad through XInput 9.1.0, the version every
@@ -152,6 +164,51 @@ file(GLOB_RECURSE TL_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
 if(ANDROID)
     # What a NativeActivity loads: libtorchlight.so (cmake/android.cmake).
     add_library(torchlight SHARED src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
+elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    enable_language(OBJCXX)
+    set(TL_IOS_GAME_DATA_DIR "" CACHE PATH
+        "Optional local game data directory (pak.zip, music/, console_ui/) to bundle in the iOS app")
+    add_executable(torchlight MACOSX_BUNDLE src/main.cpp src/console_interface.cpp
+        src/platform/ios/ios_app.mm ${TL_RENDER_SOURCES})
+    set_target_properties(torchlight PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.torchlightrekindled.ios"
+        MACOSX_BUNDLE_BUNDLE_NAME "Torchlight Rekindled"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.torchlightrekindled.ios"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_UIFileSharingEnabled "YES"
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace "YES")
+    add_custom_command(TARGET torchlight POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/external/ogre/Media/RTShaderLib"
+            "$<TARGET_BUNDLE_DIR:torchlight>/RTShaderLib"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/external/ogre/Media/Main"
+            "$<TARGET_BUNDLE_DIR:torchlight>/RTShaderLib/Main"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/ui_pack"
+            "$<TARGET_BUNDLE_DIR:torchlight>/ui_pack"
+        COMMAND /usr/bin/xcrun actool
+            --platform iphoneos
+            --minimum-deployment-target 15.0
+            --target-device iphone
+            --target-device ipad
+            --app-icon AppIcon
+            --compile "$<TARGET_BUNDLE_DIR:torchlight>"
+            --output-partial-info-plist "${CMAKE_CURRENT_BINARY_DIR}/ios-icon-partial.plist"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/Assets.xcassets"
+        COMMAND /usr/libexec/PlistBuddy
+            -c "Merge ${CMAKE_CURRENT_BINARY_DIR}/ios-icon-partial.plist :"
+            "$<TARGET_BUNDLE_DIR:torchlight>/Info.plist")
+    if(TL_IOS_GAME_DATA_DIR)
+        add_custom_command(TARGET torchlight POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${TL_IOS_GAME_DATA_DIR}"
+                "$<TARGET_BUNDLE_DIR:torchlight>/GameData")
+    endif()
 else()
     add_executable(torchlight src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
 endif()
@@ -192,7 +249,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Desktop-only: tools and tests. The Switch and Android builds skip both.
 # ---------------------------------------------------------------------------
-if(NOT NINTENDO_SWITCH AND NOT ANDROID)
+if(NOT NINTENDO_SWITCH AND NOT ANDROID AND NOT (APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS"))
     include(CTest)
 
     # The data checks and diagnostics; a source tree without them builds the same.

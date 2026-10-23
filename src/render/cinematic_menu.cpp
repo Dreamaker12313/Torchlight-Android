@@ -6,6 +6,7 @@
 #include "core/text.h"
 #include "formats/adm.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -318,7 +319,7 @@ void CinematicMenu::layout() {
     panels_.push_back(btn_container);
 
     const float label_pts = 14.0f;
-    const float label_h_rel = label_pts * kPointsToPixels / kNativeHeight;
+    const float label_h_rel = label_pts * ui_points_to_pixels() / kNativeHeight;
     const float shadow_off = kLabelShadow / down;
     const float btn_center_x = (btn_x + btn_w * 0.5f) / across;
     const float btn_center_y = (btn_y + (btn_h - label_h_rel * down) * 0.5f) / down;
@@ -328,7 +329,7 @@ void CinematicMenu::layout() {
     button_shadow_->setMetricsMode(Ogre::GMM_RELATIVE);
     button_shadow_->setFontName(kFontName, Ogre::RGN_INTERNAL);
     button_shadow_->setColour(Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.85f));
-    button_shadow_->setCharHeight(label_h_rel);
+    set_char_height(button_shadow_, label_h_rel);
     button_shadow_->setAlignment(Ogre::TextAreaOverlayElement::Center);
     button_shadow_->setCaption("Continue");
     button_shadow_->setPosition(btn_center_x + shadow_off, btn_center_y + shadow_off);
@@ -339,7 +340,7 @@ void CinematicMenu::layout() {
     button_label_->setMetricsMode(Ogre::GMM_RELATIVE);
     button_label_->setFontName(kFontName, Ogre::RGN_INTERNAL);
     button_label_->setColour(Ogre::ColourValue(1.0f, 0.95f, 0.8f, 1.0f));
-    button_label_->setCharHeight(label_h_rel);
+    set_char_height(button_label_, label_h_rel);
     button_label_->setAlignment(Ogre::TextAreaOverlayElement::Center);
     button_label_->setCaption("Continue");
     button_label_->setPosition(btn_center_x, btn_center_y);
@@ -373,7 +374,7 @@ void CinematicMenu::layout() {
     // INVENTED: the size and the line spacing. The layout asks for the `Serif`
     // font, whose own metrics are not read.
     const float text_pts = 11.0f;
-    line_height_rel_ = text_pts * kPointsToPixels / kNativeHeight;
+    line_height_rel_ = text_pts * ui_points_to_pixels() / kNativeHeight;
     line_step_rel_ = line_height_rel_ * 1.25f;
 
     std::vector<std::string> wrapped_lines =
@@ -396,7 +397,7 @@ void CinematicMenu::layout() {
             tl.shadow->setMetricsMode(Ogre::GMM_RELATIVE);
             tl.shadow->setFontName(kFontName, Ogre::RGN_INTERNAL);
             tl.shadow->setColour(Ogre::ColourValue(0.0f, 0.0f, 0.0f, 0.8f));
-            tl.shadow->setCharHeight(line_height_rel_);
+            set_char_height(tl.shadow, line_height_rel_);
             tl.shadow->setAlignment(Ogre::TextAreaOverlayElement::Left);
             tl.shadow->setCaption(line_text);
             text_container->addChild(tl.shadow);
@@ -406,7 +407,7 @@ void CinematicMenu::layout() {
             tl.text->setMetricsMode(Ogre::GMM_RELATIVE);
             tl.text->setFontName(kFontName, Ogre::RGN_INTERNAL);
             tl.text->setColour(Ogre::ColourValue(1.0f, 1.0f, 1.0f, 1.0f));
-            tl.text->setCharHeight(line_height_rel_);
+            set_char_height(tl.text, line_height_rel_);
             tl.text->setAlignment(Ogre::TextAreaOverlayElement::Left);
             tl.text->setCaption(line_text);
             text_container->addChild(tl.text);

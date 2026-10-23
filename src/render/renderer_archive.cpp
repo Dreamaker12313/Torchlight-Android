@@ -3,6 +3,9 @@
 // qualify a bare or relative reference against it. The port's own (ADR 0002).
 // Split from renderer.cpp; the shared declarations are in renderer_impl.h.
 #include "render/renderer_impl.h"
+#include "formats/dat_text.h"
+
+#include <dirent.h>
 
 namespace tl::render::renderer_detail {
 
@@ -47,6 +50,44 @@ bool g_material_scripts_indexed = false;
 // PORT: asset lookup. archive_paths_under()'s answers, by directory and suffix: a unit's
 // animation is looked up there every time it changes, and the archive does not change.
 std::unordered_map<std::string, std::vector<std::string>> g_paths_under;
+
+std::vector<std::string> g_mod_roots;
+std::string lowered(const std::string& text);
+
+std::string normalise_mod_path(std::string path) {
+    std::replace(path.begin(), path.end(), '\\', '/');
+    while (!path.empty() && path.front() == '/') path.erase(path.begin());
+    return path;
+}
+
+bool read_mod_file_case_insensitive(const std::string& root, const std::string& relative,
+                                    std::vector<uint8_t>& bytes) {
+    std::string path = root;
+    const std::string wanted = normalise_mod_path(relative);
+    size_t begin = 0;
+    while (begin < wanted.size()) {
+        const size_t slash = wanted.find('/', begin);
+        const std::string component = wanted.substr(begin, slash == std::string::npos
+                                                               ? std::string::npos : slash - begin);
+        DIR* directory = opendir(path.c_str());
+        if (!directory) return false;
+        std::string match;
+        while (dirent* entry = readdir(directory)) {
+            if (lowered(entry->d_name) == lowered(component)) {
+                match = entry->d_name;
+                break;
+            }
+        }
+        closedir(directory);
+        if (match.empty()) return false;
+        path = join_path(path, match);
+        if (slash == std::string::npos) break;
+        begin = slash + 1;
+    }
+    if (!is_file(path)) return false;
+    bytes = read_file(path);
+    return !bytes.empty();
+}
 
 bool ends_with_lower(const std::string& text, const char* suffix) {
     const size_t n = std::strlen(suffix);
@@ -117,6 +158,76 @@ const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename) 
     ensure_archive_index();
     const auto it = g_archive_index.find(lowered(basename));
     return it == g_archive_index.end() ? nullptr : &it->second;
+}
+
+void set_mod_roots(const std::vector<std::string>& roots) {
+    g_mod_roots = roots;
+}
+
+bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes) {
+    for (const std::string& root : g_mod_roots) {
+        if (read_mod_file_case_insensitive(root, path, bytes)) return true;
+    }
+    return false;
+}
+
+std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix) {
+    std::vector<std::string> paths;
+    const std::string prefix = lowered(normalise_mod_path(dir));
+    for (const std::string& root : g_mod_roots) {
+        std::vector<std::string> pending{root};
+        while (!pending.empty()) {
+            const std::string current = pending.back();
+            pending.pop_back();
+            DIR* directory = opendir(current.c_str());
+            if (!directory) continue;
+            while (dirent* entry = readdir(directory)) {
+                if (entry->d_name[0] == '.') continue;
+                const std::string child = join_path(current, entry->d_name);
+                if (is_dir(child)) {
+                    pending.push_back(child);
+                    continue;
+                }
+                if (!ends_with_lower(entry->d_name, suffix)) continue;
+                const std::string relative = child.substr(root.size() + 1);
+                if (lowered(relative).compare(0, prefix.size(), prefix) == 0)
+                    paths.push_back(relative);
+            }
+            closedir(directory);
+        }
+    }
+    std::sort(paths.begin(), paths.end(), [](const std::string& a, const std::string& b) {
+        return lowered(a) < lowered(b);
+    });
+    paths.erase(std::unique(paths.begin(), paths.end(), [](const std::string& a, const std::string& b) {
+                    return lowered(a) == lowered(b);
+                }), paths.end());
+    return paths;
+}
+
+
+tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) {
+    if (tl::formats::looks_like_dat_text(data, size))
+        return tl::formats::parse_dat_text(data, size);
+    return tl::formats::parse_adm(data, size);
+}
+
+std::vector<std::string> data_paths_under(const std::string& dir) {
+    std::vector<std::string> paths = archive_paths_in_listing_order(dir, ".dat.adm");
+    std::vector<std::string> mods = mod_paths_under(dir, ".dat");
+    std::vector<std::string> mod_adm = mod_paths_under(dir, ".dat.adm");
+    mods.insert(mods.end(), mod_adm.begin(), mod_adm.end());
+    for (const std::string& mod_path : mods) {
+        const auto same_path = [&](const std::string& path) {
+            return lowered(path) == lowered(mod_path);
+        };
+        if (std::none_of(paths.begin(), paths.end(), same_path)) paths.push_back(mod_path);
+    }
+    return paths;
+}
+
+std::vector<std::string> data_paths_in_listing_order(const std::string& dir) {
+    return data_paths_under(dir);
 }
 
 /// Every archive path under `dir` whose basename ends in `suffix`.
@@ -413,6 +524,14 @@ std::string Renderer::Impl::archive_path_unique(const std::string& basename) con
 std::vector<std::string> Renderer::Impl::archive_paths_under(const std::string& dir,
                                                              const char* suffix) const {
     return renderer_detail::archive_paths_under(dir, suffix);
+}
+
+std::vector<std::string> Renderer::Impl::data_paths_under(const std::string& dir) const {
+    return renderer_detail::data_paths_under(dir);
+}
+
+tl::formats::AdmFile Renderer::Impl::parse_data_group(const uint8_t* data, size_t size) const {
+    return renderer_detail::parse_data_group(data, size);
 }
 
 // PORT: the archive hook (core/world.h) answered by the mounted archive.

@@ -12,6 +12,7 @@
 #include "core/log.h"
 #include "core/text.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -1235,7 +1236,7 @@ void InventoryMenu::layout() {
                 if (node.drop != nullptr) node.drop->hide();
             } else {
                 node.text->show();
-                const float line = node.points * kPointsToPixels * scale_;
+                const float line = node.points * ui_points_to_pixels() * scale_;
                 float x = node.left;
                 if (node.h_text == 1) x = node.left + node.width * 0.5f;
                 else if (node.h_text == 2) x = node.left + node.width;
@@ -1251,12 +1252,12 @@ void InventoryMenu::layout() {
                 }
 
                 const float nudge = (node.drop != nullptr) ? kLabelShadow * scale_ : 0.0f;
-                node.text->setCharHeight(line / down);
+                set_char_height(node.text, line / down);
                 node.text->setPosition(x, y);
 
                 if (node.drop != nullptr) {
                     node.drop->show();
-                    node.drop->setCharHeight(line / down);
+                    set_char_height(node.drop, line / down);
                     node.drop->setPosition(x + nudge / across, y + nudge / down);
                 }
             }
@@ -1273,7 +1274,7 @@ void InventoryMenu::layout() {
         const Node& jw = nodes_[static_cast<size_t>(jw_idx)];
         const float jw_left = jw.left * across;
         const float jw_top = jw.top * down;
-        const float line = kFontSize * kPointsToPixels * scale_;  // `Serif`
+        const float line = kFontSize * ui_points_to_pixels() * scale_;  // `Serif`
         const float drop = kLabelShadow * scale_;
         for (size_t r = 0; r < journal_rows_.size(); ++r) {
             JournalRow& row = journal_rows_[r];
@@ -1281,7 +1282,7 @@ void InventoryMenu::layout() {
             const float right = jw_left + tl::core::kJournalRowWidth * scale_;
             const float y = jw_top + tl::core::kJournalRowPitch * static_cast<float>(r) * scale_;
             auto place = [&](Ogre::TextAreaOverlayElement* area, float px, float py) {
-                area->setCharHeight(line / down);
+                set_char_height(area, line / down);
                 area->setPosition(px / across, py / down);
                 area->show();
             };
@@ -1516,15 +1517,24 @@ void InventoryMenu::set_trade_figures(int gold, const float* price_bonus) {
 
 void InventoryMenu::focus_next_tray(int direction) {
     if (vendor_ == VendorScreen::None || direction == 0) return;
-    // `CEnchantMenuXenon`'s RB/LB (codes 10 and 12) swap the
-    // bag and the pet's tray; the pet's takes no focus here (below), so the
-    // bag keeps it.
-    if (enchanter_screen()) return;
-    // codes 10/12 -> (direction, false): the focus
-    // rotates over the three trays and wraps. INVENTED: the pet's tray takes
-    // no focus here yet (it has no selection of its own), so the rotation is
-    // over the vendor's and the bag.
-    focus_ = focus_ == Tray::Vendor ? Tray::Bag : Tray::Vendor;
+    if (enchanter_screen()) {
+        if (!pet_tray_available_) return;
+        focus_ = focus_ == Tray::Pet ? Tray::Bag : Tray::Pet;
+        return;
+    }
+
+    // On a merchant screen LB moves vendor -> player bag -> pet bag -> vendor;
+    // RB keeps its separate job of advancing the merchant's stock category.
+    const bool backwards = direction < 0;
+    if (backwards) {
+        if (focus_ == Tray::Vendor) focus_ = Tray::Bag;
+        else if (focus_ == Tray::Bag && pet_tray_available_) focus_ = Tray::Pet;
+        else focus_ = Tray::Vendor;
+    } else {
+        if (focus_ == Tray::Vendor && pet_tray_available_) focus_ = Tray::Pet;
+        else if (focus_ == Tray::Pet || focus_ == Tray::Vendor) focus_ = Tray::Bag;
+        else focus_ = Tray::Vendor;
+    }
 }
 
 void InventoryMenu::swap_bag_focus(int landing) {
@@ -1598,6 +1608,13 @@ void InventoryMenu::step_tray_tab(int direction) {
     }
 }
 
+void InventoryMenu::cycle_vendor_tab(int direction) {
+    if (vendor_ == VendorScreen::None || direction == 0) return;
+    vendor_tab_ = (vendor_tab_ + (direction > 0 ? 1 : -1) +
+                   tl::core::kInventoryFilterCount) % tl::core::kInventoryFilterCount;
+    vendor_selected_ = 0;
+}
+
 // PORT: the vendor tray's slot under the cursor.
 int InventoryMenu::selected_vendor_slot() const {
     if (vendor_rows_.empty() || vendor_selected_ < 0 ||
@@ -1613,7 +1630,7 @@ std::string InventoryMenu::wrap_to_widget(const std::string& widget_name, const 
     const Node& node = nodes_[static_cast<size_t>(idx)];
     const float across = static_cast<float>(width_ > 0 ? width_ : 1);
     const float down = static_cast<float>(height_ > 0 ? height_ : 1);
-    const float line = node.points * kPointsToPixels * scale_ / down;
+    const float line = node.points * ui_points_to_pixels() * scale_ / down;
     Ogre::FontPtr font = Ogre::FontManager::getSingleton().getByName(kFontName);
     if (!font) return text;
     if (!font->isLoaded()) font->load();
@@ -2988,7 +3005,7 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         // lists nothing.
         pet_tray_available_ = pet_here;
         if (!pet_tray_available_ && focus_ == Tray::Pet) focus_ = Tray::Bag;
-        const bool pet_focused = vendor_ == VendorScreen::None && focus_ == Tray::Pet;
+        const bool pet_focused = focus_ == Tray::Pet;
         set_widget_text("pet/filtername", tl::core::inventory_filter_name(pet_tab_));
         set_widget_image("pet/TopFrame", pet_focused ? "backroundbase_inventory_rollover"
                                                      : "backroundbase_inventory");

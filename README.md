@@ -22,6 +22,7 @@ the owners of the Torchlight trademark.
 | --- | --- |
 | Nintendo Switch | homebrew (hbmenu) |
 | Android | arm64, Android 12 or newer |
+| iOS | iPhone and iPad (unsigned build; sign before installing) |
 | Windows | desktop build |
 | Linux | desktop build |
 
@@ -191,6 +192,66 @@ the system's folder picker:
 The launcher remembers the folder and checks it on every start. If `pak.zip` is
 missing it asks again, and if `music/` is missing it offers to play without
 music. Android 12 (API 31) or newer is required, on an arm64 device.
+
+### iOS
+
+The Xcode app bundle contains the engine and OGRE's shader library. If game data
+is bundled with a local build, the app copies `pak.zip`, `music/`, and
+`console_ui/` into its Documents folder on first launch. Otherwise, in Files,
+open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there.
+The app reads and writes its saves and settings in that same Documents folder.
+Touch controls appear on screen when first touched.
+On iOS, the right stick rotates the camera horizontally and adjusts its pitch vertically; pinch
+with two fingers anywhere in the play area to zoom. On controller platforms, vertical stick still
+zooms, and holding LB while moving it vertically adjusts pitch.
+
+The iOS build supports unpacked mods. Put each extracted mod in its own
+subfolder under `Documents/mods/`, keeping the mod's `media/` directory
+structure intact. Mod files can override game data, and town `Merge/*.layout`
+files can add placed content such as merchants. Baklah's Unique Gear has been
+verified in game, including his vendor interaction and inventory.
+
+### Build iOS from source
+
+Build on macOS with Xcode (including the iOS SDK), CMake, Python 3 and Git
+installed. Initialise the repository's submodules first, then fetch the small
+header dependency and apply the pinned OGRE patches:
+
+```bash
+git submodule update --init --recursive
+python3 scripts/fetch_stb.py
+python3 scripts/apply_patches.py
+python3 scripts/build_ogre.py --platform ios
+cmake -S . -B build-ios -G Xcode \
+  -DTL_OGRE_BUILD_DIR="$PWD/build-ogre-ios-xcode" \
+  -DTL_IOS_GAME_DATA_DIR="" \
+  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+cmake --build build-ios --config Release --target torchlight
+```
+
+`TL_IOS_GAME_DATA_DIR` is deliberately empty in this recipe: the resulting app
+contains the engine, icon and built-in interface, but no copyrighted game data.
+To build a local app that copies your own game files into Documents on first
+launch, set it to a folder containing `pak.zip` and optionally `music/` and
+`console_ui/`. Do not commit or distribute that data.
+
+The unsigned app is `build-ios/Release-iphoneos/torchlight.app`. To make an
+unsigned IPA for personal signing, package the app with `Payload/` at the ZIP
+root:
+
+```bash
+mkdir -p build-ios/ipa/Payload
+cp -R build-ios/Release-iphoneos/torchlight.app build-ios/ipa/Payload/
+ditto -c -k --norsrc --keepParent build-ios/ipa/Payload build-ios/Torchlight-Rekindled-iOS.ipa
+```
+
+The IPA is unsigned. Sign it with your own Apple development certificate and
+provisioning profile before installing it on a device. Select a development
+team in Xcode if you prefer to build and install directly from Xcode.
+
+For an Apple Silicon Simulator build, use
+`python3 scripts/build_ogre.py --platform ios --ios-simulator` and set
+`TL_OGRE_BUILD_DIR` to `build-ogre-ios-simulator-xcode` when configuring CMake.
 
 ### Windows
 

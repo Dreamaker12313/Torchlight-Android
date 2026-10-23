@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "core/text.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -485,7 +486,7 @@ void DeathScreen::layout() {
         }
         if (node.text == nullptr) continue;
 
-        const float line = node.points * kPointsToPixels * scale;
+        const float line = node.points * ui_points_to_pixels() * scale;
         std::vector<std::string> lines;
         if (node.wrap && font) {
             lines = wrap_text(font, node.caption, node.width, line / down, across, down);
@@ -513,7 +514,7 @@ void DeathScreen::layout() {
             if (node.v_text == 1) y = node.top + (tall - block) * 0.5f / down;
             else if (node.v_text == 2) y = node.top + (tall - block) / down;
             const float nudge = area == node.drop ? kLabelShadow * scale : 0.0f;
-            area->setCharHeight(line / down);
+            set_char_height(area, line / down);
             area->setPosition(x + nudge / across, y + nudge / down);
         }
     }

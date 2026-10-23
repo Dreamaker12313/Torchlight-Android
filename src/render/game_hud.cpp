@@ -571,7 +571,7 @@ void GameHud::layout() {
         }
         for (Ogre::TextAreaOverlayElement* area : {node.drop, node.text}) {
             if (area == nullptr) continue;
-            const float line = node.points * kPointsToPixels * scale_;
+            const float line = node.points * ui_points_to_pixels() * scale_;
             float x = node.left;
             if (node.h_text == 1) x = node.left + node.width * 0.5f;
             else if (node.h_text == 2) x = node.left + node.width;
@@ -579,7 +579,7 @@ void GameHud::layout() {
             if (node.v_text == 1) y = node.top + (tall - line) * 0.5f / down;
             else if (node.v_text == 2) y = node.top + (tall - line) / down;
             const float nudge = (area == node.drop) ? kLabelShadow * scale_ : 0.0f;
-            area->setCharHeight(line / down);
+            set_char_height(area, line / down);
             area->setPosition(x + nudge / across, y + nudge / down);
         }
     }

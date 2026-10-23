@@ -36,6 +36,8 @@ public:
     virtual std::string archive_path_unique(const std::string& basename) const = 0;
     virtual std::vector<std::string> archive_paths_under(const std::string& dir,
                                                          const char* suffix) const = 0;
+    virtual std::vector<std::string> data_paths_under(const std::string& dir) const = 0;
+    virtual tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) const = 0;
     virtual bool console_game_data() const = 0;
     virtual std::string dir_of_asset(const std::string& name) const = 0;
     virtual tl::core::DungeonManager& loaded_dungeon_manager() const = 0;

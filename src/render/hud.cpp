@@ -246,7 +246,7 @@ bool Hud::create(Ogre::SceneManager* scene, unsigned width, unsigned height,
                 overlays.createOverlayElement("TextArea", name));
             element->setMetricsMode(Ogre::GMM_RELATIVE);
             element->setFontName(kFontName, Ogre::RGN_INTERNAL);
-            element->setCharHeight(height);
+            set_char_height(element, height * ui_text_scale());
             element->setColour(colour);
             box_->addChild(element);
             return element;
@@ -277,7 +277,7 @@ bool Hud::create(Ogre::SceneManager* scene, unsigned width, unsigned height,
                 overlays.createOverlayElement("TextArea", elem_name));
             elem->setMetricsMode(Ogre::GMM_RELATIVE);
             elem->setFontName(kFontName, Ogre::RGN_INTERNAL);
-            elem->setCharHeight(kFloatyHeight);
+            set_char_height(elem, kFloatyHeight * ui_text_scale());
             elem->setColour(Ogre::ColourValue::White);
             elem->setAlignment(Ogre::TextAreaOverlayElement::Center);
             elem->hide();
@@ -303,7 +303,7 @@ bool Hud::create(Ogre::SceneManager* scene, unsigned width, unsigned height,
                 overlays.createOverlayElement("TextArea", name));
             element->setMetricsMode(Ogre::GMM_RELATIVE);
             element->setFontName(kFontName, Ogre::RGN_INTERNAL);
-            element->setCharHeight(kStatsHeight);
+            set_char_height(element, kStatsHeight * ui_text_scale());
             element->setColour(colour);
             element->setPosition(x, y);
             stats_box_->addChild(element);
@@ -416,7 +416,15 @@ void Hud::destroy() {
 void Hud::resize(unsigned width, unsigned height) {
     width_ = width;
     height_ = height;
+    set_char_height(speaker_, kLineHeight * ui_text_scale());
+    set_char_height(line_, kLineHeight * ui_text_scale());
+    for (Ogre::TextAreaOverlayElement* elem : floaty_pool_) {
+        set_char_height(elem, kFloatyHeight * ui_text_scale());
+    }
+    set_char_height(stats_text_, kStatsHeight * ui_text_scale());
+    set_char_height(stats_drop_, kStatsHeight * ui_text_scale());
     layout();
+    layout_floaties();
 }
 
 // PORT: the debug FPS overlay's text.
@@ -508,7 +516,8 @@ void Hud::layout_floaties() {
             continue;
         }
 
-        const float char_h = item.char_height > 0.0f ? item.char_height : kFloatyHeight;
+        const float char_h = (item.char_height > 0.0f ? item.char_height : kFloatyHeight) *
+                             ui_text_scale();
         const std::vector<std::string> lines = wrap(item.text, kFloatyWrap, char_h);
         std::string body;
         for (size_t l = 0; l < lines.size(); ++l) {

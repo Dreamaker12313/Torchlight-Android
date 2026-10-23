@@ -7,6 +7,7 @@
 
 #include "core/text.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFontManager.h>
@@ -339,7 +340,7 @@ void InventoryMenu::lay_out_tooltips() {
             }
             area->setFontName(span.display ? kDisplayFontName : kFontName, Ogre::RGN_INTERNAL);
             area->setCaption(span.text);
-            area->setCharHeight(char_height);
+            set_char_height(area, char_height);
             area->setColour(span.colour);
             area->setPosition(at / across, (top + span.y) / down);
             area->show();

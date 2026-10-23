@@ -1752,6 +1752,9 @@ std::string resolve_archive_path_impl(const std::string& reference, bool quiet) 
         if (c == '\\') c = '/';
     }
 
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) return path;
+
     const size_t slash = path.find_last_of('/');
     const std::string basename = (slash == std::string::npos) ? path : path.substr(slash + 1);
     const std::string dir =
@@ -1824,6 +1827,15 @@ std::vector<uint8_t> read_resource(const std::string& path) {
     if (data_file) {
         const auto found = g_data_files.files.find(path);
         if (found != g_data_files.files.end()) return found->second;
+    }
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) {
+        TL_LOG_INFO("mod override: %s", path.c_str());
+        if (data_file && !mod_bytes.empty() && g_data_files.bytes + mod_bytes.size() <= kDataFileBudget) {
+            g_data_files.bytes += mod_bytes.size();
+            g_data_files.files.emplace(path, mod_bytes);
+        }
+        return mod_bytes;
     }
     auto& groups = Ogre::ResourceGroupManager::getSingleton();
     try {
@@ -2224,6 +2236,10 @@ bool window_fills_screen(const RendererConfig& config) {
 bool Renderer::init(const RendererConfig& config) {
     Impl& m = *impl_;
     m.config = config;
+    if (config.settings != nullptr) {
+        constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
+        set_ui_text_scale(kTextSizes[std::clamp(config.settings->text_size, 0, 2)]);
+    }
 
     // Our LogManager, created before Root so Root does not make its own.
     // suppressFileOutput keeps OGRE from writing Ogre.log next to the binary:
@@ -2254,7 +2270,7 @@ bool Renderer::init(const RendererConfig& config) {
         m.root->installPlugin(m.gles2_plugin.get());
     }
     const char* const kPreferredRenderSystem = gl3plus ? "OpenGL 3+" : "OpenGL ES 2";
-#elif defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#elif defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     m.gles2_plugin = std::make_unique<Ogre::GLES2Plugin>();
     m.root->installPlugin(m.gles2_plugin.get());
     constexpr const char* kPreferredRenderSystem = "OpenGL ES 2";

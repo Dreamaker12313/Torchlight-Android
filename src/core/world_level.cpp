@@ -1650,6 +1650,41 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         }
     }
 
+    // Torchlight mods add placed objects through sibling Merge/*.layout files.
+    // These are data-group layouts rather than dungeon room candidates (which
+    // intentionally skip Merge/ in dungeon.cpp). Load each beside the layout
+    // that owns the merge, with the same transform, so modded town NPCs such as
+    // Baklah are part of the level's normal scene and gameplay state.
+    const std::string upper_path = tl::core::upper_ascii(path);
+    const size_t merge_marker = upper_path.find("/MERGE/");
+    if (!made_here && merge_marker == std::string::npos) {
+        const size_t slash = path.find_last_of('/');
+        if (slash != std::string::npos) {
+            const std::string merge_dir = path.substr(0, slash + 1) + "Merge/";
+            std::vector<std::string> merge_layouts = archive_paths_under(merge_dir, ".layout.cmp");
+            for (const std::string& text_layout : archive_paths_under(merge_dir, ".layout")) {
+                const std::string compiled = text_layout + ".cmp";
+                if (resolve_archive_path(compiled).empty()) merge_layouts.push_back(text_layout);
+            }
+            std::sort(merge_layouts.begin(), merge_layouts.end(), [](const std::string& a,
+                                                                     const std::string& b) {
+                return tl::core::upper_ascii(a) < tl::core::upper_ascii(b);
+            });
+            merge_layouts.erase(
+                std::unique(merge_layouts.begin(), merge_layouts.end(),
+                            [](const std::string& a, const std::string& b) {
+                                return tl::core::upper_ascii(a) == tl::core::upper_ascii(b);
+                            }),
+                merge_layouts.end());
+            for (const std::string& merge_layout : merge_layouts) {
+                const std::string resolved = resolve_archive_path(merge_layout);
+                if (resolved.empty()) continue;
+                TL_LOG_INFO("  applying merge layout %s", resolved.c_str());
+                place_layout(resolved, origin, basis, depth + 1);
+            }
+        }
+    }
+
     if (depth == 0) {
         // Where the player stands, recorded before the lighting is applied:
         // the light map starts there (aim_light_map()).

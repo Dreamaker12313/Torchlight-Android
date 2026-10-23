@@ -12,7 +12,7 @@ tl::core::LevelMemoryRules World::level_memory_rules() const {
     tl::core::LevelMemoryRules rules;
     const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
     if (bytes.empty()) return rules;
-    const tl::formats::AdmFile globals = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile globals = parse_data_group(bytes.data(), bytes.size());
     if (!globals.ok) return rules;
     rules.max_level_memory = static_cast<int32_t>(
         globals.integer_or("MAX_LEVEL_MEMORY", static_cast<uint32_t>(rules.max_level_memory)));
@@ -88,10 +88,10 @@ tl::formats::ItemSaveState World::item_save_state(const tl::core::InventorySlot&
 void World::load_cinematics() {
     if (cinematics_loaded) return;
     cinematics_loaded = true;
-    for (const std::string& path : archive_paths_under("media/cinematics/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/cinematics/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok) {
             TL_LOG_WARN("cinematic: could not parse '%s': %s", path.c_str(), file.error.c_str());
             continue;

@@ -24,6 +24,7 @@
 #include "render/layout_screen.h"
 #include "render/menu.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 namespace tl::render {
@@ -133,7 +134,7 @@ void LoadingScreen::choose_tip() {
     const float block = kFontSize * points_to_char_pixels() / kNativeHeight * 1.35f *
                         static_cast<float>(lines.size());
     tip_->setPosition(0.5f, (bar_top + (89.0f * scale - block * down) * 0.5f) / down);
-    tip_->setCharHeight(kFontSize * points_to_char_pixels() / kNativeHeight);
+    set_char_height(tip_, kFontSize * points_to_char_pixels() / kNativeHeight);
     tip_->setCaption(body);
     tip_->show();
     TL_LOG_INFO("loading screen: tip %zu of %zu, \"%s\"", which + 1, tips_.size(),
@@ -177,7 +178,7 @@ void LoadingScreen::build_tip() {
         overlays.createOverlayElement("TextArea", "tl/loading/tip"));
     tip_->setMetricsMode(Ogre::GMM_RELATIVE);
     tip_->setFontName(kFontName, Ogre::RGN_INTERNAL);
-    tip_->setCharHeight(kFontSize * points_to_char_pixels() / kNativeHeight);
+    set_char_height(tip_, kFontSize * points_to_char_pixels() / kNativeHeight);
     tip_->setAlignment(Ogre::TextAreaOverlayElement::Center);
     // `TextColour` is `FFFFFFFF` in the layout: plain white.
     tip_->setColour(Ogre::ColourValue::White);

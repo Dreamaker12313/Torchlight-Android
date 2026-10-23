@@ -27,6 +27,10 @@ struct InputState {
     /// deadzone (`kRightStickDeadzone`), up positive. It only
     /// zooms the camera (`zoom_dolly()`).
     float zoom = 0.0f;
+    /// Direct dolly delta from a pinch gesture; spreading fingers is negative (zoom in).
+    float zoom_delta = 0.0f;
+    /// Independent camera pitch axis, positive up. iOS uses right-stick vertical here.
+    float camera_pitch = 0.0f;
 
     /// The sticks alone, without the D-pad folded in: the left stick's two
     /// axes (up positive) and the right stick's horizontal one, deadzoned like

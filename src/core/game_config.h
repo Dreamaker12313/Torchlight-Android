@@ -41,6 +41,9 @@ struct GameConfig {
     /// and `console_ui`, in order: this adds, it does not replace.
     std::vector<std::string> extra_data;
 
+    /// Extracted mod roots containing MEDIA/ (or media/). Same-path files override the game.
+    std::vector<std::string> mod_data;
+
     /// The install's own files, indexed case-insensitively. Not owned, must outlive the renderer;
     /// null means raw paths. Needed for the music, which is not in the archive and is cased
     /// inconsistently (`../MUSIC/TOWNFIGHT.OGG` ships as `music/TownFight.ogg`).

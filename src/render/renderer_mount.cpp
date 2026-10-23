@@ -23,33 +23,39 @@ std::string game_pak(const RendererConfig& config) {
     return pak;
 }
 
-// Which release the mounted archive is: the Xbox 360's carries the console
-// interface (`hud_xenon.layout`) itself, a PC one does not and takes it from
-// `console_ui` beside it, which is mounted here only then.
-void mount_console_interface(Ogre::ResourceGroupManager& groups, const std::string& console_ui) {
-    const bool console_pak = groups.resourceExists(kGameGroup, "media/UI/hud_xenon.layout");
-    set_console_game_data(console_pak);
+// Mount the optional console UI overlay before the archive so its files win
+// when testing UI overrides against either game release.
+bool mount_console_interface(Ogre::ResourceGroupManager& groups, const std::string& console_ui) {
     const bool have_ui = !console_ui.empty() && is_dir(console_ui);
-    if (console_pak) {
-        TL_LOG_INFO("game data: the Xbox 360 pak, with the console interface in it");
-        if (have_ui) {
-            TL_LOG_INFO("console_ui at '%s' left unmounted: the pak has its own",
-                        console_ui.c_str());
-        }
-    } else if (have_ui) {
-        TL_LOG_INFO("game data: a PC pak, the console interface from '%s'", console_ui.c_str());
+    if (have_ui) {
+        TL_LOG_INFO("mounting console interface overlay from '%s'", console_ui.c_str());
         groups.addResourceLocation(console_ui, "FileSystem", kGameGroup, true);
     } else {
-        TL_LOG_INFO("game data: a PC pak; no --console-ui (without one: no HUD, plain menus)");
+        TL_LOG_INFO("no console_ui folder");
     }
+    return have_ui;
 }
 
 // Every location mounted, one a line: what read_resource()'s cache is true for.
 std::string mount_list(const RendererConfig& config) {
     std::string mounts = config.game_data;
     mounts += '\n' + config.console_ui;
+    for (const std::string& mod : config.mod_data) mounts += '\n' + mod;
     for (const std::string& extra : config.extra_data) mounts += '\n' + extra;
     return mounts;
+}
+
+void mount_mod_data(Ogre::ResourceGroupManager& groups,
+                    const std::vector<std::string>& mod_data) {
+    for (const std::string& mod : mod_data) {
+        if (!is_dir(mod)) {
+            TL_LOG_INFO("mod media directory not found at '%s'", mod.c_str());
+            continue;
+        }
+        TL_LOG_INFO("mounting mod folder %s (overrides base files)", mod.c_str());
+        groups.addResourceLocation(mod, "FileSystem", kGameGroup, true);
+    }
+    renderer_detail::set_mod_roots(mod_data);
 }
 
 // OGRE's `Main/`: beside RTShaderLib in OGRE's own tree, inside it in a device's
@@ -104,6 +110,11 @@ bool Renderer::Impl::mount_resources() {
         return false;
     }
 
+    // Explicit overlays go first: OGRE's first-location-wins resource index
+    // lets mods and console_ui override files in either game's archive.
+    mount_mod_data(groups, config.mod_data);
+    const bool have_console_ui = mount_console_interface(groups, config.console_ui);
+
     const std::string pak = game_pak(config);
     if (!config.pak.empty() && !is_file(pak)) {
         TL_LOG_ERROR("--pak '%s' is not a readable archive", pak.c_str());
@@ -117,7 +128,15 @@ bool Renderer::Impl::mount_resources() {
         groups.addResourceLocation(config.game_data, "FileSystem", kGameGroup, true);
     }
 
-    mount_console_interface(groups, config.console_ui);
+    const bool console_pak = groups.resourceExists(kGameGroup, "media/UI/hud_xenon.layout");
+    set_console_game_data(console_pak || have_console_ui);
+    if (console_pak) {
+        TL_LOG_INFO("game data: the Xbox 360 pak, with the console interface in it");
+    } else if (have_console_ui) {
+        TL_LOG_INFO("game data: console interface supplied by console_ui");
+    } else {
+        TL_LOG_INFO("game data: a PC pak without console_ui");
+    }
 
     // Extra data after the install, so the install's own files keep winning
     // (RendererConfig::extra_data).

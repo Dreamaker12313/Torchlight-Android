@@ -14,6 +14,9 @@
 
 namespace tl::render {
 
+float ui_text_scale();
+void set_ui_text_scale(float scale);
+
 /// Full archive paths: `hud.imageset` exists under `media/UI/` and `media/UI/editimages/`, and a
 /// bare basename opens neither with `OGRE_RESOURCEMANAGER_STRICT=0`.
 inline constexpr const char* kLogoImageset = "media/UI/logo.imageset";
@@ -40,6 +43,7 @@ inline constexpr float kHugeFontSize = 32.0f;
 /// `displayHeight / 768`; OGRE's `TextAreaOverlayElement` has no separate horizontal scale, so
 /// this matches the height and leaves the glyphs unstretched at 16:9.
 inline constexpr float kPointsToPixels = 96.0f / 72.0f;
+inline float ui_points_to_pixels() { return kPointsToPixels * ui_text_scale(); }
 
 /// The two images `GuiLook.looknfeel` gives a `GuiLook/StandardButton` (`NormalImage`
 /// `ButtonStandardRed`; `HoverImage` and `PushedImage` `ButtonStandardRedHighlight`).
@@ -140,6 +144,8 @@ float font_cell_per_em();
 /// Points to an OGRE char height in pixels, before autoscaling:
 /// `kPointsToPixels` times `font_cell_per_em()`. What every front-end screen
 /// sets its text with.
-inline float points_to_char_pixels() { return kPointsToPixels * font_cell_per_em(); }
+inline float points_to_char_pixels() {
+    return ui_points_to_pixels() * font_cell_per_em();
+}
 
 }  // namespace tl::render

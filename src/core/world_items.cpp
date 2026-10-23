@@ -16,10 +16,10 @@ void World::load_recipes() {
     load_unit_types();
     // `CRecipes::reload`: one recipe per file.
     std::vector<tl::formats::AdmFile> files;
-    for (const std::string& path : archive_paths_under("media/recipes/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/recipes/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (file.ok) files.push_back(std::move(file));
     }
     std::vector<const tl::formats::AdmFile*> pointers;
@@ -259,10 +259,10 @@ void World::load_unit_themes() {
     // `CUnitThemes::reload` over `media/unitthemes/*.dat`.
     // No two share a `NAME`, so the listing's order decides nothing.
     std::vector<tl::formats::AdmFile> files;
-    for (const std::string& path : archive_paths_under("media/unitthemes/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/unitthemes/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (file.ok) files.push_back(std::move(file));
     }
     unit_themes.reload(files);

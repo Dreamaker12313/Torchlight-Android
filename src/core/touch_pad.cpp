@@ -210,12 +210,34 @@ void TouchPad::update() {
                 break;
         }
     }
+    const Touch* pinch_a = nullptr;
+    const Touch* pinch_b = nullptr;
+    for (const Touch& t : touches_) {
+        if (t.id < 0 || t.control >= 0) continue;
+        if (!pinch_a) pinch_a = &t;
+        else { pinch_b = &t; break; }
+    }
+    if (pinch_a && pinch_b) {
+        const float distance = std::hypot(pinch_a->x - pinch_b->x, pinch_a->y - pinch_b->y);
+        if (pinch_distance_ > 0.0f) {
+            // Spreading fingers zooms in. Express the gesture as dolly units so it is
+            // independent of frame rate and behaves consistently across screen sizes.
+            const float short_side = std::max(1.0f, std::min(width_, height_));
+            pinch_dolly_ -= (distance - pinch_distance_) * (60.0f / short_side);
+        }
+        pinch_distance_ = distance;
+    } else {
+        pinch_distance_ = 0.0f;
+    }
     state_.pressed |= state_.held & ~before;
+    state_.pinch_dolly = pinch_dolly_;
 }
 
 TouchPad::State TouchPad::take() {
     const State now = state_;
     state_.pressed = 0;
+    pinch_dolly_ = 0.0f;
+    state_.pinch_dolly = 0.0f;
     return now;
 }
 

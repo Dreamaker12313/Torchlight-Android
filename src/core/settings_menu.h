@@ -26,6 +26,9 @@ inline constexpr float kDefaultContrast = 256.0f;
 /// The keys of `CSettings` these two screens read and write. Initial values are Reset
 /// Defaults', except brightness and contrast (above).
 struct GameSettings {
+    /// iOS-only text size for item tooltips and quest reward/dialog text: 0 small, 1 default,
+    /// 2 large. Other platforms keep the authored UI size.
+    int text_size = 1;
     float sound_volume = 0.8f;              ///< `KSETTINGS_F_SOUNDVOLUME`
     float music_volume = 0.5f;              ///< `KSETTINGS_F_MUSICVOLUME`
     bool sound_mute = false;                ///< `KSETTINGS_SOUNDMUTE`

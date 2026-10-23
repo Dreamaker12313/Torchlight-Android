@@ -169,7 +169,7 @@
 // Static plugin registration: no plugins.cfg and no dlopen (the Switch has no dynamic
 // loader). Only the render system differs: the console's OGRE has GLES2 alone, unless
 // built with TL_SWITCH_GL3PLUS (render/render_system_choice.h).
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
 #include <OgreGLES2Plugin.h>
 #if defined(TL_SWITCH_GL3PLUS)
 #include <OgreGL3PlusPlugin.h>
@@ -595,6 +595,8 @@ struct Renderer::Impl : tl::core::World {
     std::string archive_path_unique(const std::string& basename) const override;
     std::vector<std::string> archive_paths_under(const std::string& dir,
                                                  const char* suffix) const override;
+    std::vector<std::string> data_paths_under(const std::string& dir) const override;
+    tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) const override;
     bool console_game_data() const override;
     std::string dir_of_asset(const std::string& name) const override;
     tl::core::DungeonManager& loaded_dungeon_manager() const override;
@@ -605,7 +607,7 @@ struct Renderer::Impl : tl::core::World {
     std::unique_ptr<OgreLogBridge> log_bridge;
 
     std::unique_ptr<Ogre::Root> root;
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID)
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || defined(TL_PLATFORM_IOS)
     // One of the two per Root, never both: each makes its own EGL display.
     std::unique_ptr<Ogre::GLES2Plugin> gles2_plugin;
 #if defined(TL_SWITCH_GL3PLUS)
@@ -1541,6 +1543,11 @@ struct Renderer::Impl : tl::core::World {
     /// X360 `+0x18`), reset each level. `CCameraControl::CCameraControl`
     /// (X360 inline in `CGame::createCamera`): dolly 28.5, the rest zero.
     float camera_zoom_input = 0.0f;
+    /// Horizontal right-stick orbit and vertical camera pitch controls.
+    float camera_orbit_input = 0.0f;
+    float camera_pitch_input = 0.0f;
+    float camera_pitch_adjust = 0.0f;
+    float camera_zoom_delta = 0.0f;
     /// The frame's delta for the camera (`step_player`); 0 for any other re-aim.
     float camera_delta = 0.0f;
     /// The unit talked to in the quest window (target in AI state 0x1f), and the dialog's
@@ -2742,6 +2749,14 @@ void ensure_skeleton(const Ogre::MeshPtr& mesh, const std::string& mesh_name,
 std::string resolve_archive_path(const std::string& reference);
 /// Keep read_resource()'s data files only while the same archives are mounted.
 void remember_mounts(const std::string& mounts);
+/// Absolute roots of extracted mod folders, in priority order; these filesystems
+/// are searched case-insensitively before the base archive on iOS.
+void set_mod_roots(const std::vector<std::string>& roots);
+bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes);
+std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix);
+std::vector<std::string> data_paths_under(const std::string& dir);
+tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size);
+std::vector<std::string> data_paths_in_listing_order(const std::string& dir);
 std::vector<uint8_t> read_resource(const std::string& path);
 /// The pet a new character starts with unless the creation screen says otherwise
 /// (`charactercreate.layout` lists `Dog` first).

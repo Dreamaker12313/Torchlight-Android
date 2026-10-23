@@ -365,6 +365,7 @@ void Renderer::Impl::apply_environment(const std::string& layout_path) {
     // to CAMERAMULT (+0x98, load) and its dolly to CAMERAMULT * 28.5; no
     // template: 1 and 28.5.
     camera_dolly = kDefaultCameraDistance * camera_mult;
+    camera_pitch_adjust = 0.0f;
     // CGameClient::unloadCurrentLevel ends every shake
     // and speed modifier.
     //

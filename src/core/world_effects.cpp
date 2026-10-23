@@ -166,7 +166,7 @@ tl::core::ItemRollContext World::item_roll_context() {
         const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
         const tl::formats::AdmFile globals =
             bytes.empty() ? tl::formats::AdmFile{}
-                          : tl::formats::parse_adm(bytes.data(), bytes.size());
+                          : parse_data_group(bytes.data(), bytes.size());
         if (globals.ok) {
             item_roll_globals = tl::core::read_item_roll_globals(globals);
             item_label_colours = tl::core::read_item_label_colours(globals);
@@ -236,7 +236,7 @@ void World::load_recharge_rates() {
     // constructor's value.
     const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
     if (bytes.empty()) return;
-    const tl::formats::AdmFile globals = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile globals = parse_data_group(bytes.data(), bytes.size());
     if (!globals.ok) return;
     recharge_rates.hp = globals.float_or("HP_RECHARGE_RATE", recharge_rates.hp);
     recharge_rates.pet_hp = globals.float_or("PET_HP_RECHARGE_RATE", recharge_rates.pet_hp);
@@ -659,10 +659,10 @@ void World::build_player_skills() {
     const std::string want = tl::core::upper_ascii(player_class);
     tl::formats::AdmFile class_file;
     for (const char* root : {"xbox/media/units/players/", "media/units/players/"}) {
-        for (const std::string& path : archive_paths_under(root, ".dat.adm")) {
+        for (const std::string& path : data_paths_under(root)) {
             const std::vector<uint8_t> bytes = read_resource(path);
             if (bytes.empty()) continue;
-            tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+            tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
             if (!file.ok || tl::core::upper_ascii(file.string_or("NAME", "")) != want) continue;
             class_file = std::move(file);
             player_skills_source = path;
@@ -699,10 +699,10 @@ void World::build_player_skills() {
 void World::ensure_monster_index() {
     if (monster_files_loaded) return;
     monster_files_loaded = true;
-    for (const std::string& path : archive_paths_under("media/units/monsters/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/units/monsters/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok || file.section() != "UNIT") continue;
         const std::string name = file.string_or("NAME", "");
         if (!name.empty()) monster_files.emplace(lowered(name), path);
@@ -713,10 +713,10 @@ void World::ensure_monster_index() {
 void World::ensure_prop_index() {
     if (prop_files_loaded) return;
     prop_files_loaded = true;
-    for (const std::string& path : archive_paths_under("media/units/props/", ".dat.adm")) {
+    for (const std::string& path : data_paths_under("media/units/props/")) {
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok || file.section() != "UNIT") continue;
         const std::string name = file.string_or("NAME", "");
         if (!name.empty()) prop_files.emplace(lowered(name), path);
@@ -738,7 +738,7 @@ bool World::trigger_prop(const std::string& unit, TriggerProp& out) {
     if (found != prop_files.end()) {
         const std::vector<uint8_t> bytes = read_resource(found->second);
         if (!bytes.empty()) {
-            const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+            const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
             if (file.ok) {
                 std::string directory = file.string_or("RESOURCEDIRECTORY", "");
                 const std::string mesh_file = file.string_or("MESHFILE", "");
@@ -831,7 +831,7 @@ std::string World::prop_layout_path(const std::string& unit) {
 
     const std::vector<uint8_t> bytes = read_resource(found->second);
     if (bytes.empty()) return std::string();
-    const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
     if (!file.ok) return std::string();
 
     std::string directory = file.string_or("RESOURCEDIRECTORY", "");
@@ -1070,7 +1070,7 @@ std::optional<tl::core::SpawnClass> World::load_spawn_class(
     if (path.empty()) return std::nullopt;
     const std::vector<uint8_t> bytes = read_resource(path);
     if (bytes.empty()) return std::nullopt;
-    const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
     if (!file.ok) return std::nullopt;
     tl::core::SpawnClass made = tl::core::parse_spawn_class(file.root, context);
     // `createEmptySpawnClass`'s one value: the root's `LEVEL_BONUS` (0).
@@ -3575,7 +3575,7 @@ void World::refresh_skill_effects() {
         if (found == monster_files.end()) return "???";
         const std::vector<uint8_t> bytes = read_resource(found->second);
         if (bytes.empty()) return "???";
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         const std::string display = file.string_or("DISPLAYNAME", "");
         return display.empty() ? "???" : display;
     };
@@ -3615,11 +3615,10 @@ void World::refresh_skill_effects() {
 std::string World::spawn_class_path(const std::string& name) const {
     if (!spawn_classes_indexed) {
         spawn_classes_indexed = true;
-        for (const std::string& path :
-             archive_paths_in_listing_order("media/spawnclasses/", ".dat.adm")) {
+        for (const std::string& path : data_paths_under("media/spawnclasses/")) {
             const std::vector<uint8_t> bytes = read_resource(path);
             if (bytes.empty()) continue;
-            const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+            const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
             if (!file.ok) continue;
             const std::string key = tl::core::upper_ascii(file.root.string_or("NAME", ""));
             if (key.empty() || file.root.bool_or("DONOTSPAWN", false)) continue;
@@ -3639,7 +3638,7 @@ tl::core::SpawnClassLookup World::archive_spawn_class_lookup() const {
         if (path.empty()) return false;
         const std::vector<uint8_t> bytes = read_resource(path);
         if (bytes.empty()) return false;
-        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
         if (!file.ok) return false;
         // `CSpawnClassParser::createSpawnClassData`:
         // `UNITTYPE`, then `UNIT`, then
@@ -3674,7 +3673,7 @@ Ogre::Entity* World::spawn_unit(const std::string& unit, const ogre::Vector3& at
 
     const std::vector<uint8_t> bytes = read_resource(found->second);
     if (bytes.empty()) return nullptr;
-    const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
     if (!file.ok) return nullptr;
 
     const std::string mesh_path = unit_mesh_path(unit);
@@ -3702,7 +3701,7 @@ std::string World::unit_mesh_path(const std::string& unit) {
     if (found == monster_files.end()) return std::string();
     const std::vector<uint8_t> bytes = read_resource(found->second);
     if (bytes.empty()) return std::string();
-    const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+    const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
     if (!file.ok) return std::string();
     // The stats first: both keys inherit through `BASEFILE` (`UnitStats::mesh`).
     std::string mesh_name = stats_for_unit(unit).mesh;
@@ -3735,7 +3734,7 @@ void World::build_spawn_context(SpawnTables& tables, bool items_by_type) {
         const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
         const tl::formats::AdmFile globals =
             bytes.empty() ? tl::formats::AdmFile{}
-                          : tl::formats::parse_adm(bytes.data(), bytes.size());
+                          : parse_data_group(bytes.data(), bytes.size());
         if (globals.ok) tl::core::read_spawn_weights(globals, context);
     }
 

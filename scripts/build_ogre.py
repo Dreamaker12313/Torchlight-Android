@@ -13,6 +13,7 @@ Usage:
     python scripts/build_ogre.py --platform switch --variant pgogen   # instrumented, for a profile
     python scripts/build_ogre.py --platform switch --variant pgo      # optimised with that profile
     python scripts/build_ogre.py --platform android  # the phone test build
+    python scripts/build_ogre.py --platform ios
     python3 scripts/build_ogre.py --platform linux   # the Linux desktop build, run on Linux or in WSL
 """
 import argparse
@@ -149,6 +150,26 @@ DESKTOP_ONLY = [
 # pugixml itself (OGRE_BUILD_DEPENDENCIES, which COMMON turns off for the
 # other targets); the engine links that FreeType from build-ogre-android/
 # Dependencies.
+IOS_ONLY = [
+    "-DOGRE_BUILD_DEPENDENCIES=ON",
+    "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
+    "-DOGRE_BUILD_RENDERSYSTEM_GL=OFF",
+    "-DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF",
+    "-DOGRE_BUILD_RENDERSYSTEM_VULKAN=OFF",
+    "-DOGRE_BUILD_COMPONENT_RTSHADERSYSTEM=ON",
+    "-DOGRE_BUILD_COMPONENT_OVERLAY=ON",
+    "-DOGRE_BUILD_COMPONENT_TERRAIN=OFF",
+    "-DOGRE_BUILD_COMPONENT_PAGING=OFF",
+    "-DOGRE_BUILD_COMPONENT_VOLUME=OFF",
+    "-DOGRE_BUILD_PLUGIN_STBI=ON",
+    "-DOGRE_BUILD_PLUGIN_FREEIMAGE=OFF",
+    "-DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF",
+    "-DOGRE_BUILD_PLUGIN_BSP=OFF", "-DOGRE_BUILD_PLUGIN_OCTREE=OFF",
+    "-DOGRE_BUILD_PLUGIN_PFX=OFF", "-DOGRE_BUILD_PLUGIN_PCZ=OFF",
+    "-DOGRE_BUILD_COMPONENT_BULLET=OFF", "-DOGRE_BUILD_COMPONENT_MESHLODGENERATOR=OFF",
+    "-DOGRE_BUILD_COMPONENT_PROPERTY=OFF", "-DOGRE_BUILD_COMPONENT_OVERLAY_IMGUI=OFF",
+]
+
 ANDROID_ONLY = [
     "-DOGRE_BUILD_DEPENDENCIES=ON",
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
@@ -193,8 +214,9 @@ def android_toolchain() -> tuple:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--platform", choices=("desktop", "switch", "android", "linux"), required=True)
+    ap.add_argument("--platform", choices=("desktop", "switch", "android", "ios", "linux"), required=True)
     ap.add_argument("--jobs", type=int, default=0)
+    ap.add_argument("--ios-simulator", action="store_true", help="build the iOS simulator arm64 variant")
     # Experiment: OGRE's GL3Plus render system on the console, on switch-mesa's
     # desktop GL instead of GLES. Built beside GLES2 into its own directory, so
     # the normal Switch OGRE is never touched (cmake -DTL_SWITCH_GL3PLUS=ON).
@@ -216,12 +238,30 @@ def main() -> int:
         return 1
 
     build = ROOT / f"build-ogre-{args.platform}"
-    extra = {"switch": SWITCH_ONLY, "desktop": DESKTOP_ONLY, "android": ANDROID_ONLY,
+    generator = "Xcode" if args.platform == "ios" else "Ninja"
+    if args.platform == "ios":
+        if args.ios_simulator:
+            build = ROOT / "build-ogre-ios-simulator-xcode"
+        else:
+            build = ROOT / "build-ogre-ios-xcode"
+    elif args.ios_simulator:
+        print("--ios-simulator requires --platform ios")
+        return 1
+    extra = {"switch": SWITCH_ONLY, "desktop": DESKTOP_ONLY, "android": ANDROID_ONLY, "ios": IOS_ONLY,
              "linux": DESKTOP_ONLY}[args.platform]
     cmake = "cmake"
     if args.platform == "android":
         cmake, toolchain = android_toolchain()
         extra = toolchain + extra
+    elif args.platform == "ios":
+        extra = [f"-DCMAKE_TOOLCHAIN_FILE={OGRE / 'CMake/toolchain/ios.toolchain.xcode.cmake'}",
+                 f"-DIOS_PLATFORM={'SIMULATOR' if args.ios_simulator else 'OS'}",
+                 "-DCMAKE_OSX_ARCHITECTURES=arm64",
+                 "-DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=15.0",
+                 f"-DCMAKE_OBJC_COMPILER={subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()}",
+                 f"-DCMAKE_OBJCXX_COMPILER={subprocess.check_output(['xcrun', '--find', 'clang++'], text=True).strip()}",
+                 f"-DCMAKE_C_COMPILER={subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip()}",
+                 f"-DCMAKE_CXX_COMPILER={subprocess.check_output(['xcrun', '--find', 'clang++'], text=True).strip()}", *extra]
     if args.gl3plus:
         if args.platform != "switch":
             print("--gl3plus is for --platform switch (desktop always builds GL3Plus)")
@@ -254,7 +294,8 @@ def main() -> int:
     # separator and dies with "multiple target patterns".
     # Source paths in OGRE's objects relative to this checkout, as in the engine's.
     prefix_map = f"-DCMAKE_PROJECT_INCLUDE_BEFORE={as_path(ROOT / 'cmake' / 'file_prefix_map.cmake')}"
-    cmd = [cmake, "-S", source_dir, "-B", build_dir, "-G", "Ninja", *COMMON, *extra, prefix_map]
+    cmd = [cmake, "-S", source_dir, "-B", build_dir, "-G", generator, *COMMON, *extra,
+           prefix_map]
 
     def run(command) -> int:
         if args.platform != "switch":
@@ -269,6 +310,8 @@ def main() -> int:
         return 1
 
     build_cmd = [cmake, "--build", build_dir]
+    if args.platform == "ios":
+        build_cmd += ["--config", "Release"]
     if args.jobs:
         build_cmd += ["--parallel", str(args.jobs)]
     if run(build_cmd) != 0:
