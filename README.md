@@ -201,6 +201,9 @@ is bundled with a local build, the app copies `pak.zip`, `music/`, and
 open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there.
 The app reads and writes its saves and settings in that same Documents folder.
 Touch controls appear on screen when first touched.
+On iOS, the right stick rotates the camera horizontally and adjusts its pitch vertically; pinch
+with two fingers anywhere in the play area to zoom. On controller platforms, vertical stick still
+zooms, and holding LB while moving it vertically adjusts pitch.
 
 The iOS build supports unpacked mods. Put each extracted mod in its own
 subfolder under `Documents/mods/`, keeping the mod's `media/` directory

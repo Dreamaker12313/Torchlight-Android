@@ -42,6 +42,9 @@ void Renderer::Impl::create_options_screens() {
     settings_menu = tl::core::SettingsMenu{};
     // DIVERGENCE (platform): no storage device to pick on a Switch.
     settings_menu.storage_hidden = true;
+#if defined(TL_PLATFORM_IOS)
+    settings_menu.storage_hidden = false;
+#endif
     settings_menu.update_audio_levels = [](const tl::core::AudioLevels& levels) {
         const tl::core::AudioGains gains = tl::core::audio_gains(levels);
         tl::core::audio_set_levels(gains.effects, gains.music);
@@ -55,7 +58,8 @@ void Renderer::Impl::create_options_screens() {
     }
     if (settings_screen.ready()) {
         settings_screen.set_hidden(
-            tl::core::settings_control_window(tl::core::SettingsControl::Storage), true);
+            tl::core::settings_control_window(tl::core::SettingsControl::Storage),
+            settings_menu.storage_hidden);
     }
 }
 
@@ -180,6 +184,20 @@ void Renderer::Impl::refresh_settings_menu() {
     settings_screen.set_checked("ShowTips", settings_menu.show_tips);
     settings_screen.set_checked("ShowFloatyNumbers", settings_menu.floaty_numbers);
     settings_screen.set_checked("ShowBlood", settings_menu.show_blood);
+#if defined(TL_PLATFORM_IOS)
+    static const char* const kTextSizeNames[] = {"Small", "Medium", "Large"};
+    const int text_size = std::clamp(game_settings().text_size, 0, 2);
+    settings_screen.set_caption("Text24", std::string("Text Size: ") + kTextSizeNames[text_size]);
+    constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
+    const float previous_scale = ui_text_scale();
+    set_ui_text_scale(kTextSizes[text_size]);
+    if (previous_scale != ui_text_scale()) {
+        hud.resize(config.width, config.height);
+        game_hud.resize(config.width, config.height);
+        inventory_menu.resize(config.width, config.height);
+        quest_dialog.resize(config.width, config.height);
+    }
+#endif
 
     // the tab is put at the bar's size less its own, times
     // the slider's fraction - on both axes, so it also sinks the three pixels

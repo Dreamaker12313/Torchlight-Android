@@ -1543,6 +1543,11 @@ struct Renderer::Impl : tl::core::World {
     /// X360 `+0x18`), reset each level. `CCameraControl::CCameraControl`
     /// (X360 inline in `CGame::createCamera`): dolly 28.5, the rest zero.
     float camera_zoom_input = 0.0f;
+    /// Horizontal right-stick orbit and vertical camera pitch controls.
+    float camera_orbit_input = 0.0f;
+    float camera_pitch_input = 0.0f;
+    float camera_pitch_adjust = 0.0f;
+    float camera_zoom_delta = 0.0f;
     /// The frame's delta for the camera (`step_player`); 0 for any other re-aim.
     float camera_delta = 0.0f;
     /// The unit talked to in the quest window (target in AI state 0x1f), and the dialog's

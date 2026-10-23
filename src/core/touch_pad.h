@@ -38,6 +38,7 @@ public:
         std::uint32_t held = 0;     ///< buttons down now
         std::uint32_t pressed = 0;  ///< pressed since the last take(), held or not
         float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;  ///< -1..1, y down
+        float pinch_dolly = 0.0f;   ///< signed dolly delta accumulated since the last take()
     };
 
     /// One thing to draw: a disc at a centre, in window pixels.
@@ -104,6 +105,8 @@ private:
     float stick_radius_ = 0.0f, knob_radius_ = 0.0f;
     float right_stick_radius_ = 0.0f, right_knob_radius_ = 0.0f;
     float dpad_arm_ = 0.0f, dpad_button_ = 0.0f;
+    float pinch_distance_ = 0.0f;
+    float pinch_dolly_ = 0.0f;
     std::vector<Control> controls_;
     std::array<Touch, 10> touches_{};
     State state_;

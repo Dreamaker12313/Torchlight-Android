@@ -7,6 +7,7 @@
 
 #include "core/log.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFont.h>
@@ -223,7 +224,7 @@ Ogre::TextAreaOverlayElement* CharacterCreate::make_text(const std::string& name
     text->setMetricsMode(Ogre::GMM_RELATIVE);
     text->setFontName(kFontName, Ogre::RGN_INTERNAL);
     text->setColour(colour);
-    text->setCharHeight(points * points_to_char_pixels() / kNativeHeight);
+    set_char_height(text, points * points_to_char_pixels() / kNativeHeight);
     if (centred) text->setAlignment(Ogre::TextAreaOverlayElement::Center);
     // Inside the container, not the overlay: `Overlay::add2D` takes an
     // `OverlayContainer` and a `TextArea` is not one. A child's position is
@@ -938,7 +939,7 @@ void CharacterCreate::layout() {
     // goes at that window's horizontal middle and the alignment does the rest.
     auto put = [&](Ogre::TextAreaOverlayElement* text, const Authored& at, float points) {
         if (text == nullptr) return;
-        text->setCharHeight(points * points_to_char_pixels() * scale_ / down);
+        set_char_height(text, points * points_to_char_pixels() * scale_ / down);
         const float left = at.rel_x * across + at.off_x * scale_;
         const float top = at.rel_y * down + at.off_y * scale_;
         text->setPosition((left + at.wide * scale_ * 0.5f) / across, top / down);
@@ -1022,11 +1023,11 @@ void CharacterCreate::layout_console(float across, float down) {
             // a single word.
             top += (label.tall * scale_ - line) * 0.5f;
         }
-        label.text->setCharHeight(line / down);
+        set_char_height(label.text, line / down);
         label.text->setPosition(left / across, top / down);
         label.text->show();
         for (size_t i = 0; i < label.drops.size(); ++i) {
-            label.drops[i]->setCharHeight(line / down);
+            set_char_height(label.drops[i], line / down);
             label.drops[i]->setPosition((left + label.drop_offsets[i].first * pixel) / across,
                                         (top + label.drop_offsets[i].second * pixel) / down);
             label.drops[i]->show();

@@ -11,7 +11,9 @@ InputState poll_platform_input() {
     InputState in;
     in.stick_x = p.lx;
     in.stick_y = -p.ly;
-    in.zoom = -p.ry;
+    in.zoom = 0.0f;
+    in.zoom_delta = p.pinch_dolly;
+    in.camera_pitch = -p.ry;
     in.look_x = p.rx;
     float x = p.lx, y = -p.ly;
     const std::uint32_t b = p.held | p.pressed;

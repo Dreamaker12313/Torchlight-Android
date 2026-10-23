@@ -11,6 +11,8 @@
 
 namespace tl::render {
 
+float ui_text_scale();
+
 inline void set_caption(Ogre::OverlayElement* element, const Ogre::DisplayString& text) {
     if (element->getCaption() != text) element->setCaption(text);
 }
@@ -41,6 +43,7 @@ inline void set_colour(Ogre::TextAreaOverlayElement* text, const Ogre::ColourVal
 /// Only a relative element's height reads back as it was set: in pixel modes
 /// the setter truncates to whole pixels and the getter answers in another unit.
 inline void set_char_height(Ogre::TextAreaOverlayElement* text, Ogre::Real height) {
+    if (text == nullptr) return;
     if (text->getMetricsMode() != Ogre::GMM_RELATIVE || text->getCharHeight() != height) {
         text->setCharHeight(height);
     }

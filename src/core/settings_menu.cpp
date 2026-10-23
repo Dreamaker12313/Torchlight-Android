@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <sstream>
 
 namespace tl::core {
@@ -49,10 +50,12 @@ std::string write_game_settings(const GameSettings& s) {
     std::snprintf(
         text, sizeof text,
         "SOUNDVOLUME:%.9g\nMUSICVOLUME:%.9g\nSOUNDMUTE:%d\nMUSICMUTE:%d\n"
-        "SHOW_TIPS:%d\nFLOATY_NUMBERS:%d\nSHOW_BLOOD:%d\nBRIGHTNESS:%.9g\nCONTRAST:%.9g\n",
+        "SHOW_TIPS:%d\nFLOATY_NUMBERS:%d\nSHOW_BLOOD:%d\nBRIGHTNESS:%.9g\nCONTRAST:%.9g\n"
+        "TEXT_SIZE:%d\n",
         static_cast<double>(s.sound_volume), static_cast<double>(s.music_volume),
         s.sound_mute ? 1 : 0, s.music_mute ? 1 : 0, s.show_tips ? 1 : 0, s.floaty_numbers ? 1 : 0,
-        s.show_blood ? 1 : 0, static_cast<double>(s.brightness), static_cast<double>(s.contrast));
+        s.show_blood ? 1 : 0, static_cast<double>(s.brightness), static_cast<double>(s.contrast),
+        std::clamp(s.text_size, 0, 2));
     return text;
 }
 
@@ -78,6 +81,9 @@ void read_game_settings(const std::string& text, GameSettings& s) {
         else if (key == "SHOW_BLOOD") s.show_blood = number != 0.0f;
         else if (key == "BRIGHTNESS") s.brightness = number;
         else if (key == "CONTRAST") s.contrast = number;
+        else if (key == "TEXT_SIZE") {
+            s.text_size = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        }
     }
 }
 
@@ -218,6 +224,7 @@ void SettingsMenu::reset_defaults(GameSettings& settings) {
     show_tips = true;
     floaty_numbers = true;
     show_blood = true;
+    settings.text_size = 1;
 }
 
 // on `settings_navigation`'s answer.
@@ -253,8 +260,17 @@ SettingsPress SettingsMenu::press(int code, GameSettings& settings) {
                 reset_defaults(settings);
                 result.changed = true;
             } else {
-                result.storage = true;
+                if (!storage_hidden) {
+                    settings.text_size = (std::clamp(settings.text_size, 0, 2) + 1) % 3;
+                    result.changed = true;
+                } else {
+                    result.storage = true;
+                }
             }
+        } else if (!storage_hidden && (code == kMenuPadLeft || code == kMenuPadRight)) {
+            settings.text_size =
+                (std::clamp(settings.text_size, 0, 2) + (code == kMenuPadRight ? 1 : 2)) % 3;
+            result.changed = true;
         }
     } else if (is_slider(control) && (code == kMenuPadLeft || code == kMenuPadRight)) {
         const float step = code == kMenuPadRight ? kSliderStep : -kSliderStep;

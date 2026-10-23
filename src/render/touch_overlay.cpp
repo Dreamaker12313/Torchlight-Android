@@ -121,7 +121,7 @@ float shape_alpha(const Shape& s) {
 /// disc, "Start" has to fit across one.
 float label_height(const Shape& s) {
     const std::size_t n = std::strlen(s.label);
-    return s.radius * (n <= 1 ? 1.0f : n == 2 ? 0.75f : 0.5f);
+    return s.radius * (n <= 1 ? 1.0f : n == 2 ? 0.75f : 0.5f) * ui_text_scale();
 }
 
 /// Give a disc the material of its kind, tint and state, made on first use.
@@ -157,6 +157,7 @@ void TouchOverlay::build(std::size_t count) {
     labels_.clear();
 
     overlay_ = overlays.create(kOverlayName);
+    built_text_scale_ = ui_text_scale();
     overlay_->setZOrder(kZOrder);
     root_ = static_cast<Ogre::OverlayContainer*>(
         overlays.createOverlayElement("Panel", std::string(kOverlayName) + "/root"));
@@ -192,7 +193,7 @@ void TouchOverlay::build(std::size_t count) {
             label->setColour(Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.9f));
             label->setCaption(shapes[i].label);
             const float height = label_height(shapes[i]);
-            label->setCharHeight(height);
+            set_char_height(label, height);
             label->setPosition(shapes[i].x, shapes[i].y - 0.5f * height);
             root_->addChild(label);
         }
@@ -218,7 +219,7 @@ void TouchOverlay::step() {
     }
     const std::vector<Shape> shapes = pad.shapes();
     if (overlay_ == nullptr || discs_.size() != shapes.size() || built_width_ != pad.width() ||
-        built_height_ != pad.height()) {
+        built_height_ != pad.height() || built_text_scale_ != ui_text_scale()) {
         built_width_ = pad.width();
         built_height_ = pad.height();
         build(shapes.size());

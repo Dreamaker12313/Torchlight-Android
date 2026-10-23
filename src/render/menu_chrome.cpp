@@ -13,8 +13,17 @@
 
 #include <map>
 #include <string>
+#include <algorithm>
 
 namespace tl::render {
+
+namespace {
+float g_ui_text_scale = 1.0f;
+}
+
+float ui_text_scale() { return g_ui_text_scale; }
+
+void set_ui_text_scale(float scale) { g_ui_text_scale = std::clamp(scale, 0.8f, 1.4f); }
 
 Ogre::MaterialPtr build_menu_material(const std::string& name, const Ogre::TexturePtr& texture,
                                       float alpha) {

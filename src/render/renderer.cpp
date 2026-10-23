@@ -2236,6 +2236,10 @@ bool window_fills_screen(const RendererConfig& config) {
 bool Renderer::init(const RendererConfig& config) {
     Impl& m = *impl_;
     m.config = config;
+    if (config.settings != nullptr) {
+        constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
+        set_ui_text_scale(kTextSizes[std::clamp(config.settings->text_size, 0, 2)]);
+    }
 
     // Our LogManager, created before Root so Root does not make its own.
     // suppressFileOutput keeps OGRE from writing Ogre.log next to the binary:
