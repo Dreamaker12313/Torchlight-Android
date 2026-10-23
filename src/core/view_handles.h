@@ -28,6 +28,9 @@ using NodeMap = std::multimap<int64_t, Ogre::SceneNode*>;
 enum class ParticleStart {
     /// A `CParticle`, started now (`CParticle::Start`).
     Now,
+    /// `Now`, for a caller that leaves the systems as placed: taken down, they are kept for the
+    /// file's next placement, as the preloader keeps its caches.
+    Cached,
     /// A `CParticle` placed for a later `Start`: `GetParticle`, or a
     /// caller that starts its systems itself.
     Held,

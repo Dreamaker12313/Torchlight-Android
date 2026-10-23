@@ -130,6 +130,31 @@ std::vector<tl::core::LevelScript::Reachable> gather_missile_candidates(const Im
     return pool;
 }
 
+/// What a missile can meet, with the player (a level's or a unit's missile) and without: kept
+/// from one missile to the next, gathered again where a blow lands or a skill event runs.
+struct MissilePools {
+    std::vector<tl::core::LevelScript::Reachable> pools[2];
+    bool pooled[2] = {false, false};
+
+    template <typename ImplT>
+    std::vector<tl::core::LevelScript::Reachable>& take(const ImplT* impl, bool with_player) {
+        const int kind = with_player ? 1 : 0;
+        if (!pooled[kind]) {
+            pools[kind] = gather_missile_candidates(impl, with_player);
+            pooled[kind] = true;
+        }
+        return pools[kind];
+    }
+    /// The candidates gathered again for `with_player`; the other kind is gathered when next
+    /// taken.
+    template <typename ImplT>
+    std::vector<tl::core::LevelScript::Reachable> refresh(const ImplT* impl, bool with_player) {
+        pooled[with_player ? 0 : 1] = false;
+        return gather_missile_candidates(impl, with_player);
+    }
+    void forget() { pooled[0] = pooled[1] = false; }
+};
+
 template <typename ImplT, typename FlyingT>
 std::function<bool(int64_t, const tl::core::Vec3&, float, float)> make_missile_harm_hook(
     ImplT* impl, const FlyingT& flying, std::vector<tl::core::LevelScript::Reachable>& candidates,
@@ -165,8 +190,7 @@ tl::core::ItemRollContext World::item_roll_context() {
         item_roll_globals_loaded = true;
         const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
         const tl::formats::AdmFile globals =
-            bytes.empty() ? tl::formats::AdmFile{}
-                          : parse_data_group(bytes.data(), bytes.size());
+            bytes.empty() ? tl::formats::AdmFile{} : parse_data_group(bytes.data(), bytes.size());
         if (globals.ok) {
             item_roll_globals = tl::core::read_item_roll_globals(globals);
             item_label_colours = tl::core::read_item_label_colours(globals);
@@ -1533,8 +1557,10 @@ void World::flush_item_interacts() {
 }
 
 World::NodeMap* World::nodes_of(tl::core::LevelScript* machine) {
-    for (MachineView& view : machines()) {
-        if (view.script == machine) return view.nodes;
+    // machines()'s order, without building its list.
+    if (machine == &script) return &scripted_nodes;
+    for (NestedScript& nested : nested_scripts) {
+        if (!nested.retired && &nested.script == machine) return &nested.nodes;
     }
     return nullptr;
 }
@@ -1587,27 +1613,35 @@ bool World::unit_node_position(int64_t node, ogre::Vector3& at) {
 
 // `CCharacter::playHitParticle`.
 void World::play_hit_particle(const tl::core::UnitStats& victim, const ogre::Vector3& from,
-                              const ogre::Vector3& at) {
+                              const ogre::Vector3& at, CharacterRef who) {
     const tl::core::ParticlePoint p = tl::core::blow_particle_position(
         {from.x, from.y, from.z}, {at.x, at.y, at.z}, victim.radius);
     start_character_particle(victim, tl::core::hit_particle_slot(game_settings().show_blood),
-                             ogre::Vector3(p.x, p.y, p.z));
+                             ogre::Vector3(p.x, p.y, p.z), who);
 }
 
 // `CCharacter::playStrikeParticle`.
 void World::play_strike_particle(const tl::core::UnitStats& attacker, const ogre::Vector3& from,
-                                 const ogre::Vector3& at, float radius, bool critical,
-                                 bool blocked) {
+                                 const ogre::Vector3& at, float radius, bool critical, bool blocked,
+                                 CharacterRef who) {
     const tl::core::ParticlePoint p =
         tl::core::blow_particle_position({from.x, from.y, from.z}, {at.x, at.y, at.z}, radius);
     start_character_particle(attacker, tl::core::strike_particle_slot(critical, blocked),
-                             ogre::Vector3(p.x, p.y, p.z));
+                             ogre::Vector3(p.x, p.y, p.z), who);
 }
 
 // `CCharacter::die`. INVENTED: the point
 // (`+0x210`, from the object at `+0x200`, unread); the unit's position stands in.
-void World::play_death_particle(const tl::core::UnitStats& unit, const ogre::Vector3& at) {
-    start_character_particle(unit, tl::core::death_particle_slot(game_settings().show_blood), at);
+void World::play_death_particle(const tl::core::UnitStats& unit, const ogre::Vector3& at,
+                                CharacterRef who) {
+    start_character_particle(unit, tl::core::death_particle_slot(game_settings().show_blood), at,
+                             who);
+}
+
+// PORT: a level character's key for its particle slots.
+World::CharacterRef World::character_ref(int64_t node, tl::core::LevelScript* machine) {
+    if (node == 0) return CharacterRef{};
+    return CharacterRef{machine != nullptr ? machine : script_owning(node), node};
 }
 
 // `CCharacter::rollAttack` for the player's blow, what it
@@ -1622,12 +1656,12 @@ void World::show_player_blow(int64_t target, const std::string& unit, float dama
     const tl::core::UnitStats victim = stats_for_unit(unit);
     if (last_blow_blocked) add_combat_text(tl::core::CombatText::Blocked, at);
     if (damage != 0.0f) {
-        play_hit_particle(victim, from, at);
+        play_hit_particle(victim, from, at, character_ref(target));
         // The victim is the player's own when its master is one (`+0x640`).
         if (last_blow_glancing) add_combat_text(tl::core::CombatText::GlancingBlow, at);
     }
     play_strike_particle(player_stats, from, at, victim.radius, last_blow_critical,
-                         last_blow_blocked);
+                         last_blow_blocked, CharacterRef{});
 }
 
 // `CCharacter::awardFame`, the text.
@@ -3078,10 +3112,10 @@ void World::launch_missile(FlyingMissile flying, const ogre::Vector3& at,
     flying.active = place_particle_layout(spec.active, ogre::Vector3::ZERO,
                                           ogre::Quaternion::IDENTITY, flying.node);
     if (!spec.release.empty()) {
-        transient_particles.push_back(
-            TransientParticles{place_particle_layout(spec.release, ogre::Vector3(p.x, p.y, p.z),
-                                                     view_orientation(flying.node), nullptr),
-                               kMissileParticleStopSeconds});
+        transient_particles.push_back(TransientParticles{
+            place_particle_layout(spec.release, ogre::Vector3(p.x, p.y, p.z),
+                                  view_orientation(flying.node), nullptr, ParticleStart::Cached),
+            kMissileParticleStopSeconds, false, false, true});
     }
     missiles.push_back(std::move(flying));
     if (level_placed) {
@@ -3305,6 +3339,7 @@ void World::dispose_transient_particles(float delta) {
     // Every list whose time is up, asked together: one walk of the systems a frame.
     std::vector<const std::vector<Ogre::SceneNode*>*> due;
     std::vector<char> stop;
+    std::vector<char> by_updating;
     std::vector<size_t> due_at;
     for (size_t i = 0; i < transient_particles.size(); ++i) {
         TransientParticles& transient = transient_particles[i];
@@ -3314,12 +3349,13 @@ void World::dispose_transient_particles(float delta) {
         // to reach zero.
         due.push_back(&transient.holders);
         stop.push_back(!transient.stopped && !transient.self_timed ? 1 : 0);
+        by_updating.push_back(transient.missile ? 1 : 0);
         due_at.push_back(i);
     }
     if (!due.empty()) {
         // Alive until `CParticle::updateLevelObject` has stopped it.
         std::vector<char> alive;
-        view_transients_alive(due, stop, alive);
+        view_transients_alive(due, stop, by_updating, alive);
         std::vector<Ogre::SceneNode*> dead;
         for (size_t k = due.size(); k-- > 0;) {
             TransientParticles& transient = transient_particles[due_at[k]];
@@ -3337,14 +3373,15 @@ void World::step_missiles(float delta) {
     flush_item_interacts();
     if (missiles.empty() || !(delta > 0.0f)) return;
 
+    MissilePools pools;
     for (size_t i = 0; i < missiles.size();) {
         FlyingMissile& flying = missiles[i];
         // What it can meet: the characters, and the player for a level's missile.
-        const auto gather = [this, &flying]() {
-            return gather_missile_candidates(
-                this, flying.level_placed || flying.source.caster_machine != nullptr);
+        const bool with_player = flying.level_placed || flying.source.caster_machine != nullptr;
+        const auto gather = [this, with_player, &pools]() {
+            return pools.refresh(this, with_player);
         };
-        std::vector<tl::core::LevelScript::Reachable> candidates = gather();
+        std::vector<tl::core::LevelScript::Reachable>& candidates = pools.take(this, with_player);
         const SkillEventSource source = flying.source;
         ogre::Vector3 struck_at = ogre::Vector3::ZERO;
 
@@ -3363,18 +3400,28 @@ void World::step_missiles(float delta) {
                           tl::core::Vec3& normal, int64_t& unit) {
             float best = 2.0f;
             unit = 0;
+            std::vector<const tl::core::LevelScript::Reachable*> met;
+            std::vector<int64_t> ids;
+            met.reserve(candidates.size());
+            ids.reserve(candidates.size());
             for (const auto& u : candidates) {
                 if (std::find(ignore.begin(), ignore.end(), u.id) != ignore.end()) continue;
-                // `CLevel::objectSphereCollision` asks
-                // each unit's `CBaseUnit::sphereCollision`
-                // (`unit_collider_sweep`). INVENTED: the body sphere where nothing is drawn.
-                float t = 2.0f;
-                if (!unit_collider_sweep(u.id, from, to, radius, t)) {
-                    t = sphere_sweep_t(from, to, radius, u.center, u.radius);
-                }
+                met.push_back(&u);
+                ids.push_back(u.id);
+            }
+            // `CLevel::objectSphereCollision` asks each
+            // unit's `CBaseUnit::sphereCollision`
+            // (`unit_collider_sweeps`). INVENTED: the body sphere where nothing is drawn.
+            std::vector<float> swept;
+            std::vector<char> drawn;
+            unit_collider_sweeps(ids, from, to, radius, swept, drawn);
+            for (size_t k = 0; k < met.size(); ++k) {
+                const float t = drawn[k] != 0 ? swept[k]
+                                              : sphere_sweep_t(from, to, radius, met[k]->center,
+                                                               met[k]->radius);
                 if (t < best) {
                     best = t;
-                    unit = u.id;
+                    unit = met[k]->id;
                 }
             }
             // A breakable is a unit too: the box of its collision group, whatever
@@ -3465,18 +3512,18 @@ void World::step_missiles(float delta) {
                 place_particle_layout(flying.missile.spec.hit, now,
                                       flying.node != nullptr ? view_orientation(flying.node)
                                                              : ogre::Quaternion::IDENTITY,
-                                      nullptr),
-                kMissileParticleStopSeconds});
+                                      nullptr, ParticleStart::Cached),
+                kMissileParticleStopSeconds, false, false, true});
         }
         if (step.killed) {
             TL_LOG_INFO("missile: %s ends at (%.2f, %.2f, %.2f) after %.2f units",
                         flying.missile.spec.name.c_str(), static_cast<double>(p.x),
                         static_cast<double>(p.y), static_cast<double>(p.z),
                         static_cast<double>(flying.missile.travelled_total));
-            transient_particles.push_back(
-                TransientParticles{place_particle_layout(flying.missile.spec.die, now,
-                                                         ogre::Quaternion::IDENTITY, nullptr),
-                                   kMissileParticleStopSeconds});
+            transient_particles.push_back(TransientParticles{
+                place_particle_layout(flying.missile.spec.die, now, ogre::Quaternion::IDENTITY,
+                                      nullptr, ParticleStart::Cached),
+                kMissileParticleStopSeconds, false, false, true});
             // `CSkillEvent::missileDieing`: unless the event is
             // `EVENT_MISSILEDIE`, group 7 from the missile's centre, no unit or point.
             constexpr int kMissileDie = 7;
@@ -3493,6 +3540,7 @@ void World::step_missiles(float delta) {
                             : 0.0f;
                     skill_runner_running(skill->entry.name)
                         .trigger_skill_event(*skill, kMissileDie, context);
+                    pools.forget();
                 }
             }
         }
@@ -3615,7 +3663,7 @@ void World::refresh_skill_effects() {
 std::string World::spawn_class_path(const std::string& name) const {
     if (!spawn_classes_indexed) {
         spawn_classes_indexed = true;
-        for (const std::string& path : data_paths_under("media/spawnclasses/")) {
+        for (const std::string& path : data_paths_in_listing_order("media/spawnclasses/")) {
             const std::vector<uint8_t> bytes = read_resource(path);
             if (bytes.empty()) continue;
             const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
@@ -3733,8 +3781,7 @@ void World::build_spawn_context(SpawnTables& tables, bool items_by_type) {
     {
         const std::vector<uint8_t> bytes = read_resource("media/GLOBALS.DAT.adm");
         const tl::formats::AdmFile globals =
-            bytes.empty() ? tl::formats::AdmFile{}
-                          : parse_data_group(bytes.data(), bytes.size());
+            bytes.empty() ? tl::formats::AdmFile{} : parse_data_group(bytes.data(), bytes.size());
         if (globals.ok) tl::core::read_spawn_weights(globals, context);
     }
 

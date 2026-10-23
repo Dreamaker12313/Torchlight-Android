@@ -12,6 +12,8 @@
 #include <malloc.h>
 #include <unistd.h>
 
+#include <thread>
+
 namespace tl::core {
 
 // `/sdcard/Android/data/<package>/files/`: the activity's externalDataPath.
@@ -46,6 +48,7 @@ void platform_window_params(std::map<std::string, std::string>& params) {
 }
 
 void pump_events() {
+    note_events_pumped();
     android_app* glue = android::app();
     android_poll_source* source = nullptr;
     int events = 0;
@@ -62,6 +65,12 @@ void pump_events() {
 }
 
 bool should_keep_running() { return android::app()->destroyRequested == 0; }
+
+void platform_set_frame_rate(float fps) { android::set_frame_rate(fps); }
+
+void platform_sleep_until(std::chrono::steady_clock::time_point deadline) {
+    std::this_thread::sleep_until(deadline);
+}
 
 bool memory_usage(unsigned long long& used, unsigned long long& total) {
     // What the program has allocated, against the phone's memory. GL objects
@@ -95,6 +104,9 @@ bool clock_rates(unsigned& cpu_mhz, unsigned& gpu_mhz, unsigned& memory_mhz) {
 void start_profiler() {}
 void stop_profiler() {}
 void profiler_mark(const char* label) { (void)label; }
+
+// Scheduled by the system across however many cores it has.
+void prepare_worker_thread(unsigned index) { (void)index; }
 
 void start_gpu_waits() {}
 bool gpu_wait_times(GpuWaitTimes& game, GpuWaitTimes& others) {

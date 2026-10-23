@@ -172,7 +172,7 @@ public:
 
     /// Bring up OGRE and mount the game's data. False on any failure, with the
     /// reason already logged.
-    bool init(const RendererConfig& config);
+    bool init(const RendererConfig& requested);
 
     /// Load `mesh_name` and place it in the scene with the camera framed on it. Matched
     /// case-insensitively by OGRE (OGRE_RESOURCEMANAGER_STRICT=0), which also covers the mesh's

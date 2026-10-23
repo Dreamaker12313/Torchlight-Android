@@ -904,7 +904,12 @@ public:
     void clear() { by_name_.clear(); }
 
 private:
-    std::map<std::string, UnitStats> by_name_;
+    /// Names compared without case and without a lower-cased copy per lookup.
+    struct NameLess {
+        using is_transparent = void;
+        bool operator()(const std::string& a, const std::string& b) const;
+    };
+    std::map<std::string, UnitStats, NameLess> by_name_;
 };
 
 }  // namespace tl::core

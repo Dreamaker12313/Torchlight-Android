@@ -3,7 +3,6 @@
 #include "core/unit_resource.h"
 #include "core/world.h"
 #include "formats/unit_data.h"
-#include "formats/dat_text.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,9 +21,7 @@ bool load_unit_table(const World& m, tl::formats::AdmFile& file) {
     const std::string path = m.resolve_archive_path("media/masterresourceunits.dat.adm");
     if (path.empty()) return false;
     const std::vector<uint8_t> bytes = m.read_resource(path);
-    file = tl::formats::looks_like_dat_text(bytes.data(), bytes.size())
-               ? tl::formats::parse_dat_text(bytes.data(), bytes.size())
-               : tl::formats::parse_adm(bytes.data(), bytes.size());
+    file = World::parse_data_group(bytes.data(), bytes.size());
     if (!file.ok) TL_LOG_WARN("could not parse '%s': %s", path.c_str(), file.error.c_str());
     return file.ok;
 }
@@ -107,10 +104,8 @@ size_t add_unit_files(World& m, tl::formats::AdmFile& file, bool all_groups, siz
         const auto resource_group = static_cast<tl::core::ResourceGroup>(group);
         for (const std::string& unit_path : m.data_paths_under(kDirs[group])) {
             // `DATFILE` as the table spells it: upper case, without `.adm`.
-            const size_t ext = unit_path.size() >= 8 &&
-                                       unit_path.compare(unit_path.size() - 8, 8, ".dat.adm") == 0
-                                   ? 8 : 4;
-            std::string dat = unit_path.substr(0, unit_path.size() - ext);
+            std::string dat = unit_path.substr(
+                0, unit_path.size() - (ends_with_lower(unit_path, ".adm") ? 4 : 0));
             if (tabled.count(lower_ascii(dat)) != 0) continue;
             dat = tl::core::upper_ascii(dat);
             tl::formats::AdmFile unit_file = m.read_unit_file(dat, std::string(), &resource_group);
@@ -402,25 +397,8 @@ tl::formats::AdmFile World::read_unit_file(const std::string& path, const std::s
         }
         const bool compiled =
             wanted.size() > 4 && wanted.compare(wanted.size() - 4, 4, ".adm") == 0;
-        std::string resolved;
-        if (compiled) {
-            resolved = wanted;
-        } else if (is_first && wanted.size() > 4 &&
-                   wanted.compare(wanted.size() - 4, 4, ".dat") == 0) {
-            // `monster_files` can point directly at a mod's text DAT. Honor that
-            // exact source before probing for a compiled sibling: appending
-            // `.adm` here can silently select the game's same-named Xbox unit,
-            // discarding the mod's UNITTYPE, ALIGNMENT, movement and inventory.
-            resolved = resolve_archive_path(wanted);
-            if (resolved.empty()) resolved = resolve_archive_path(wanted + ".adm");
-        } else {
-            for (const char* extension : {".adm", ".dat"}) {
-                if (!first_root.empty())
-                    resolved = resolve_archive_path(first_root + wanted + extension);
-                if (resolved.empty()) resolved = resolve_archive_path(wanted + extension);
-                if (!resolved.empty()) break;
-            }
-        }
+        const std::string resolved =
+            compiled ? wanted : resolve_unit_link(wanted, first_root, is_first);
         if (resolved.empty()) return;
         const std::vector<uint8_t> bytes = read_resource(resolved);
         if (bytes.empty()) return;
@@ -2228,7 +2206,9 @@ void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t 
     {
         // `CCharacter::die`: the death particle, by "Show Blood".
         ogre::Vector3 body = ogre::Vector3::ZERO;
-        if (unit_node_position(node, body)) play_death_particle(stats_for_unit(unit), body);
+        if (unit_node_position(node, body)) {
+            play_death_particle(stats_for_unit(unit), body, character_ref(node));
+        }
     }
     std::vector<tl::core::ScriptEvent> events;
     script.unit_killed(node, quest_log.state(), events);

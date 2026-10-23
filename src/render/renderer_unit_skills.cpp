@@ -11,10 +11,19 @@ Renderer::Impl::SceneUnit* Renderer::Impl::scene_unit_of(tl::core::LevelScript* 
                                                          int64_t node) {
     NodeMap* nodes = nodes_of(machine);
     if (nodes == nullptr) return nullptr;
+    if (scene_units_changed) {
+        scene_units_by_node.clear();
+        for (auto& entry : scene_units) {
+            scene_units_by_node[entry.second.node].push_back(&entry.second);
+        }
+        scene_units_changed = false;
+    }
+    const auto listed = scene_units_by_node.find(node);
+    if (listed == scene_units_by_node.end()) return nullptr;
     const auto range = nodes->equal_range(node);
-    for (auto& entry : scene_units) {
-        SceneUnit& unit = entry.second;
-        if (unit.node != node || unit.entity == nullptr) continue;
+    for (SceneUnit* candidate : listed->second) {
+        SceneUnit& unit = *candidate;
+        if (unit.entity == nullptr) continue;
         const Ogre::SceneNode* parent = unit.entity->getParentSceneNode();
         for (auto it = range.first; it != range.second; ++it) {
             if (it->second == parent) return &unit;
@@ -177,55 +186,65 @@ void Renderer::Impl::step_unit_skills(float delta) {
         ++i;
     }
 
-    // Every unit holding a skill: `updateActiveSkill`,
-    // then the manager's `update`
-    // - cooldowns, runs, `EVENT_END`.
+    // Every unit holding a skill.
     for (const MachineView& view : machines()) {
         tl::core::LevelScript* const owner = view.script;
-        for (int64_t node : owner->casting_units()) {
-            tl::core::LevelScript::UnitCasting* k = owner->unit_casting(node);
-            if (k == nullptr) continue;
-            // DIVERGENCE: `CCharacter::unitInit`
-            // fires these as the unit is
-            // made; here it is the first frame the unit's skills are stepped,
-            // when its model is in the scene for the events to use.
-            if (!k->create_fired) {
-                k->create_fired = true;
-                fire_unit_skills_on_create(*owner, node);
+        for (int64_t node : owner->casting_units()) step_unit_skill_manager(*owner, node, delta);
+    }
+}
+
+// Every unit holding a skill: `updateActiveSkill`, then the
+// manager's `update` - cooldowns, runs, `EVENT_END`.
+void Renderer::Impl::step_unit_skill_manager(tl::core::LevelScript& machine, int64_t node,
+                                             float delta) {
+    tl::core::LevelScript* const owner = &machine;
+    tl::core::LevelScript::UnitCasting* k = owner->unit_casting(node);
+    if (k == nullptr) return;
+    // DIVERGENCE: `CCharacter::unitInit`
+    // fires these as the unit is
+    // made; here it is the first frame the unit's skills are stepped,
+    // when its model is in the scene for the events to use.
+    if (!k->create_fired) {
+        k->create_fired = true;
+        fire_unit_skills_on_create(*owner, node);
+    }
+    const std::string name = k->cast.skill;
+    const tl::core::SkillRunState* state = k->runner.state(name);
+    int64_t upkeep = 0;
+    if (const tl::core::KnownSkill* known = unit_skill_named(*owner, node, name)) {
+        if (state != nullptr) {
+            if (const tl::core::SkillProperty* property = known->property(state->level)) {
+                upkeep = static_cast<int64_t>(property->mana_cost_ot);
             }
-            const std::string name = k->cast.skill;
-            const tl::core::SkillRunState* state = k->runner.state(name);
-            int64_t upkeep = 0;
-            if (const tl::core::KnownSkill* known = unit_skill_named(*owner, node, name)) {
-                if (state != nullptr) {
-                    if (const tl::core::SkillProperty* property = known->property(state->level)) {
-                        upkeep = static_cast<int64_t>(property->mana_cost_ot);
-                    }
-                }
-            }
-            const tl::core::ActiveSkillUpdate update = tl::core::update_active_skill(
-                k->cast, state != nullptr ? state->animations : tl::core::SkillAnimations{},
-                k->runner.is_running(name), upkeep, k->mana, delta);
-            k->mana = std::max(0.0f, k->mana - update.mana_spent);
-            if (update.hide_trails) {
-                if (const SceneUnit* drawn = scene_unit_of(owner, node)) {
-                    const auto trails = unit_trails.find(drawn->entity);
-                    if (trails != unit_trails.end()) trails->second.trails.hide_hands();
-                }
-            }
-            tl::core::SkillCastContext context = unit_cast_context(*owner, node, nullptr, 0, false);
-            const auto lookup = [this, owner, node](const std::string& n) {
-                return unit_skill_named(*owner, node, n);
-            };
-            const UnitEventCaster saved = unit_event_caster;
-            unit_event_caster = unit_event_caster_for(owner, node);
-            // `updateActiveSkill`:
-            // `stopAllSkills(false, false, false)` when the upkeep runs dry.
-            if (update.stop_all) k->runner.stop_all(context, lookup, false, false);
-            k->runner.update(delta, context, lookup);
-            unit_event_caster = saved;
         }
     }
+    const tl::core::ActiveSkillUpdate update = tl::core::update_active_skill(
+        k->cast, state != nullptr ? state->animations : tl::core::SkillAnimations{},
+        k->runner.is_running(name), upkeep, k->mana, delta);
+    k->mana = std::max(0.0f, k->mana - update.mana_spent);
+    if (update.hide_trails) {
+        if (const SceneUnit* drawn = scene_unit_of(owner, node)) {
+            const auto trails = unit_trails.find(drawn->entity);
+            if (trails != unit_trails.end()) trails->second.trails.hide_hands();
+        }
+    }
+    const auto lookup = [this, owner, node](const std::string& n) {
+        return unit_skill_named(*owner, node, n);
+    };
+    if (!update.stop_all && !k->runner.any_running()) {
+        // Nothing of it runs: the update only counts its cooldowns down.
+        prepare_unit_cast(*owner, node);
+        k->runner.update(delta, tl::core::SkillCastContext{}, lookup);
+        return;
+    }
+    tl::core::SkillCastContext context = unit_cast_context(*owner, node, nullptr, 0, false);
+    const UnitEventCaster saved = unit_event_caster;
+    unit_event_caster = unit_event_caster_for(owner, node);
+    // `updateActiveSkill`:
+    // `stopAllSkills(false, false, false)` when the upkeep runs dry.
+    if (update.stop_all) k->runner.stop_all(context, lookup, false, false);
+    k->runner.update(delta, context, lookup);
+    unit_event_caster = saved;
 }
 
 }  // namespace tl::render

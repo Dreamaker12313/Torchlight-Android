@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "render/overlay_set.h"
 #include "render/text_layout.h"
+#include "render/text_scale.h"
 
 #include <OgreDataStream.h>
 #include <OgreFont.h>
@@ -516,8 +517,8 @@ void Hud::layout_floaties() {
             continue;
         }
 
-        const float char_h = (item.char_height > 0.0f ? item.char_height : kFloatyHeight) *
-                             ui_text_scale();
+        const float char_h =
+            (item.char_height > 0.0f ? item.char_height : kFloatyHeight) * ui_text_scale();
         const std::vector<std::string> lines = wrap(item.text, kFloatyWrap, char_h);
         std::string body;
         for (size_t l = 0; l < lines.size(); ++l) {

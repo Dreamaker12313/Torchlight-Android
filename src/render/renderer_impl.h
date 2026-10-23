@@ -40,6 +40,8 @@
 #include "render/particle_wrappers.h"
 #include "render/quest_dialog.h"
 #include "render/render_system_choice.h"
+#include "render/renderer_archive.h"
+#include "render/touch_camera.h"
 #include "render/touch_overlay.h"
 #include "render/unit_opacity.h"
 
@@ -200,6 +202,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -478,21 +481,23 @@ struct Renderer::Impl : tl::core::World {
     }
     using World::play_death_particle;
     // PORT: `World::play_death_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
-    void play_death_particle(const tl::core::UnitStats& unit, const Ogre::Vector3& at) {
-        World::play_death_particle(unit, from_ogre(at));
+    void play_death_particle(const tl::core::UnitStats& unit, const Ogre::Vector3& at,
+                             CharacterRef who) {
+        World::play_death_particle(unit, from_ogre(at), who);
     }
     using World::play_hit_particle;
     // PORT: `World::play_hit_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
     void play_hit_particle(const tl::core::UnitStats& victim, const Ogre::Vector3& from,
-                           const Ogre::Vector3& at) {
-        World::play_hit_particle(victim, from_ogre(from), from_ogre(at));
+                           const Ogre::Vector3& at, CharacterRef who) {
+        World::play_hit_particle(victim, from_ogre(from), from_ogre(at), who);
     }
     using World::play_strike_particle;
     // PORT: `World::play_strike_particle` (core/world.h) in OGRE's maths, for the renderer's callers.
     void play_strike_particle(const tl::core::UnitStats& attacker, const Ogre::Vector3& from,
-                              const Ogre::Vector3& at, float radius, bool critical, bool blocked) {
+                              const Ogre::Vector3& at, float radius, bool critical, bool blocked,
+                              CharacterRef who) {
         World::play_strike_particle(attacker, from_ogre(from), from_ogre(at), radius, critical,
-                                    blocked);
+                                    blocked, who);
     }
     using World::show_absorbed;
     // PORT: `World::show_absorbed` (core/world.h) in OGRE's maths, for the renderer's callers.
@@ -529,8 +534,8 @@ struct Renderer::Impl : tl::core::World {
     }
     // PORT: the hook (core/world.h) in OGRE's maths.
     void start_character_particle(const tl::core::UnitStats& unit, int slot,
-                                  const ogre::Vector3& at) override {
-        start_character_particle(unit, slot, to_ogre(at));
+                                  const ogre::Vector3& at, CharacterRef who) override {
+        start_character_particle(unit, slot, to_ogre(at), who);
     }
     // PORT: the hook (core/world.h) in OGRE's maths.
     void view_stretch_lines(const std::vector<Ogre::SceneNode*>& line_holders,
@@ -596,7 +601,7 @@ struct Renderer::Impl : tl::core::World {
     std::vector<std::string> archive_paths_under(const std::string& dir,
                                                  const char* suffix) const override;
     std::vector<std::string> data_paths_under(const std::string& dir) const override;
-    tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) const override;
+    std::vector<std::string> data_paths_in_listing_order(const std::string& dir) const override;
     bool console_game_data() const override;
     std::string dir_of_asset(const std::string& name) const override;
     tl::core::DungeonManager& loaded_dungeon_manager() const override;
@@ -625,6 +630,12 @@ struct Renderer::Impl : tl::core::World {
     /// Android: the EGL surface let go in the background and remade, the context kept.
     void watch_window_surface();
     void fit_camera_to_window() const;  ///< to the window's first viewport, the world's
+    /// config.txt's `fps_limit`: the rest of the frame slept out, after the present.
+    void pace_frame();
+    std::chrono::steady_clock::time_point next_frame;  ///< when the next frame may end
+    /// The desktop window as made, not as asked for: clamped to the screen, or made the
+    /// monitor's size by a window manager's fullscreen. `config`'s size becomes its size.
+    void adopt_window_size();
     Ogre::SceneManager* scene = nullptr;
     /// See `TransparentsWithScenery`.
     std::unique_ptr<Ogre::RenderQueueListener> transparents_listener;
@@ -636,6 +647,9 @@ struct Renderer::Impl : tl::core::World {
     /// The template's `LEVELPARTICLE` layout (`CGameClient +0x1080`), put on the player
     /// every frame (`advance`).
     Ogre::SceneNode* level_particle_node = nullptr;
+    /// The holders of the systems only the view draws (`hold_particle_with_the_world`).
+    Ogre::SceneNode* particle_holder_node = nullptr;
+    void hold_particle_with_the_world(const ParticleSystem& system);
 
     /// Everything a layout placed, for the ground query below.
     std::vector<Ogre::Entity*> layout_meshes;
@@ -674,6 +688,10 @@ struct Renderer::Impl : tl::core::World {
     /// `particle_systems`' order, each once; then the lookups script events make.
     ParticleRefs indexed_particles(std::initializer_list<ParticleIndex::Key> keys,
                                    std::initializer_list<ParticleIndex::Key> wrapper_keys);
+    /// The systems hanging from `holders`, in `particle_systems`' order.
+    ParticleRefs holder_systems(const std::vector<Ogre::SceneNode*>& holders);
+    /// `particle_index` brought up to date after a destruction made it stale.
+    void ensure_particle_index();
     ParticleRefs map_wrappers(const NodeMap& nodes);
     ParticleRefs link_systems(const NodeMap& nodes, int64_t node);
     ParticleRefs link_or_free_systems(const NodeMap& nodes, int64_t node);
@@ -1192,11 +1210,18 @@ struct Renderer::Impl : tl::core::World {
     unsigned long long prof_skin_us = 0;
     /// Frames a headless run has stepped since its last `sections:` lines.
     unsigned headless_profile_frames = 0;
+    unsigned headless_profile_windows = 0;
     /// The update's sections (core/section_profile.h) and OGRE's phases, per frame over
     /// `frames`, to the log when `print`; then both start over.
     void log_sections(unsigned frames, bool print);
     void print_sections(unsigned frames);
     void step_headless_sections();
+    /// The skinned units' poses for the frame about to be drawn, on the job pool
+    /// (renderer_poses.cpp); OGRE's own pass then finds them done.
+    void evaluate_poses();
+    std::vector<Ogre::Entity*> pose_jobs;
+    /// Entities evaluate_poses() posed since the last timing window.
+    unsigned long long posed_entities = 0;
     void step_near_poses(float level_delta, float rate);
     void count_player_footsteps(float was, float now);
     void step_linked_machine(NestedScript& machine, float delta, float speed,
@@ -1221,6 +1246,7 @@ struct Renderer::Impl : tl::core::World {
         unsigned long long scene_graph = 0;
         unsigned long long cull = 0;
         unsigned long long draw = 0;
+        unsigned long long poses = 0;  // evaluate_poses(), before the frame
         unsigned long long cull_by[kTargets] = {};
         unsigned long long draw_by[kTargets] = {};
 
@@ -1230,7 +1256,7 @@ struct Renderer::Impl : tl::core::World {
             first = true;
         }
         void reset() {
-            controllers = scene_graph = cull = draw = 0;
+            controllers = scene_graph = cull = draw = poses = 0;
             for (int i = 0; i < kTargets; ++i) cull_by[i] = draw_by[i] = 0;
         }
         void preUpdateSceneGraph(Ogre::SceneManager*, Ogre::Camera*) override {
@@ -1282,6 +1308,7 @@ struct Renderer::Impl : tl::core::World {
             tl::core::set_loading_boost(false);
             if (owner != nullptr) owner->step_stats_overlay();
             if (owner != nullptr) owner->touch_overlay.step();
+            if (owner != nullptr) owner->evaluate_poses();
             if (owner != nullptr) owner->frame_phases.start_frame();
             if (owner != nullptr) {
                 owner->gpu_timer.frame_started(
@@ -1299,6 +1326,10 @@ struct Renderer::Impl : tl::core::World {
                 owner->prof_skin_us += timer->getMicroseconds() - s0;
             }
             if (timer != nullptr) queued_us = timer->getMicroseconds();
+            return true;
+        }
+        bool frameEnded(const Ogre::FrameEvent&) override {
+            if (owner != nullptr) owner->pace_frame();
             return true;
         }
     };
@@ -1476,8 +1507,37 @@ struct Renderer::Impl : tl::core::World {
         bool listed = false;
         /// `CSceneNodeObject +0x81` of the link (X360 `+0x6d`): shown.
         bool visible = true;
+        /// Placed by `place_particle_layout`: its file, its holders in placement order and each
+        /// one's pose in the placement's frame, so its systems can be kept for the next.
+        std::string file;
+        std::vector<Ogre::SceneNode*> holders;
+        std::vector<std::pair<Ogre::Vector3, Ogre::Quaternion>> frames;
     };
     std::map<uint32_t, PlacedParticle> placed_particles;
+    /// PORT: a `CParticle`'s systems once it is taken down, stopped and out of the scene, kept
+    /// by file for its next placement, as the original's preloader keeps its `CParticleCache`s
+    /// (its getParticleCache and returnParticleCache: the last returned is the next taken).
+    struct ParkedParticle {
+        std::vector<Ogre::SceneNode*> holders;
+        std::vector<std::pair<Ogre::Vector3, Ogre::Quaternion>> frames;
+        std::vector<ParticleSystem> systems;
+    };
+    std::map<std::string, std::vector<ParkedParticle>> parked_particles;
+    std::unordered_set<const Ogre::SceneNode*> parked_holders;
+    /// A kept `CParticle` of `file` put back at `at` (or on `parent`), its systems listed again
+    /// and started from `particle_systems`' end; false when none is kept.
+    bool unpark_particle(const std::string& file, const Ogre::Vector3& at,
+                         const Ogre::Quaternion& facing, bool riding);
+    void claim_particle_holders(size_t before, Ogre::SceneNode* parent,
+                                std::vector<Ogre::SceneNode*>& holders);
+    void remember_parkable(uint32_t id, const std::string& file,
+                           const std::vector<Ogre::SceneNode*>& holders, const Ogre::Vector3& at,
+                           const Ogre::Quaternion& facing, bool riding);
+    std::map<uint32_t, bool> parkable_placements(const std::set<const Ogre::SceneNode*>& going);
+    void park_placements(std::map<uint32_t, ParkedParticle>& parking);
+    void forget_particle_nodes(const std::set<const Ogre::SceneNode*>& going);
+    void destroy_all_particle_systems();
+
     uint32_t next_placed_particle = 0;
     /// How many placements are `listed`.
     size_t listed_particles = 0;
@@ -1500,6 +1560,7 @@ struct Renderer::Impl : tl::core::World {
                               const std::string& reference);
     /// Drop the placements none of whose systems is left.
     void forget_dead_cparticles();
+    std::vector<uint32_t> live_cparticles;  ///< forget_dead_cparticles()'s, kept for its storage
 
     /// Increasing paint order for layout meshes; see place_mesh().
     unsigned layout_draw_order = 1;
@@ -1537,17 +1598,13 @@ struct Renderer::Impl : tl::core::World {
         bool was_zoomed_in = false;
         bool have_focus = false;
         bool close_up = false;  ///< the state last logged
+        TouchCamera touch;
     };
     GameCamera game_camera;
     /// The right stick's zoom, -1 to 1 (`InputState::zoom`), and the dolly (`CCameraControl +0x38`,
     /// X360 `+0x18`), reset each level. `CCameraControl::CCameraControl`
     /// (X360 inline in `CGame::createCamera`): dolly 28.5, the rest zero.
     float camera_zoom_input = 0.0f;
-    /// Horizontal right-stick orbit and vertical camera pitch controls.
-    float camera_orbit_input = 0.0f;
-    float camera_pitch_input = 0.0f;
-    float camera_pitch_adjust = 0.0f;
-    float camera_zoom_delta = 0.0f;
     /// The frame's delta for the camera (`step_player`); 0 for any other re-aim.
     float camera_delta = 0.0f;
     /// The unit talked to in the quest window (target in AI state 0x1f), and the dialog's
@@ -1779,6 +1836,13 @@ struct Renderer::Impl : tl::core::World {
     /// Each frame: `CBaseUnit::update`'s theme half for the player and every
     /// placed unit, then their theme particles moved onto their bones.
     void step_unit_themes();
+    /// What step_unit_themes() reads of the machines a frame: each placed unit's effect
+    /// manager's themes, and the machines that can answer for a unit.
+    struct UnitThemeSources {
+        std::map<const SceneUnit*, const std::vector<const tl::core::UnitTheme*>*> effect_themes;
+        std::vector<const tl::core::LevelScript*> machines;
+    };
+    UnitThemeSources unit_theme_sources();
     /// `CLevel::updateNPCIcons` over the
     /// placed units.
     void update_npc_icons() override;
@@ -2279,7 +2343,9 @@ struct Renderer::Impl : tl::core::World {
     /// One of a character's own particles (`CCharacter +0x4a8`) put at `at`
     /// and started. Nothing where the slot is null.
     void start_character_particle(const tl::core::UnitStats& unit, int slot,
-                                  const Ogre::Vector3& at);
+                                  const Ogre::Vector3& at, CharacterRef who);
+    /// The slot particles whose holders are among `going` forgotten (they are destroyed).
+    void forget_slot_particles(const std::set<const Ogre::SceneNode*>& going);
     /// `CEffect::playFX`: each asking effect's `PARTICLE_FX` 0.1 above `centre`,
     /// started. `who` is for the log.
     void play_effect_fx(tl::core::EffectManager& effects, const Ogre::Vector3& centre,
@@ -2409,6 +2475,7 @@ struct Renderer::Impl : tl::core::World {
     /// Every placed unit's cast: its animation's keys, `updateActiveSkill` and
     /// its manager's `update`.
     void step_unit_skills(float delta);
+    void step_unit_skill_manager(tl::core::LevelScript& machine, int64_t node, float delta);
     /// The entity a machine's unit is drawn with, or null.
     SceneUnit* scene_unit_of(tl::core::LevelScript* machine, int64_t node) override;
     // PORT: drawing, a skill event's particle systems (renderer_effects.cpp).
@@ -2438,7 +2505,8 @@ struct Renderer::Impl : tl::core::World {
                        const Ogre::Vector3& forward);
     void view_destroy_node(Ogre::SceneNode* node) override;
     void view_transients_alive(const std::vector<const std::vector<Ogre::SceneNode*>*>& lists,
-                               const std::vector<char>& stop, std::vector<char>& alive) override;
+                               const std::vector<char>& stop, const std::vector<char>& by_updating,
+                               std::vector<char>& alive) override;
     bool view_held_item(const Ogre::Entity* held, Ogre::Vector3& hand, float& height) const;
     /// A particle layout placed at `at` (or riding `parent`), and its systems' nodes.
     std::vector<Ogre::SceneNode*> place_particle_layout(const std::string& reference,
@@ -2449,8 +2517,11 @@ struct Renderer::Impl : tl::core::World {
     void destroy_particle_holders(std::vector<Ogre::SceneNode*>& holders) override;
     /// `CBaseUnit::sphereCollision` for a drawn unit: the
     /// first `t` in [0, 1] its collision model is touched, above 1 if not; false if not drawn.
-    bool unit_collider_sweep(int64_t id, const tl::core::Vec3& from, const tl::core::Vec3& to,
-                             float radius, float& t) override;
+    bool unit_collider_sweep(const Ogre::Entity* entity, const tl::core::Vec3& from,
+                             const tl::core::Vec3& to, float radius, float& t);
+    void unit_collider_sweeps(const std::vector<int64_t>& ids, const tl::core::Vec3& from,
+                              const tl::core::Vec3& to, float radius, std::vector<float>& t,
+                              std::vector<char>& drawn) override;
     /// A character's collision model (`CCharacter +0x4c8`): `media/models/collider.mesh`,
     /// what `loadModel` gives units with no `COLLISIONFILE`.
     tl::core::CollisionWorld unit_collider;
@@ -2459,6 +2530,8 @@ struct Renderer::Impl : tl::core::World {
     void follow_subject();
     /// `CCameraControl::updateGameCamera` for the engine's default framing.
     void update_game_camera(const Ogre::Vector3& player_at);
+    void tray_bumpers(bool vendor, bool rb, bool lb);
+    void create_interface();
     void step_player(float delta, const tl::core::InputState& in) override;
     void drive_player(float delta);
     Ogre::Entity* place_mesh(const MeshPlacement& placement);
@@ -2640,6 +2713,8 @@ struct Renderer::Impl : tl::core::World {
 namespace renderer_detail {
 /// Declared here because mounting the archive invalidates the caches.
 void forget_archive_index();
+/// Every material script in the archive read once and its declared names filed.
+void index_material_scripts();
 
 void forget_parsed_materials();
 
@@ -2687,17 +2762,6 @@ std::string fill_empty_texture_units(const std::string& text, const std::string&
 
 void parse_material_script(const std::string& script, std::vector<std::string>* redefined = nullptr,
                            bool force = false);
-extern std::unordered_map<std::string, std::vector<Ogre::FileInfo>> g_archive_index;
-extern std::unordered_map<std::string, std::vector<std::string>> g_materials_by_dir;
-extern bool g_archive_indexed;
-bool ends_with_lower(const std::string& text, const char* suffix);
-std::string lowered(const std::string& text);
-void forget_archive_index();
-void ensure_archive_index();
-size_t material_script_rank(const std::string& script);
-const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename);
-std::vector<std::string> archive_paths_under(const std::string& dir, const char* suffix);
-std::vector<std::string> archive_paths_in_listing_order(const std::string& dir, const char* suffix);
 /// The file of the spawn class whose `NAME` is `name` (case aside), or empty.
 std::vector<std::string> underscore_words(const std::string& name);
 std::string wardrobe_texture_for(const std::string& mesh_name, const std::string& dir,
@@ -2746,18 +2810,6 @@ std::string fill_empty_texture_units(const std::string& text, const std::string&
                                      size_t& filled);
 void ensure_skeleton(const Ogre::MeshPtr& mesh, const std::string& mesh_name,
                      const std::string& dir);
-std::string resolve_archive_path(const std::string& reference);
-/// Keep read_resource()'s data files only while the same archives are mounted.
-void remember_mounts(const std::string& mounts);
-/// Absolute roots of extracted mod folders, in priority order; these filesystems
-/// are searched case-insensitively before the base archive on iOS.
-void set_mod_roots(const std::vector<std::string>& roots);
-bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes);
-std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix);
-std::vector<std::string> data_paths_under(const std::string& dir);
-tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size);
-std::vector<std::string> data_paths_in_listing_order(const std::string& dir);
-std::vector<uint8_t> read_resource(const std::string& path);
 /// The pet a new character starts with unless the creation screen says otherwise
 /// (`charactercreate.layout` lists `Dog` first).
 constexpr const char* kMenuPetUnit = "Dog";

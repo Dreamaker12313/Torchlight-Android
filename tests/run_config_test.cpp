@@ -67,4 +67,32 @@ TL_TEST(only_a_desktop_file_carries_the_resolution) {
     TL_CHECK_EQ(read.width, 1280u);
     TL_CHECK_EQ(read.height, 720u);
     TL_CHECK(!read.fullscreen);
+    TL_CHECK(read.vsync);
+    TL_CHECK(!parse_run_config("vsync=0\n", RunConfig{}).vsync);
+}
+
+TL_TEST(the_frame_limit_is_in_every_file_and_reads_as_a_number) {
+    RunConfig phone;
+    phone.fps_limit = 60;
+    const std::string text = run_config_text(phone);
+    TL_CHECK(text.find("fps_limit=60") != std::string::npos);
+    TL_CHECK_EQ(parse_run_config(text, RunConfig{}).fps_limit, 60u);
+    // A file from before the key keeps the platform's default.
+    TL_CHECK_EQ(parse_run_config("debug=0\n", phone).fps_limit, 60u);
+    TL_CHECK_EQ(parse_run_config("fps_limit=0\n", phone).fps_limit, 0u);
+    // Nonsense leaves the default.
+    TL_CHECK_EQ(parse_run_config("fps_limit=-5\n", phone).fps_limit, 60u);
+    TL_CHECK_EQ(parse_run_config("fps_limit=99999\n", phone).fps_limit, 60u);
+}
+
+TL_TEST(the_free_camera_is_in_every_file_and_a_file_from_before_keeps_the_default) {
+    RunConfig on;
+    on.free_camera = true;
+    const std::string text = run_config_text(on);
+    TL_CHECK(text.find("free_camera=1") != std::string::npos);
+    TL_CHECK(parse_run_config(text, RunConfig{}).free_camera);
+    TL_CHECK(!parse_run_config("free_camera=0\n", on).free_camera);
+    // A file from before the key keeps the platform's default.
+    TL_CHECK(parse_run_config("debug=1\n", on).free_camera);
+    TL_CHECK(!parse_run_config("debug=1\n", RunConfig{}).free_camera);
 }

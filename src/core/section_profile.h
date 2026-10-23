@@ -25,6 +25,7 @@ enum class Section : uint8_t {
     Ai,          // the AI's decision
     Pathing,     // following and re-planning a route
     Motion,      // moving the sphere against the collision
+    Route,       // the route searches, inside the AI and pathing both
     Count
 };
 

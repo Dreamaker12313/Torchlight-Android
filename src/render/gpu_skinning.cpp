@@ -2,6 +2,7 @@
 #include "render/gpu_skinning.h"
 
 #include "core/log.h"
+#include "render/skinned_entities.h"
 
 #include <OgreEntity.h>
 #include <OgreGpuProgramManager.h>
@@ -407,8 +408,7 @@ void GpuSkinning::step(Ogre::SceneManager* scene) {
     size_t on_gpu = 0;
     size_t skinned = 0;
     size_t handed = 0;
-    for (const auto& entry : scene->getMovableObjects(Ogre::MOT_ENTITY)) {
-        auto* entity = static_cast<Ogre::Entity*>(entry.second);
+    for (Ogre::Entity* entity : skinned_entities().of(scene)) {
         if (!entity->hasSkeleton() || entity->hasVertexAnimation()) continue;
         ++skinned;
 

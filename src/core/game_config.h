@@ -66,6 +66,8 @@ struct GameConfig {
     unsigned width = 1280;
     unsigned height = 720;
     bool fullscreen = false;  ///< the desktop's config.txt: fullscreen at width x height
+    bool vsync = true;        ///< the desktop's config.txt: the window waits for the refresh
+    unsigned fps_limit = 0;   ///< config.txt's: the most frames a second, 0 for no limit
 
     /// Vertical field of view in degrees, or 0 to derive it from the authored value and the
     /// viewport's aspect. The game's settings file says `FOV : 45.000000`, the vertical angle at

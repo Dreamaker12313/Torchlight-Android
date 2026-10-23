@@ -6,7 +6,6 @@
 #include "formats/adm.h"
 #include "render/layout_screen.h"
 #include "render/menu_chrome.h"
-#include "render/overlay_set.h"
 #include "render/text_layout.h"
 
 #include <OgreFont.h>
@@ -712,7 +711,7 @@ void MainMenu::layout_editor_info(float across, float down) {
         if (label == nullptr) continue;
         const bool is_shadow = (label == editor_info_shadow_);
         const float dx = is_shadow ? kLabelShadow * scale_ : 0.0f;
-        set_char_height(label, height / down);
+        label->setCharHeight(height / down);
         label->setPosition((left + dx) / across, (top + dx) / down);
         label->show();
     }
@@ -1033,7 +1032,7 @@ void MainMenu::layout_console_buttons(float across, float down) {
             const bool is_shadow = (label == button.shadow);
             const float dx = is_shadow ? kLabelShadow * scale_ / across : 0.0f;
             const float dy = is_shadow ? kLabelShadow * scale_ / down : 0.0f;
-            set_char_height(label, relative_height);
+            label->setCharHeight(relative_height);
             label->setPosition(centre_x + dx, label_top + dy);
             label->show();
         }
@@ -1068,7 +1067,7 @@ void MainMenu::layout_console_bar(float across, float down) {
             const float height = kConsoleSmallPoints * points_to_char_pixels() * scale_;
             const float box_top = strip_top + (item.y + item.text_y) * scale_;
             const float centred = box_top + (item.text_h * scale_ - height) * 0.5f;
-            set_char_height(item.label, height / down);
+            item.label->setCharHeight(height / down);
             item.label->setPosition((strip_left + (item.x + item.text_x) * scale_) / across,
                                     centred / down);
             item.label->show();
@@ -1089,7 +1088,7 @@ void MainMenu::layout_console_copyright(float across, float down) {
     // scaled by `height / 768`, so an authored y is just `y * scale_`.
     const float height = kConsoleSmallPoints * points_to_char_pixels() * scale_;
     copyright_->setAlignment(Ogre::TextAreaOverlayElement::Left);
-    set_char_height(copyright_, height / down);
+    copyright_->setCharHeight(height / down);
     // Left-aligned at the authored rectangle's right offset (704), where the console draws the
     // text's left edge; its authored left (240) would sit under the button column.
     copyright_->setPosition(bottom_right.x.offset * scale_ / across,
@@ -1314,7 +1313,7 @@ void MainMenu::layout() {
             const bool is_shadow = (label == button.shadow);
             const float dx = is_shadow ? kLabelShadow * scale_ / across : 0.0f;
             const float dy = is_shadow ? kLabelShadow * scale_ / down : 0.0f;
-            set_char_height(label, relative_height);
+            label->setCharHeight(relative_height);
             label->setPosition(centre_x + dx, label_top + dy);
             label->show();
         }
@@ -1327,7 +1326,7 @@ void MainMenu::layout() {
         const float right = across - 60.0f * scale_;
         const float top = down - 20.0f * scale_;
         const float height = kSmallFontSize * points_to_char_pixels() * scale_;  // SerifSmall
-        set_char_height(copyright_, height / down);
+        copyright_->setCharHeight(height / down);
         copyright_->setPosition(right / across, top / down);
         copyright_->show();
     }
@@ -1845,7 +1844,7 @@ void MainMenu::layout_extras(float across, float down) {
         for (Ogre::TextAreaOverlayElement* text : {label.shadow, label.text}) {
             if (text == nullptr) continue;
             const float drop = text == label.shadow ? kLabelShadow * scale_ : 0.0f;
-            set_char_height(text, height / down);
+            text->setCharHeight(height / down);
             text->setPosition((x + drop) / across, (y + drop) / down);
             text->show();
         }

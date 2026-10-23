@@ -515,16 +515,25 @@ void EffectManager::calculate_effect_values() {
     // (0 to 0x90), then list by list, then over the list's live effects of that
     // type, and appends each effect's theme (+0x130) once. So the list is in type
     // order, and an effect of a type outside that range gives no theme.
+    // Taken here list by list and sorted by type, stably: the same order, one walk.
     themes_.clear();
     constexpr int kThemePassTypes = 0x91;
-    for (int type = 0; type < kThemePassTypes; ++type) {
-        for (int activation = 0; activation < 2; ++activation) {
-            for (const LiveEffect& live : lists_[static_cast<size_t>(activation)]) {
-                if (live.effect.type != type || live.expired() || live.theme == nullptr) continue;
-                if (std::find(themes_.begin(), themes_.end(), live.theme) == themes_.end()) {
-                    themes_.push_back(live.theme);
-                }
+    std::vector<std::pair<int, const UnitTheme*>>& held = theme_scratch_;
+    held.clear();
+    for (int activation = 0; activation < 2; ++activation) {
+        for (const LiveEffect& live : lists_[static_cast<size_t>(activation)]) {
+            const int type = live.effect.type;
+            if (type < 0 || type >= kThemePassTypes || live.expired() || live.theme == nullptr) {
+                continue;
             }
+            held.emplace_back(type, live.theme);
+        }
+    }
+    std::stable_sort(held.begin(), held.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& entry : held) {
+        if (std::find(themes_.begin(), themes_.end(), entry.second) == themes_.end()) {
+            themes_.push_back(entry.second);
         }
     }
 }

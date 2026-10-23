@@ -23,6 +23,31 @@ bool g_ready = false;
 // libnx's axes are signed 16-bit, the 360 pad's range, so `core/gamepad.h`'s `kStickMax`,
 // deadzones and rescale apply unchanged.
 
+// DIVERGENCE (platform): two fingers on the handheld's screen zoom, under the free camera
+// (render/touch_camera.h): the change in their distance in dolly units, spreading closer,
+// scaled as the phones' touch pad scales it (60 over the screen's short side, 720).
+float touch_pinch() {
+    static bool ready = false;
+    static float last = 0.0f;
+    if (!ready) {
+        hidInitializeTouchScreen();
+        ready = true;
+    }
+    HidTouchScreenState touch{};
+    if (hidGetTouchScreenStates(&touch, 1) == 0 || touch.count < 2) {
+        last = 0.0f;
+        return 0.0f;
+    }
+    const float dx =
+        static_cast<float>(touch.touches[0].x) - static_cast<float>(touch.touches[1].x);
+    const float dy =
+        static_cast<float>(touch.touches[0].y) - static_cast<float>(touch.touches[1].y);
+    const float distance = std::sqrt(dx * dx + dy * dy);
+    const float delta = last > 0.0f ? -(distance - last) * (60.0f / 720.0f) : 0.0f;
+    last = distance;
+    return delta;
+}
+
 }  // namespace
 
 InputState poll_platform_input() {
@@ -69,6 +94,7 @@ InputState poll_platform_input() {
     tl::core::filter_stick(look_raw_x, look_raw_y, tl::core::kRightStickDeadzone);
     in.zoom = static_cast<float>(look_raw_y) / kStickMax;
     in.look_x = static_cast<float>(look_raw_x) / kStickMax;
+    in.zoom_delta = touch_pinch();
 
     in.confirm = (held & HidNpadButton_A) != 0;
     // X is Attack and A is Interact, which is the console's own map by label

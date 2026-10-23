@@ -268,7 +268,7 @@ void Renderer::Impl::step_linked_machine(NestedScript& machine, float delta, flo
 
     // A machine with no wires, triggers, playback or characters stops being stepped
     // (a spent CAST SKILL ON DEATH layout); a Play on a Layout Link Timeline re-arms it.
-    if (machine.script.wire_count() == 0 && machine.script.trigger_count() == 0 &&
+    if (!machine.script.has_wires() && machine.script.trigger_count() == 0 &&
         !machine.script.timelines_playing() && !machine.script.has_characters() &&
         !machine.script.has_sound_nodes()) {
         machine.running = false;
@@ -975,6 +975,7 @@ void Renderer::Impl::forget_unit_entity(Ogre::Entity* entity) {
             // Its triggers' particles, some on nodes of their own.
             clear_unit_themes(it->second.themes);
             it = scene_units.erase(it);
+            scene_units_changed = true;
         }
         for (auto& entry : spawned) {
             std::vector<SpawnedUnit>& owned = entry.second;
@@ -2211,9 +2212,7 @@ void Renderer::shutdown() {
     // ParticleUniverse's systems are MovableObjects of the scene manager that
     // root.reset() destroys, and its factories are registered with Root; so it
     // goes before either. Impl's own member would otherwise stop it after both.
-    for (ParticleSystem& system : m.particle_systems) {
-        if (system.pu.system != nullptr) destroy_torchlight_particle(m.scene, system.pu);
-    }
+    m.destroy_all_particle_systems();
     m.particle_universe.stop();
 
     // Its materials while the MaterialManager is still there.

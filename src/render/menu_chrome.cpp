@@ -11,9 +11,9 @@
 #include <OgreTechnique.h>
 #include <OgreTextureUnitState.h>
 
+#include <algorithm>
 #include <map>
 #include <string>
-#include <algorithm>
 
 namespace tl::render {
 
@@ -24,6 +24,11 @@ float g_ui_text_scale = 1.0f;
 float ui_text_scale() { return g_ui_text_scale; }
 
 void set_ui_text_scale(float scale) { g_ui_text_scale = std::clamp(scale, 0.8f, 1.4f); }
+
+float ui_text_size_scale(int text_size) {
+    constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
+    return kTextSizes[std::clamp(text_size, 0, 2)];
+}
 
 Ogre::MaterialPtr build_menu_material(const std::string& name, const Ogre::TexturePtr& texture,
                                       float alpha) {

@@ -1,0 +1,63 @@
+Torchlight: a scene node can promise that every object under it carries only certain
+visibility flags (setSubtreeVisibilityFlags), and a pass whose combined mask takes none
+of them skips that subtree in _findVisibleObjects. The port hangs the particle systems'
+holders - about a thousand nodes in a crowd fight - under one node promising the world's
+flag, so the light map and shadow map passes, which take no particle system of those,
+stop walking them. Each object would have been rejected by isVisible() anyway; what is
+drawn is unchanged. All bits, the default, promises nothing. Not __SWITCH__-guarded:
+every target runs these passes.
+
+diff --git a/OgreMain/include/OgreSceneNode.h b/OgreMain/include/OgreSceneNode.h
+index 291133e17..56556b985 100644
+--- a/OgreMain/include/OgreSceneNode.h
++++ b/OgreMain/include/OgreSceneNode.h
+@@ -84,6 +84,10 @@ namespace Ogre {
+         /// World-Axis aligned bounding box, updated only through _update
+         AxisAlignedBox mWorldAABB;
+ 
++        /// Torchlight: the visibility flags every object under this node carries, if the caller
++        /// vouches for it (setSubtreeVisibilityFlags); all bits by default.
++        uint32 mSubtreeVisibilityFlags;
++
+         void updateFromParentImpl(void) const override;
+ 
+         /** See Node */
+@@ -212,6 +216,14 @@ namespace Ogre {
+                     as the objects being rendered. For debugging purposes.
+             @param onlyShadowCasters
+         */
++        /** Torchlight: promise that every object in this node's subtree, now and later, carries
++            only visibility flags within @p flags. A pass whose combined visibility mask takes
++            none of them then skips the whole subtree in _findVisibleObjects, as it would have
++            rejected each object. All bits (the default) promises nothing.
++        */
++        void setSubtreeVisibilityFlags(uint32 flags) { mSubtreeVisibilityFlags = flags; }
++        uint32 getSubtreeVisibilityFlags(void) const { return mSubtreeVisibilityFlags; }
++
+         void _findVisibleObjects(Camera* cam, RenderQueue* queue,
+             VisibleObjectsBoundsInfo* visibleBounds, 
+             bool includeChildren = true, bool displayNodes = false, bool onlyShadowCasters = false);
+diff --git a/OgreMain/src/OgreSceneNode.cpp b/OgreMain/src/OgreSceneNode.cpp
+index 3d35e5f0d..02dffb3f6 100644
+--- a/OgreMain/src/OgreSceneNode.cpp
++++ b/OgreMain/src/OgreSceneNode.cpp
+@@ -34,6 +34,7 @@ namespace Ogre {
+         , mCreator(creator)
+         , mAutoTrackTarget(0)
+         , mGlobalIndex(-1)
++        , mSubtreeVisibilityFlags(0xFFFFFFFF)
+         , mYawFixed(false)
+         , mIsInSceneGraph(false)
+         , mShowBoundingBox(false)
+@@ -224,6 +225,11 @@ namespace Ogre {
+         VisibleObjectsBoundsInfo* visibleBounds, bool includeChildren, 
+         bool displayNodes, bool onlyShadowCasters)
+     {
++        // Torchlight: a subtree the pass's mask takes nothing of (setSubtreeVisibilityFlags).
++        if (mSubtreeVisibilityFlags != 0xFFFFFFFF && mCreator &&
++            !(mSubtreeVisibilityFlags & mCreator->_getCombinedVisibilityMask()))
++            return;
++
+         // Check self visible
+         if (!cam->isVisible(mWorldAABB))
+             return;

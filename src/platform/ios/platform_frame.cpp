@@ -1,10 +1,10 @@
-#include "core/platform.h"
-#include "core/log.h"
-#include "platform/ios/ios_app.h"
-#include <cstdlib>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <thread>
+#include "core/log.h"
+#include "core/platform.h"
+#include "platform/ios/ios_app.h"
 
 namespace tl::core {
 std::string platform_program_folder() {
@@ -20,24 +20,51 @@ const std::string& platform_data_root() {
     return root;
 }
 void platform_window_params(std::map<std::string, std::string>& params) {
-    params["externalViewHandle"] = std::to_string(reinterpret_cast<std::uintptr_t>(tl_ios_view_handle()));
-    params["externalViewControllerHandle"] = std::to_string(reinterpret_cast<std::uintptr_t>(tl_ios_controller_handle()));
+    params["externalViewHandle"] =
+        std::to_string(reinterpret_cast<std::uintptr_t>(tl_ios_view_handle()));
+    params["externalViewControllerHandle"] =
+        std::to_string(reinterpret_cast<std::uintptr_t>(tl_ios_controller_handle()));
 }
 void platform_error_message(const std::string& summary, const std::string& detail) {
     TL_LOG_ERROR("%s: %s", summary.c_str(), detail.c_str());
 }
 void pump_events() {
+    note_events_pumped();
     while (!tl_ios_app_active()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 bool should_keep_running() { return true; }
-bool memory_usage(unsigned long long& used, unsigned long long& total) { (void)used; (void)total; return false; }
+void platform_set_frame_rate(float fps) { (void)fps; }
+void platform_sleep_until(std::chrono::steady_clock::time_point deadline) {
+    std::this_thread::sleep_until(deadline);
+}
+bool memory_usage(unsigned long long& used, unsigned long long& total) {
+    (void)used;
+    (void)total;
+    return false;
+}
 void set_loading_boost(bool on) { (void)on; }
-bool core_busy(float busy[kCoreCount]) { (void)busy; return false; }
-bool clock_rates(unsigned& cpu_mhz, unsigned& gpu_mhz, unsigned& memory_mhz) { (void)cpu_mhz; (void)gpu_mhz; (void)memory_mhz; return false; }
+bool core_busy(float busy[kCoreCount]) {
+    (void)busy;
+    return false;
+}
+bool clock_rates(unsigned& cpu_mhz, unsigned& gpu_mhz, unsigned& memory_mhz) {
+    (void)cpu_mhz;
+    (void)gpu_mhz;
+    (void)memory_mhz;
+    return false;
+}
 void start_profiler() {}
 void stop_profiler() {}
 void profiler_mark(const char* label) { (void)label; }
+void prepare_worker_thread(unsigned index) { (void)index; }
 void start_gpu_waits() {}
-bool gpu_wait_times(GpuWaitTimes& game, GpuWaitTimes& others) { (void)game; (void)others; return false; }
-const char* gpu_wait_name(int kind) { (void)kind; return ""; }
+bool gpu_wait_times(GpuWaitTimes& game, GpuWaitTimes& others) {
+    (void)game;
+    (void)others;
+    return false;
+}
+const char* gpu_wait_name(int kind) {
+    (void)kind;
+    return "";
+}
 }  // namespace tl::core

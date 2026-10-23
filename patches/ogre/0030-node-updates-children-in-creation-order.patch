@@ -1,0 +1,49 @@
+Torchlight: a node updates its waiting children in the order they were made, not by pointer.
+`Node::mChildrenToUpdate` was a `std::set<Node*>`, so `_update` walked the children that asked
+for an update in address order - the heap's, which differs from run to run (Windows randomises it;
+on the console any change to what was allocated earlier moves it). Node listeners run in that walk,
+and Torchlight's ribbon trail draws `RangeRandom` in its `nodeUpdated`: the same random numbers
+went to different chains each run, and the crowd fight's lightning around the player came out
+0.19-0.22% different between two pinned runs of one build, with an identical draw stream
+(2026-10-23). Each node takes a serial when it is made and the set is ordered by it
+(`Node::SerialLess`); nothing else about the set changes. Not __SWITCH__-guarded: every target
+steps the same scene.
+
+diff --git a/OgreMain/include/OgreNode.h b/OgreMain/include/OgreNode.h
+index 683d7303f..0cc112555 100644
+--- a/OgreMain/include/OgreNode.h
++++ b/OgreMain/include/OgreNode.h
+@@ -101,11 +101,19 @@ namespace Ogre {
+         /// Collection of pointers to direct children
+         ChildNodeMap mChildren;
+ 
+-        typedef std::set<Node*> ChildUpdateSet;
++        /// Torchlight: the order the nodes were made in, so a parent updates its waiting children
++        /// in that order (by pointer, the order changed from run to run).
++        struct SerialLess
++        {
++            bool operator()(const Node* a, const Node* b) const { return a->mSerial < b->mSerial; }
++        };
++        typedef std::set<Node*, SerialLess> ChildUpdateSet;
+         /// List of children which need updating, used if self is not out of date but children are
+         ChildUpdateSet mChildrenToUpdate;
+         /// Friendly name of this node
+         String mName;
++        /// Torchlight: the order this node was made in among all nodes (`SerialLess`).
++        uint32 mSerial;
+ 
+         /// Flag to indicate own transform from parent is out of date
+         mutable bool mNeedParentUpdate : 1;
+diff --git a/OgreMain/src/OgreNode.cpp b/OgreMain/src/OgreNode.cpp
+index 0bc897436..b7b78b261 100644
+--- a/OgreMain/src/OgreNode.cpp
++++ b/OgreMain/src/OgreNode.cpp
+@@ -52,6 +52,8 @@ namespace Ogre {
+         mInitialScale(Vector3::UNIT_SCALE),
+         mListener(0)
+     {
++        static uint32 serials = 0;  // Torchlight: SerialLess
++        mSerial = ++serials;
+         needUpdate();
+     }
+ 

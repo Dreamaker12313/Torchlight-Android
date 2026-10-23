@@ -4,6 +4,7 @@
 #include "formats/dds.h"
 #include "render/menu_chrome.h"
 #include "render/renderer_impl.h"
+#include "render/skinned_entities.h"
 
 namespace tl::render {
 
@@ -519,9 +520,9 @@ void parse_material_script(const std::string& script, std::vector<std::string>* 
                 // archive keeps the name.** Runic's OGRE parses a directory's
                 // scripts together, in archive order, the first time anything
                 // in it is looked up (`ResourceGroupManager::
-                // addScriptForParsingLater` 0x25e5a0 keys them by directory,
-                // `parseCachedScripts` 0x25db50 runs them from
-                // `ResourceManager::getByName` 0x267470, libOgreMain-1.6.5),
+                // addScriptForParsingLater` keys them by directory,
+                // `parseCachedScripts` runs them from
+                // `ResourceManager::getByName`, libOgreMain-1.6.5),
                 // and names them `<DIRECTORY>/<name>`
                 // (`CScriptListener::createObject`, `CMeshListener::processMaterialName`).
                 // A later script's `create` of a taken name throws,
@@ -1030,6 +1031,8 @@ size_t rebind_scene_materials(Ogre::SceneManager* scene) {
     size_t rebound = 0;
     for (const auto& entry : scene->getMovableObjects(Ogre::MOT_ENTITY)) {
         rebound += rebind_materials(static_cast<Ogre::Entity*>(entry.second));
+        // A floor's thousands of room pieces, once per redefining script.
+        tl::core::keep_responsive();
     }
     return rebound;
 }
@@ -1127,8 +1130,13 @@ void parse_sibling_material(const std::string& mesh_name, std::vector<std::strin
     const std::string script =
         (dot == std::string::npos ? mesh_name : mesh_name.substr(0, dot)) + ".material";
 
-    auto& groups = Ogre::ResourceGroupManager::getSingleton();
-    if (groups.resourceExists(kGameGroup, script)) {
+    // From the index: `resourceExists` answers a path through `ZipArchive::exists`, a
+    // lower-cased pass over every entry comparing basenames (STRICT=0), once per placed mesh;
+    // most of a dungeon floor's load went there. The index answers the same question.
+    std::string basename;
+    std::string path;
+    Ogre::StringUtil::splitFilename(script, basename, path);
+    if (archive_entries(basename) != nullptr) {
         parse_material_script(script, redefined, force);
         return;
     }
@@ -1720,137 +1728,9 @@ void ensure_skeleton(const Ogre::MeshPtr& mesh, const std::string& mesh_name,
     if (path.empty()) return;
 
     mesh->setSkeletonName(path);
+    skinned_entities().rescan();
     if (mesh->getSkeleton()) {
         TL_LOG_INFO("  skeleton recovered by qualifying to %s", path.c_str());
-    }
-}
-
-/// Resolve an archive path as a layout spells it to the archive's own spelling.
-///
-/// Layout data is uppercase throughout - `MEDIA/LIGHTS/PALACE/PALACE_GRADIENT_01.MESH`
-/// - while the archive stores `media/lights/palace/palace_gradient_01.Mesh`.
-/// Every component differs, including the extension. That matters more than it
-/// looks: `ZipArchive::exists()`, which ResourceGroupManager falls back to for a
-/// path its basename index cannot answer, compares the basename **exactly**, so
-/// the uppercase form finds nothing at all.
-///
-/// The basename index is case-insensitive, so it answers the question; when a
-/// basename occurs in several directories the referring path disambiguates.
-namespace {
-std::string resolve_archive_path_impl(const std::string& reference, bool quiet) {
-    if (reference.empty()) return {};
-
-    // Runic's data mixes separators freely - a particle node names
-    // `media\particles\textures\sequence\flame2x4.dds` while the layout beside it
-    // uses forward slashes - and a path split on '/' alone treats the whole
-    // backslashed string as one basename, which matches nothing. The town's
-    // torches had no flames for exactly this reason. tl::core::AssetIndex
-    // already normalises separators for direct file access; this is the same
-    // rule for the layer OGRE answers.
-    std::string path = reference;
-    for (char& c : path) {
-        if (c == '\\') c = '/';
-    }
-
-    std::vector<uint8_t> mod_bytes;
-    if (read_mod_resource(path, mod_bytes)) return path;
-
-    const size_t slash = path.find_last_of('/');
-    const std::string basename = (slash == std::string::npos) ? path : path.substr(slash + 1);
-    const std::string dir =
-        (slash == std::string::npos) ? std::string() : path.substr(0, slash + 1);
-
-    const std::vector<Ogre::FileInfo>* found = archive_entries(basename);
-    if (!found || found->empty()) return {};
-    if (found->size() == 1) return found->front().path + found->front().basename;
-
-    for (const Ogre::FileInfo& info : *found) {
-        if (info.path.size() != dir.size()) continue;
-        if (std::equal(dir.begin(), dir.end(), info.path.begin(), [](char a, char b) {
-                return std::tolower(static_cast<unsigned char>(a)) ==
-                       std::tolower(static_cast<unsigned char>(b));
-            })) {
-            return info.path + info.basename;
-        }
-    }
-
-    if (!quiet) {
-        TL_LOG_WARN("'%s' is ambiguous and no copy sits in '%s'", basename.c_str(), dir.c_str());
-    }
-    return {};
-}
-}  // namespace
-
-std::string resolve_archive_path(const std::string& reference) {
-    return resolve_archive_path_impl(reference, false);
-}
-
-// PORT: asset lookup, the same without the warning.
-std::string resolve_archive_path_quiet(const std::string& reference) {
-    return resolve_archive_path_impl(reference, true);
-}
-
-namespace {
-/// The game's `.adm` data files, as read, kept across `Renderer::restart()`.
-///
-/// Every level change is a restart, and a restart drops every table built out
-/// of the archive with the Impl that held it: the skill files (read three
-/// times over), the affixes, the monster and prop units, the quests, the stat
-/// curves, `masterresourceunits` - a couple of thousand small files, each a
-/// seek, a read and an inflate, which on the console is an unbuffered SD card
-/// read per file. The archive itself does not change while the process runs,
-/// so the second level onwards takes them from here; parsing them is still
-/// done afresh, by the same code, so what the tables hold cannot differ.
-///
-/// Only `.adm`: meshes, textures and sounds are read once by OGRE or the mixer
-/// and are far larger. Bounded, because applet mode is the tighter budget: a
-/// file that would take it past the limit is simply read the old way.
-struct DataFileCache {
-    /// What was mounted when the cache was filled; see remember_mounts().
-    std::string mounts;
-    std::unordered_map<std::string, std::vector<uint8_t>> files;
-    size_t bytes = 0;
-};
-DataFileCache g_data_files;
-constexpr size_t kDataFileBudget = 32u * 1024u * 1024u;
-}  // namespace
-
-void remember_mounts(const std::string& mounts) {
-    if (mounts == g_data_files.mounts) return;
-    g_data_files = DataFileCache{};
-    g_data_files.mounts = mounts;
-}
-
-/// Read a resource out of the mounted archive. Empty on any failure.
-std::vector<uint8_t> read_resource(const std::string& path) {
-    const bool data_file = ends_with_lower(path, ".adm");
-    if (data_file) {
-        const auto found = g_data_files.files.find(path);
-        if (found != g_data_files.files.end()) return found->second;
-    }
-    std::vector<uint8_t> mod_bytes;
-    if (read_mod_resource(path, mod_bytes)) {
-        TL_LOG_INFO("mod override: %s", path.c_str());
-        if (data_file && !mod_bytes.empty() && g_data_files.bytes + mod_bytes.size() <= kDataFileBudget) {
-            g_data_files.bytes += mod_bytes.size();
-            g_data_files.files.emplace(path, mod_bytes);
-        }
-        return mod_bytes;
-    }
-    auto& groups = Ogre::ResourceGroupManager::getSingleton();
-    try {
-        Ogre::DataStreamPtr stream = groups.openResource(path, kGameGroup);
-        if (!stream) return {};
-        std::vector<uint8_t> bytes(static_cast<size_t>(stream->size()));
-        if (!bytes.empty()) stream->read(bytes.data(), bytes.size());
-        if (data_file && !bytes.empty() && g_data_files.bytes + bytes.size() <= kDataFileBudget) {
-            g_data_files.bytes += bytes.size();
-            g_data_files.files.emplace(path, bytes);
-        }
-        return bytes;
-    } catch (const Ogre::Exception& e) {
-        TL_LOG_WARN("could not read '%s': %s", path.c_str(), e.getDescription().c_str());
-        return {};
     }
 }
 
@@ -2171,6 +2051,7 @@ void Renderer::Impl::apply_scheme(Ogre::Viewport* viewport) const {
 }
 
 void Renderer::Impl::setup_scene() {
+    skinned_entities().install(*root);
     scene = root->createSceneManager();
     // So a redefining material parse can reach every entity in it; see
     // g_material_scene. Re-set here rather than only once, because
@@ -2231,15 +2112,47 @@ namespace {
 bool window_fills_screen(const RendererConfig& config) {
     return config.fullscreen && !config.headless;
 }
+
+Ogre::NameValuePairList window_params(const RendererConfig& config) {
+    Ogre::NameValuePairList params{{"FSAA", "0"}};
+    tl::core::platform_window_params(params);
+    if (config.headless) {
+        // GL still needs a context and a drawable; there is no windowless path.
+        // The frame itself is rendered offscreen, so the window is never read.
+        params["hidden"] = "true";
+    }
+#if !defined(TL_PLATFORM_SWITCH) && !defined(TL_PLATFORM_ANDROID) && !defined(TL_PLATFORM_IOS)
+    // OGRE's WGL and GLX windows swap unsynchronised unless asked; the devices keep their
+    // own swap interval.
+    params["vsync"] = config.vsync && !config.headless ? "true" : "false";
+#endif
+    return params;
+}
+
+/// Every stream OGRE opens - a mesh, a texture, a material, a layout - lets the system's
+/// events through while a level loads (tl::core::keep_responsive).
+struct ResponsiveLoading final : Ogre::ResourceLoadingListener {
+    Ogre::DataStreamPtr resourceLoading(const Ogre::String&, const Ogre::String&,
+                                        Ogre::Resource*) override {
+        tl::core::keep_responsive();
+        return {};
+    }
+};
+
+/// This thread pumps the events; OGRE's resource opens keep them moving through a load.
+void keep_responsive_while_loading() {
+    tl::core::mark_event_thread();
+    static ResponsiveLoading listener;
+    Ogre::ResourceGroupManager::getSingleton().setLoadingListener(&listener);
+}
 }  // namespace
 
-bool Renderer::init(const RendererConfig& config) {
+bool Renderer::init(const RendererConfig& requested) {
     Impl& m = *impl_;
-    m.config = config;
-    if (config.settings != nullptr) {
-        constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
-        set_ui_text_scale(kTextSizes[std::clamp(config.settings->text_size, 0, 2)]);
-    }
+    m.config = requested;
+    // The window may not come out the size asked for (adopt_window_size); everything after it
+    // is laid out for the size it has.
+    const RendererConfig& config = m.config;
 
     // Our LogManager, created before Root so Root does not make its own.
     // suppressFileOutput keeps OGRE from writing Ogre.log next to the binary:
@@ -2255,6 +2168,7 @@ bool Renderer::init(const RendererConfig& config) {
     m.frame_clock.timer = m.root->getTimer();
     m.frame_clock.owner = &m;
     m.root->addFrameListener(&m.frame_clock);
+    keep_responsive_while_loading();
 
     m.shader_cache_file = config.shader_cache;
 #if defined(TL_PLATFORM_SWITCH) && defined(TL_SWITCH_GL3PLUS)
@@ -2319,13 +2233,7 @@ bool Renderer::init(const RendererConfig& config) {
         m.audio_enabled = false;
     }
 
-    Ogre::NameValuePairList params{{"FSAA", "0"}};
-    tl::core::platform_window_params(params);
-    if (config.headless) {
-        // GL still needs a context and a drawable; there is no windowless path.
-        // The frame itself is rendered offscreen, so the window is never read.
-        params["hidden"] = "true";
-    }
+    Ogre::NameValuePairList params = window_params(config);
 
     // The driver reads it as it makes the context, which this does.
     GlThread::request();
@@ -2347,6 +2255,7 @@ bool Renderer::init(const RendererConfig& config) {
         TL_LOG_ERROR("failed to create a render window");
         return false;
     }
+    m.adopt_window_size();
     if (GlThread::started()) {
         // Before any buffer of the game's exists: see gl_thread.h.
         m.root->getRenderSystem()->getMutableCapabilities()->unsetCapability(Ogre::RSC_MAPBUFFER);
@@ -2374,50 +2283,7 @@ bool Renderer::init(const RendererConfig& config) {
         TL_LOG_WARN("display gamma: not created; brightness and contrast will not show");
     }
 
-    // The interface. Not fatal when it cannot be built: the game ran without
-    // one before there was one, and it says so in the log rather than refusing
-    // to start.
-    m.hud.create(m.scene, config.width, config.height,
-                 // By full archive path: `itemicons.imageset` is one of
-                 // seventeen files under `media/UI/itemicons/` whose names all
-                 // begin that way, and the index is by basename.
-                 "media/UI/itemicons/itemicons.imageset");
-
-    m.set_stats_overlay(config.stats_overlay);
-
-    // The game screen's HUD. Also not fatal: it needs the console release's
-    // interface data, which a PC install has not got, and it says so once.
-    if (config.game_hud) m.game_hud.create(kGameGroup, config.width, config.height);
-
-    // The quest offer window, from the same interface data. Not fatal either.
-    m.quest_dialog.create(kGameGroup, config.width, config.height);
-    m.death_screen.create(kGameGroup, config.width, config.height);
-    // Below the quest window (590) and above the HUD: the ring is drawn over
-    // the game, the modal over every menu but the death screen (600).
-    m.fishing_screen.create(kGameGroup, config.width, config.height,
-                            "media/UI/fishing_xenon.layout", "tl/fishing", 560);
-    // The console loads the CEGUI export of the same screen (`fishing.uilayout`),
-    // which lists `FishingRing` last, above the fixed ring
-    // the `[UI]` source lists after it.
-    m.fishing_screen.raise("FishingRing");
-    m.modal_screen.create(kGameGroup, config.width, config.height,
-                          "media/UI/modalmenu_xenon.layout", "tl/modal", 594);
-    // The waypoint menu (`CWaypointMenu`, the Xbox's `waypointmenu_xenon.layout`),
-    // above the HUD and below the quest window and the modal.
-    m.waypoint_screen.create(kGameGroup, config.width, config.height,
-                             "media/UI/waypointmenu_xenon.layout", "tl/waypoints", 570);
-
-    // The Pause Menu and Options (`COptionsMenu`, `CSettingsMenuXenon`).
-    m.create_options_screens();
-    // The context tip window (`CTipMenu`).
-    m.create_tip_screen();
-
-    // The console inventory menu, from the same interface data.
-    m.init_character_preview();
-    m.inventory_menu.create(kGameGroup, config.width, config.height);
-    if (config.show_inventory) {
-        m.inventory_menu.show();
-    }
+    m.create_interface();
 
     // The in-game minimap / automap system.
     const float y_ratio = static_cast<float>(config.height) / 768.0f;
@@ -2613,6 +2479,7 @@ Ogre::Entity* Renderer::Impl::attach_worn_mesh(const std::string& mesh_name) {
     if (skinned && body != nullptr && body->getSkeleton()) {
         if (mesh->getSkeletonName() != body->getSkeletonName()) {
             mesh->setSkeletonName(body->getSkeletonName());
+            skinned_entities().rescan();
             TL_LOG_INFO("  '%s' bound to the body's skeleton (%s)", mesh_name.c_str(),
                         body->getSkeletonName().c_str());
         }
@@ -3434,11 +3301,13 @@ void Renderer::Impl::bake_static_scenery() {
         // anyway. The node keeps its transform and the entity, which is all
         // ground_under() and apply_scenery_fill() read.
         if (Ogre::SceneNode* parent = node->getParentSceneNode()) parent->removeChild(node);
+        tl::core::keep_responsive();
     }
     size_t regions = 0;
     for (Set& set : sets) {
         set.geometry->build();
         regions += set.geometry->getRegions().size();
+        tl::core::keep_responsive();
     }
     static_scenery = sets[1].geometry;
 
@@ -3940,6 +3809,8 @@ bool Renderer::Impl::place_torchlight_particle(const tl::formats::CmpScene& layo
     // (`CGame::chooseSceneManager`, stores it too) would fail.
     if (system.pu.is_light && system.pu.movable != nullptr) {
         system.pu.movable->addVisibilityFlags(kVisibilityLightMap);
+    } else {
+        hold_particle_with_the_world(system);
     }
     system.owner = particle_owner;
     system.node = node.id;
@@ -3958,6 +3829,23 @@ bool Renderer::Impl::place_torchlight_particle(const tl::formats::CmpScene& layo
     particle_systems.push_back(std::move(system));
     particle_index_add(particle_systems.size() - 1);
     return true;
+}
+
+// PORT: drawing, a system drawn only by the view hung under one node that says so
+// (`SceneNode::setSubtreeVisibilityFlags`): the light map and shadow map passes skip it whole.
+void Renderer::Impl::hold_particle_with_the_world(const ParticleSystem& system) {
+    Ogre::SceneNode* holder = system.holder();
+    Ogre::SceneNode* root = scene->getRootSceneNode();
+    if (holder == nullptr || system.pu.movable == nullptr || holder->getParent() != root ||
+        (system.pu.movable->getVisibilityFlags() & ~kVisibilityWorld) != 0) {
+        return;
+    }
+    if (particle_holder_node == nullptr) {
+        particle_holder_node = root->createChildSceneNode();
+        particle_holder_node->setSubtreeVisibilityFlags(kVisibilityWorld);
+    }
+    root->removeChild(holder);
+    particle_holder_node->addChild(holder);
 }
 
 void Renderer::Impl::step_torchlight_particle(ParticleSystem& system, float delta) {

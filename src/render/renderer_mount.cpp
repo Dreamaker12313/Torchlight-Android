@@ -23,17 +23,25 @@ std::string game_pak(const RendererConfig& config) {
     return pak;
 }
 
-// Mount the optional console UI overlay before the archive so its files win
-// when testing UI overrides against either game release.
-bool mount_console_interface(Ogre::ResourceGroupManager& groups, const std::string& console_ui) {
+// Which release the mounted archive is: the Xbox 360's carries the console
+// interface (`hud_xenon.layout`) itself, a PC one does not and takes it from
+// `console_ui` beside it, which is mounted here only then.
+void mount_console_interface(Ogre::ResourceGroupManager& groups, const std::string& console_ui) {
+    const bool console_pak = groups.resourceExists(kGameGroup, "media/UI/hud_xenon.layout");
+    set_console_game_data(console_pak);
     const bool have_ui = !console_ui.empty() && is_dir(console_ui);
-    if (have_ui) {
-        TL_LOG_INFO("mounting console interface overlay from '%s'", console_ui.c_str());
+    if (console_pak) {
+        TL_LOG_INFO("game data: the Xbox 360 pak, with the console interface in it");
+        if (have_ui) {
+            TL_LOG_INFO("console_ui at '%s' left unmounted: the pak has its own",
+                        console_ui.c_str());
+        }
+    } else if (have_ui) {
+        TL_LOG_INFO("game data: a PC pak, the console interface from '%s'", console_ui.c_str());
         groups.addResourceLocation(console_ui, "FileSystem", kGameGroup, true);
     } else {
-        TL_LOG_INFO("no console_ui folder");
+        TL_LOG_INFO("game data: a PC pak; no --console-ui (without one: no HUD, plain menus)");
     }
-    return have_ui;
 }
 
 // Every location mounted, one a line: what read_resource()'s cache is true for.
@@ -45,8 +53,8 @@ std::string mount_list(const RendererConfig& config) {
     return mounts;
 }
 
-void mount_mod_data(Ogre::ResourceGroupManager& groups,
-                    const std::vector<std::string>& mod_data) {
+// INVENTED: mod folders (`--mod-data`), the port's own way to load an extracted mod.
+void mount_mod_data(Ogre::ResourceGroupManager& groups, const std::vector<std::string>& mod_data) {
     for (const std::string& mod : mod_data) {
         if (!is_dir(mod)) {
             TL_LOG_INFO("mod media directory not found at '%s'", mod.c_str());
@@ -110,10 +118,9 @@ bool Renderer::Impl::mount_resources() {
         return false;
     }
 
-    // Explicit overlays go first: OGRE's first-location-wins resource index
-    // lets mods and console_ui override files in either game's archive.
+    // Mods first: OGRE's first-location-wins resource index lets their files
+    // override the archive's.
     mount_mod_data(groups, config.mod_data);
-    const bool have_console_ui = mount_console_interface(groups, config.console_ui);
 
     const std::string pak = game_pak(config);
     if (!config.pak.empty() && !is_file(pak)) {
@@ -128,15 +135,7 @@ bool Renderer::Impl::mount_resources() {
         groups.addResourceLocation(config.game_data, "FileSystem", kGameGroup, true);
     }
 
-    const bool console_pak = groups.resourceExists(kGameGroup, "media/UI/hud_xenon.layout");
-    set_console_game_data(console_pak || have_console_ui);
-    if (console_pak) {
-        TL_LOG_INFO("game data: the Xbox 360 pak, with the console interface in it");
-    } else if (have_console_ui) {
-        TL_LOG_INFO("game data: console interface supplied by console_ui");
-    } else {
-        TL_LOG_INFO("game data: a PC pak without console_ui");
-    }
+    mount_console_interface(groups, config.console_ui);
 
     // Extra data after the install, so the install's own files keep winning
     // (RendererConfig::extra_data).
@@ -161,6 +160,9 @@ bool Renderer::Impl::mount_resources() {
                 log_bridge ? log_bridge->duplicate_names : 0u);
     // Every mesh's skeleton is looked for beside it, as Runic's listener does.
     Ogre::MeshManager::getSingleton().setListener(&renderer_detail::game_mesh_listener());
+    // Read now, under the loading screen, as the original reads every script when it starts: on
+    // the first mesh that needed it, it landed in a fight (a monster's first cast).
+    renderer_detail::index_material_scripts();
     return true;
 }
 

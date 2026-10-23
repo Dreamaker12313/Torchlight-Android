@@ -118,9 +118,12 @@ void sink_write(LogLevel level, const std::string& line) {
         put(w.file, {line});
         return;
     }
+    // The writer is asleep only on an empty queue, and checks it under the lock before it sleeps:
+    // the first line of a batch wakes it, the rest find it awake.
+    const bool was_empty = w.pending.empty();
     w.pending.push_back(line);
     const unsigned long long mine = ++w.queued;
-    w.wake.notify_one();
+    if (was_empty) w.wake.notify_one();
     // Never on the writer's own thread, which would be waiting for itself.
     if (level == LogLevel::Error && std::this_thread::get_id() != w.writer_id) {
         w.written.wait(guard, [&w, mine] { return w.done >= mine; });

@@ -157,7 +157,12 @@ public:
     }
 
 private:
-    std::map<std::string, uint32_t> by_name_;
+    /// Names compared upper-cased, as stored, without an upper-cased copy per lookup.
+    struct NameLess {
+        using is_transparent = void;
+        bool operator()(const std::string& a, const std::string& b) const;
+    };
+    std::map<std::string, uint32_t, NameLess> by_name_;
     std::map<uint32_t, std::vector<uint32_t>> ancestors_;
 };
 

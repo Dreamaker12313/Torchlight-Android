@@ -8,6 +8,7 @@
 #include <malloc.h>
 #include <switch.h>
 #include <cstdio>
+#include <thread>
 
 namespace tl::core {
 
@@ -58,10 +59,24 @@ void platform_error_message(const std::string& summary, const std::string& detai
 }
 
 void pump_events() {
-    // Nothing to dispatch.
+    // Nothing to dispatch: the applet's messages are should_keep_running's.
+    note_events_pumped();
 }
 
-bool should_keep_running() { return appletMainLoop(); }
+// `appletMainLoop` says false once, as it reads the exit request; kept, so a request read
+// during loading (keep_responsive) still ends the frame loop.
+bool should_keep_running() {
+    static bool running = true;
+    if (running) running = appletMainLoop();
+    return running;
+}
+
+// The console's display is its own: 60 Hz, which the swap already waits for.
+void platform_set_frame_rate(float fps) { (void)fps; }
+
+void platform_sleep_until(std::chrono::steady_clock::time_point deadline) {
+    std::this_thread::sleep_until(deadline);
+}
 
 bool memory_usage(unsigned long long& used, unsigned long long& total) {
     // `mallinfo().uordblks`, what the program has allocated (size_t fields, no overflow), with
@@ -208,6 +223,23 @@ bool clock_rates(unsigned& cpu_mhz, unsigned& gpu_mhz, unsigned& memory_mhz) {
     gpu_mhz = hz[1] / 1000000u;
     memory_mhz = hz[2] / 1000000u;
     return true;
+}
+
+// The first worker shares core 2 with the mixer and the log writer, at the game thread's priority:
+// the mixer keeps 85 ms of sound queued and waits out a fork-join phase. The rest go to core 1,
+// below Mesa's glthread (libnx's default for a new thread, 0x3B), so a worker never makes the
+// driver's thread wait.
+void prepare_worker_thread(unsigned index) {
+    constexpr s32 kFirstCore = 2;
+    constexpr s32 kFirstPriority = 0x2C;
+    constexpr s32 kOtherCore = 1;
+    constexpr s32 kOtherPriority = 0x3C;
+    const s32 core = index == 0 ? kFirstCore : kOtherCore;
+    const Result placed = svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1u << core);
+    const Result raised =
+        svcSetThreadPriority(CUR_THREAD_HANDLE, index == 0 ? kFirstPriority : kOtherPriority);
+    TL_LOG_INFO("jobs: worker %u on core %u (0x%x, 0x%x)", index, svcGetCurrentProcessorNumber(),
+                static_cast<unsigned>(placed), static_cast<unsigned>(raised));
 }
 
 }  // namespace tl::core

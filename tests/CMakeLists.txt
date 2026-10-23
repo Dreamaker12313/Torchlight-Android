@@ -32,6 +32,7 @@ add_executable(tl_tests
     music_object_test.cpp
     quest_dialog_test.cpp
     navigation_test.cpp
+    job_pool_test.cpp
     unit_observers_test.cpp
     unit_resource_test.cpp
     passability_test.cpp
@@ -104,6 +105,7 @@ add_executable(tl_tests
     death_flight_test.cpp
     jump_down_test.cpp
     unit_types_test.cpp
+    unit_book_test.cpp
     combat_test.cpp
     stats_test.cpp
     spawn_class_test.cpp

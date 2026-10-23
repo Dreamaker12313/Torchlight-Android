@@ -86,8 +86,9 @@ struct ParticleSystem {
 
 /// `particle_systems` by what script events address them by, so an event visits its own
 /// systems rather than every one: by link (`owner_nodes`, `owner`), wrappers by node
-/// (`node_owner`, `node`) and by node map. Positions in `particle_systems`, ascending.
-/// Kept as systems are added or relinked; rebuilt after any is destroyed.
+/// (`node_owner`, `node`) and by node map; and by holder, the node each is made on and keeps.
+/// Positions in `particle_systems`, ascending. Kept as systems are added or relinked; rebuilt
+/// after any is destroyed.
 struct ParticleIndex {
     using Key = std::pair<const void*, int64_t>;
     struct KeyHash {
@@ -99,6 +100,7 @@ struct ParticleIndex {
     std::unordered_map<Key, std::vector<size_t>, KeyHash> by_owner;
     std::unordered_map<Key, std::vector<size_t>, KeyHash> wrapper_by_node;
     std::unordered_map<const void*, std::vector<size_t>> wrappers_in;
+    std::unordered_map<const void*, std::vector<size_t>> by_holder;
     bool stale = true;
 };
 

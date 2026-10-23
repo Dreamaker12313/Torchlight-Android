@@ -3945,7 +3945,7 @@ bool LevelScript::delete_character(int64_t id, std::vector<ScriptEvent>& out) {
 std::vector<int64_t> LevelScript::pets_of(const LevelScript* master_machine,
                                           int64_t master_node) const {
     std::vector<int64_t> out;
-    for (int64_t id : character_order_) {
+    for (int64_t id : mastered_) {
         const Character* c = character(id);
         if (c == nullptr || !c->has_master || !c->listed_pet) continue;
         if (c->master.machine != master_machine || c->master.node != master_node) continue;
@@ -3954,7 +3954,14 @@ std::vector<int64_t> LevelScript::pets_of(const LevelScript* master_machine,
         if (dead_.count(id) != 0 || o->ai == ai_state::kDying || o->ai == ai_state::kDead) continue;
         out.push_back(id);
     }
-    return out;
+    if (out.empty()) return out;
+    // In the characters' order, as the list is kept.
+    std::vector<int64_t> ordered;
+    ordered.reserve(out.size());
+    for (int64_t id : character_order_) {
+        if (std::find(out.begin(), out.end(), id) != out.end()) ordered.push_back(id);
+    }
+    return ordered;
 }
 
 bool LevelScript::start_death_flight(int64_t id, const DeathFlight& flight) {
@@ -4006,6 +4013,8 @@ bool LevelScript::set_unit_master(int64_t id, LevelScript& master_machine, int64
     // `CCharacter::setMaster`: the master, its side (set by
     // the caller), then unless dying, dead, in town or near death, AI idle and no target.
     c->has_master = true;
+    if (std::find(mastered_.begin(), mastered_.end(), id) == mastered_.end())
+        mastered_.push_back(id);
     c->listed_pet = true;
     // `addPet`'s `+0x538` bit: whether the pet is on the avoidance map now.
     c->grid_with_master = c->on_grid;

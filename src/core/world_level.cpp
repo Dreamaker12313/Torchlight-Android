@@ -13,6 +13,17 @@
 
 namespace tl::core {
 
+namespace {
+
+// `CParticlePreloader` +0x20 (`m_ParticleSystems`): the files loaded, for the whole run, and here
+// what of each the load kept out (`World::roll_layout_groups` and LoadParticle's filter).
+std::map<std::string, std::set<int64_t>>& loaded_particle_files() {
+    static std::map<std::string, std::set<int64_t>> loaded;
+    return loaded;
+}
+
+}  // namespace
+
 /// Where a layout's rules file lives, or empty when it has none (read before placement
 /// for the rim light: read_rim_light()).
 // PORT: a layout path as the key the port's backdrop rules are kept under.
@@ -475,6 +486,73 @@ void World::trigger_unit_loads(const std::string& unit, const TriggerProp& prop)
     }
 }
 
+// `CParticlePreloader::LoadParticle`: a `CParticle`'s file is
+// loaded the first time its upper-cased path is asked for in the run, into the preloader's own
+// `CLayout` (no reseed, no count); every later `CParticle` of it copies that load's systems. What
+// the load kept out: the groups it rolled, and every object but a `Particle` (with what hangs
+// from it), a `Sound` and a `Camera Shake` (`DeleteAllObjectsFromScene`). Null when the file
+// cannot be read. `added_sample`: this call loaded it, and a `Sound` of it named a sound.
+const std::set<int64_t>* World::load_particle_file(const std::string& path, bool* added_sample) {
+    if (added_sample != nullptr) *added_sample = false;
+    std::map<std::string, std::set<int64_t>>& loaded = loaded_particle_files();
+    const std::string key = backdrop_key(path);
+    if (const auto found = loaded.find(key); found != loaded.end()) return &found->second;
+    const tl::formats::CmpScene* const layout = layout_file(path);
+    if (layout == nullptr || !layout->ok) return nullptr;
+
+    const std::set<int64_t> rolled = roll_layout_groups(*layout);
+    std::set<int64_t>& kept_out = loaded.emplace(key, rolled).first->second;
+    std::map<int64_t, const tl::formats::CmpNode*> by_id;
+    for (const tl::formats::CmpNode& n : layout->nodes) by_id.emplace(n.id, &n);
+    size_t dropped = 0;
+    for (const tl::formats::CmpNode& n : layout->nodes) {
+        namespace type = tl::formats::cmp_type;
+        if (n.type == type::kParticle || n.type == type::kSound || n.type == type::kCameraShake ||
+            n.type == type::kGroup) {
+            continue;
+        }
+        bool under_particle = false;
+        int64_t at = n.parent_id;
+        for (int up = 0; up < 16 && at != -1 && !under_particle; ++up) {
+            const auto it = by_id.find(at);
+            if (it == by_id.end()) break;
+            under_particle = it->second->type == type::kParticle;
+            at = it->second->parent_id;
+        }
+        if (under_particle) continue;
+        if (kept_out.insert(n.id).second) ++dropped;
+    }
+    if (dropped > 0) {
+        TL_LOG_INFO(
+            "  a particle's file: %zu node(s) not kept (only Particle, Sound and Camera Shake are)",
+            dropped);
+    }
+
+    // Its objects are all made before the filter deletes them, in file order: a `Sound` that
+    // names a sound adds the sample (`CSoundBank::addSample`, `g_Rand` left at
+    // its low word), and a particle link loads its own file through the preloader.
+    ensure_sound_index();
+    for (const tl::formats::CmpNode& node : layout->nodes) {
+        if (rolled.count(node.id) != 0) continue;
+        if (node.type == tl::formats::cmp_type::kSound) {
+            const tl::formats::CmpField* f = node.field(tl::formats::cmp_field::sound::kGuid);
+            const std::string text = f != nullptr ? f->as_text() : std::string();
+            const int64_t guid = text.empty() ? -1 : std::strtoll(text.c_str(), nullptr, 10);
+            if (guid != -1 && sound_info.find_by_guid(guid) != nullptr) {
+                tl::core::game_random().set_seed(
+                    static_cast<int32_t>(static_cast<uint32_t>(tl::core::game_random().state())));
+                if (added_sample != nullptr) *added_sample = true;
+            }
+        } else if (node.type == tl::formats::cmp_type::kParticleLink) {
+            const std::string inner = layout_archive_path(node.reference(".LAYOUT"));
+            bool inner_added = false;
+            if (!inner.empty()) load_particle_file(inner, &inner_added);
+            if (inner_added && added_sample != nullptr) *added_sample = true;
+        }
+    }
+    return &kept_out;
+}
+
 bool World::place_layout(const std::string& reference, const ogre::Vector3& origin,
                          const ogre::Quaternion& basis, int depth, uint32_t load_seed_arg) {
     // A nested layout may reference an ancestor: the set catches a cycle, the depth limit
@@ -570,38 +648,12 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     // choice among child groups: CEditorScene::loadCompressedLayout
     // hands every Group to rollRandomGroups, which drops failed gates
     // (CRandomGroup::getGroupCanBeCreated; core/random_groups.h).
-    std::set<int64_t> gated = roll_layout_groups(layout);
-
-    // LoadParticle keeps the objects of three
-    // descriptors - Particle (and what hangs from it), Sound, Camera Shake - and deletes
-    // the rest (DeleteAllObjectsFromScene).
+    // A `CParticle`'s file is the preloader's one load of it (`load_particle_file`).
+    std::set<int64_t> gated;
     if (as_cparticle) {
-        std::map<int64_t, const tl::formats::CmpNode*> by_id;
-        for (const tl::formats::CmpNode& n : layout.nodes) by_id.emplace(n.id, &n);
-        size_t dropped = 0;
-        for (const tl::formats::CmpNode& n : layout.nodes) {
-            namespace type = tl::formats::cmp_type;
-            if (n.type == type::kParticle || n.type == type::kSound ||
-                n.type == type::kCameraShake || n.type == type::kGroup) {
-                continue;
-            }
-            bool under_particle = false;
-            int64_t at = n.parent_id;
-            for (int up = 0; up < 16 && at != -1 && !under_particle; ++up) {
-                const auto it = by_id.find(at);
-                if (it == by_id.end()) break;
-                under_particle = it->second->type == type::kParticle;
-                at = it->second->parent_id;
-            }
-            if (under_particle) continue;
-            if (gated.insert(n.id).second) ++dropped;
-        }
-        if (dropped > 0) {
-            TL_LOG_INFO(
-                "  a particle's file: %zu node(s) not kept (only Particle, Sound and Camera "
-                "Shake are)",
-                dropped);
-        }
+        if (const std::set<int64_t>* kept_out = load_particle_file(path)) gated = *kept_out;
+    } else {
+        gated = roll_layout_groups(layout);
     }
 
     // The layout's Animation Controller nodes, by the unit (`MONSTER`) they drive; they
@@ -878,7 +930,8 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         // `CSoundObject::setSoundBankGuid`, as the object is made: a GUID
         // that names a sound is a `CSoundBank::addSample`, which leaves
         // `g_Rand` at its low word.
-        if (node.type == tl::formats::cmp_type::kSound && gated.count(node.id) == 0) {
+        if (node.type == tl::formats::cmp_type::kSound && gated.count(node.id) == 0 &&
+            !as_cparticle) {
             if (const tl::formats::CmpField* f = node.field(tl::formats::cmp_field::sound::kGuid)) {
                 const std::string text = f->as_text();
                 const int64_t guid = text.empty() ? -1 : std::strtoll(text.c_str(), nullptr, 10);
@@ -1650,41 +1703,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         }
     }
 
-    // Torchlight mods add placed objects through sibling Merge/*.layout files.
-    // These are data-group layouts rather than dungeon room candidates (which
-    // intentionally skip Merge/ in dungeon.cpp). Load each beside the layout
-    // that owns the merge, with the same transform, so modded town NPCs such as
-    // Baklah are part of the level's normal scene and gameplay state.
-    const std::string upper_path = tl::core::upper_ascii(path);
-    const size_t merge_marker = upper_path.find("/MERGE/");
-    if (!made_here && merge_marker == std::string::npos) {
-        const size_t slash = path.find_last_of('/');
-        if (slash != std::string::npos) {
-            const std::string merge_dir = path.substr(0, slash + 1) + "Merge/";
-            std::vector<std::string> merge_layouts = archive_paths_under(merge_dir, ".layout.cmp");
-            for (const std::string& text_layout : archive_paths_under(merge_dir, ".layout")) {
-                const std::string compiled = text_layout + ".cmp";
-                if (resolve_archive_path(compiled).empty()) merge_layouts.push_back(text_layout);
-            }
-            std::sort(merge_layouts.begin(), merge_layouts.end(), [](const std::string& a,
-                                                                     const std::string& b) {
-                return tl::core::upper_ascii(a) < tl::core::upper_ascii(b);
-            });
-            merge_layouts.erase(
-                std::unique(merge_layouts.begin(), merge_layouts.end(),
-                            [](const std::string& a, const std::string& b) {
-                                return tl::core::upper_ascii(a) == tl::core::upper_ascii(b);
-                            }),
-                merge_layouts.end());
-            for (const std::string& merge_layout : merge_layouts) {
-                const std::string resolved = resolve_archive_path(merge_layout);
-                if (resolved.empty()) continue;
-                TL_LOG_INFO("  applying merge layout %s", resolved.c_str());
-                place_layout(resolved, origin, basis, depth + 1);
-            }
-        }
-    }
-
+    place_merge_layouts(path, origin, basis, depth);
     if (depth == 0) {
         // Where the player stands, recorded before the lighting is applied:
         // the light map starts there (aim_light_map()).

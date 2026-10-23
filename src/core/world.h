@@ -36,8 +36,13 @@ public:
     virtual std::string archive_path_unique(const std::string& basename) const = 0;
     virtual std::vector<std::string> archive_paths_under(const std::string& dir,
                                                          const char* suffix) const = 0;
+    /// The data files under `dir`: the archive's `.dat.adm`, as `archive_paths_under` orders
+    /// them, then a mod's own `.dat` and `.dat.adm` the archive does not have.
     virtual std::vector<std::string> data_paths_under(const std::string& dir) const = 0;
-    virtual tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) const = 0;
+    /// The same, the archive's in its listing order (`archive_paths_in_listing_order`).
+    virtual std::vector<std::string> data_paths_in_listing_order(const std::string& dir) const = 0;
+    /// A data file as either form: compiled `.adm`, or a mod's text `.dat`.
+    static tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size);
     virtual bool console_game_data() const = 0;
     virtual std::string dir_of_asset(const std::string& name) const = 0;
     virtual tl::core::DungeonManager& loaded_dungeon_manager() const = 0;
@@ -99,8 +104,11 @@ public:
     virtual void view_set_scale(Ogre::SceneNode* node, float scale) = 0;
     virtual void view_set_visible(const std::vector<Ogre::SceneNode*>& holders, bool on) = 0;
     virtual void view_show_minimap() = 0;
-    virtual bool unit_collider_sweep(int64_t id, const tl::core::Vec3& from,
-                                     const tl::core::Vec3& to, float radius, float& t) = 0;
+    /// `CBaseUnit::sphereCollision` for each of `ids`: `t[i]` the first `t` in [0, 1] unit `i`'s
+    /// collision model is touched, above 1 if not; `drawn[i]` 0 where it is not drawn.
+    virtual void unit_collider_sweeps(const std::vector<int64_t>& ids, const tl::core::Vec3& from,
+                                      const tl::core::Vec3& to, float radius, std::vector<float>& t,
+                                      std::vector<char>& drawn) = 0;
     virtual std::vector<Ogre::SceneNode*> place_particle_layout(
         const std::string& reference, const ogre::Vector3& at, const ogre::Quaternion& facing,
         Ogre::SceneNode* parent, ParticleStart start = ParticleStart::Now) = 0;
@@ -110,17 +118,19 @@ public:
     virtual void view_destroy_node(Ogre::SceneNode* node) = 0;
     virtual bool view_held_item(const Ogre::Entity* held, ogre::Vector3& hand,
                                 float& height) const = 0;
-    /// For each list of holders: whether a system on one of them has not finished, the
-    /// lists whose `stop` is set stopping their systems' emission first.
+    /// For each list of holders: whether a system on one of them has not finished - or, where
+    /// `by_updating` is set, is still updating (`CParticle::getNumberOfParticlesUpdating(true)`)
+    /// - the lists whose `stop` is set stopping their systems' emission first.
     virtual void view_transients_alive(
         const std::vector<const std::vector<Ogre::SceneNode*>*>& lists,
-        const std::vector<char>& stop, std::vector<char>& alive) = 0;
+        const std::vector<char>& stop, const std::vector<char>& by_updating,
+        std::vector<char>& alive) = 0;
     virtual void add_text_event(const tl::core::TextEvent& event) = 0;
     virtual int breakable_within_view(float max_angle, float max_distance) const = 0;
     virtual bool skill_bone_world(const ViewUnit& unit, int attachment, ogre::Vector3& out) = 0;
     virtual bool skill_unit_forward(const ViewUnit& unit, ogre::Vector3& out) = 0;
     virtual void start_character_particle(const tl::core::UnitStats& unit, int slot,
-                                          const ogre::Vector3& at) = 0;
+                                          const ogre::Vector3& at, CharacterRef who) = 0;
     virtual void view_claim_particles(size_t mark, std::vector<Ogre::SceneNode*>& holders,
                                       std::vector<Ogre::SceneNode*>& line_holders) = 0;
     virtual size_t view_particle_mark() const = 0;
@@ -593,6 +603,9 @@ public:
     tl::formats::AdmFile read_unit_file(const std::string& path,
                                         const std::string& first_root = std::string(),
                                         const tl::core::ResourceGroup* group = nullptr) const;
+    /// The file a unit's link names (read_unit_file), empty for none.
+    std::string resolve_unit_link(const std::string& wanted, const std::string& first_root,
+                                  bool is_first) const;
     const tl::core::AnimationManifest& manifest_for(const std::string& mesh_path);
     /// Read the playable classes, once.
     void load_player_classes();
@@ -727,10 +740,12 @@ public:
     void load_unit_stats(const tl::formats::CmpScene& layout, const std::set<int64_t>& gated);
     /// Read one unit's authored numbers into the book; false when nothing is called that.
     bool index_unit(const std::string& name);
-    /// This unit's authored numbers, or the defaults when nothing loaded them.
-    tl::core::UnitStats stats_for_unit(const std::string& unit) const {
+    /// This unit's authored numbers, or the defaults when nothing loaded them. A reference
+    /// into the book: good until the book is cleared.
+    const tl::core::UnitStats& stats_for_unit(const std::string& unit) const {
+        static const tl::core::UnitStats kDefaults{};
         if (const tl::core::UnitStats* found = unit_book.find(unit)) return *found;
-        return tl::core::UnitStats{};
+        return kDefaults;
     }
     /// `CCharacter::setAlignment`: red outline and highlight for a hostile
     /// (`+0x280` 2 or 4) unless a mimic (`ISA 0xa7`).
@@ -772,6 +787,9 @@ public:
     bool count_layout_load(const std::string& reference);
     /// `rollRandomGroups` over a file's Groups: the nodes not created.
     std::set<int64_t> roll_layout_groups(const tl::formats::CmpScene& layout);
+    const std::set<int64_t>* load_particle_file(const std::string& path,
+                                                bool* added_sample = nullptr);
+    std::string layout_archive_path(const std::string& reference) const;
     /// `DAMAGE_REQUIRES_LOS` (`CSkillEvent +0x14a`): the level stands between caster and
     /// target (`machine` null: the player).
     bool skill_event_sight_blocked(const SkillEventSource& src, tl::core::LevelScript* machine,
@@ -1008,6 +1026,9 @@ public:
     tl::core::SkillCastContext unit_cast_context(tl::core::LevelScript& machine, int64_t node,
                                                  tl::core::LevelScript* target_machine,
                                                  int64_t target_node, bool has_target);
+    /// What unit_cast_context() leaves behind besides the context: the unit's effect manager
+    /// made and handed out, the tables loaded, its model's animations read.
+    void prepare_unit_cast(tl::core::LevelScript& machine, int64_t node);
     /// `CCharacter::castSkill`'s `performSkill`, mana and animation for a unit.
     bool cast_unit_skill(tl::core::LevelScript& machine, int64_t node,
                          tl::core::LevelScript* target_machine, int64_t target_node,
@@ -1121,13 +1142,17 @@ public:
     /// `CCharacter::playHitParticle` on the
     /// unit struck.
     void play_hit_particle(const tl::core::UnitStats& victim, const ogre::Vector3& from,
-                           const ogre::Vector3& at);
+                           const ogre::Vector3& at, CharacterRef who);
     /// `CCharacter::playStrikeParticle` of
     /// the attacker; `radius` is the struck unit's.
     void play_strike_particle(const tl::core::UnitStats& attacker, const ogre::Vector3& from,
-                              const ogre::Vector3& at, float radius, bool critical, bool blocked);
+                              const ogre::Vector3& at, float radius, bool critical, bool blocked,
+                              CharacterRef who);
     /// `CCharacter::die`: the particle at the body.
-    void play_death_particle(const tl::core::UnitStats& unit, const ogre::Vector3& at);
+    void play_death_particle(const tl::core::UnitStats& unit, const ogre::Vector3& at,
+                             CharacterRef who);
+    /// The slot key of a level character: the machine that runs `node`, or the player for 0.
+    CharacterRef character_ref(int64_t node, tl::core::LevelScript* machine = nullptr);
     /// What `rollAttack` shows of the player's blow besides
     /// the damage. `damage` is what `applyDamage` was handed.
     void show_player_blow(int64_t target, const std::string& unit, float damage);
@@ -1159,6 +1184,9 @@ public:
     bool skill_event_particles_alive(const LiveSkillEvent& event) const;
     void reset_skill_events(const std::string& skill, uint32_t run,
                             tl::core::LevelScript* caster_machine, int64_t caster_node);
+    /// `CSkillEvent::stopEvent`; the event then leaves the
+    /// list, its layout released by `release_ended_skill_events`.
+    void stop_skill_event(LiveSkillEvent& event);
     /// The machines of an ended event's layout, [first, end) of `nested_scripts`, retired; one
     /// that holds characters stays a machine of the level.
     void retire_skill_layout(size_t first, size_t end);
@@ -1343,6 +1371,9 @@ public:
     /// the level's script, grids and viewer too.
     bool place_layout(const std::string& reference, const ogre::Vector3& origin,
                       const ogre::Quaternion& basis, int depth, uint32_t load_seed_arg = 0);
+    /// A mod's `Merge/` layouts beside `path`, placed with it (place_layout).
+    void place_merge_layouts(const std::string& path, const ogre::Vector3& origin,
+                             const ogre::Quaternion& basis, int depth);
     /// A layout's `Item` node: `CItemDescriptor::CreateObject`
     /// (`CEquipment::createNewEquipment`), then
     /// `CItemDescriptor::descriptorSceneActivated`.

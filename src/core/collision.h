@@ -141,6 +141,10 @@ public:
     /// passability grid of a level with no rooms is sized from.
     bool level_bounds(Vec3& low, Vec3& high) const;
 
+    /// PORT: whether a box meets, on x and z, the bounds of every face the quadtree holds
+    /// together. False means `sort_for_collision` over it collects nothing.
+    bool may_sort_any(const Vec3& low, const Vec3& high) const;
+
     /// `CLevel::sortForCollision`: collect
     /// the level faces whose bounds meet the box on x and z, for the
     /// `pre_sorted_*` casts that follow. The set (`CLevel +0x44` on the
@@ -228,6 +232,11 @@ private:
         bool split = false;                ///< X360 +0x24
         uint32_t child[4] = {0, 0, 0, 0};  ///< X360 +0x28, indices into `quad_`
         std::vector<uint32_t> data;        ///< X360 +0x38, face indices
+        /// PORT: each face's x and z bounds beside `data`, for `quadtree_sort` to read in a row.
+        struct FaceBox {
+            float low_x, low_z, high_x, high_z;
+        };
+        std::vector<FaceBox> boxes;
     };
 
     /// `CQuadtree`'s constructor: the root over the box,
@@ -262,6 +271,8 @@ private:
     /// Each non-zero group, and the groups in the order they first got a face.
     std::unordered_map<int64_t, Group> groups_;
     std::vector<int64_t> group_order_;
+    /// PORT: `group_order_`'s groups themselves, in its order (`groups_` never moves them).
+    std::vector<const Group*> group_walk_;
     /// The level list's faces (group 0), as indices into `tris_`: the
     /// console's face `i` is `level_faces_[i]`.
     std::vector<uint32_t> level_faces_;
@@ -276,6 +287,8 @@ private:
 
     /// Bounds of the level faces and of the object faces.
     Vec3 level_low_, level_high_;
+    /// Every face in the quadtree, its bounds together (`may_sort_any`).
+    Vec3 sorted_low_, sorted_high_;
     bool have_level_ = false;
     Vec3 object_low_, object_high_;
     bool have_objects_ = false;

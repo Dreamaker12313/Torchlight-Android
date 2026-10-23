@@ -3,6 +3,7 @@
 #pragma once
 
 #include "formats/cegui.h"
+#include "render/text_scale.h"
 
 #include <OgreFont.h>
 #include <OgreMaterial.h>
@@ -13,9 +14,6 @@
 #include <vector>
 
 namespace tl::render {
-
-float ui_text_scale();
-void set_ui_text_scale(float scale);
 
 /// Full archive paths: `hud.imageset` exists under `media/UI/` and `media/UI/editimages/`, and a
 /// bare basename opens neither with `OGRE_RESOURCEMANAGER_STRICT=0`.
@@ -144,8 +142,6 @@ float font_cell_per_em();
 /// Points to an OGRE char height in pixels, before autoscaling:
 /// `kPointsToPixels` times `font_cell_per_em()`. What every front-end screen
 /// sets its text with.
-inline float points_to_char_pixels() {
-    return ui_points_to_pixels() * font_cell_per_em();
-}
+inline float points_to_char_pixels() { return ui_points_to_pixels() * font_cell_per_em(); }
 
 }  // namespace tl::render

@@ -214,8 +214,12 @@ void TouchPad::update() {
     const Touch* pinch_b = nullptr;
     for (const Touch& t : touches_) {
         if (t.id < 0 || t.control >= 0) continue;
-        if (!pinch_a) pinch_a = &t;
-        else { pinch_b = &t; break; }
+        if (!pinch_a) {
+            pinch_a = &t;
+        } else {
+            pinch_b = &t;
+            break;
+        }
     }
     if (pinch_a && pinch_b) {
         const float distance = std::hypot(pinch_a->x - pinch_b->x, pinch_a->y - pinch_b->y);

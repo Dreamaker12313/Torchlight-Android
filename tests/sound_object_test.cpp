@@ -242,3 +242,29 @@ TL_TEST(sound_bank_update_skips_the_channel_swapped_in) {
     TL_CHECK_EQ(bank.channels.size(), size_t{1});
     TL_CHECK_EQ(bank.channels[0].id, 1);
 }
+
+// A bank going with its node: a looping one is cut at once, fade time or not;
+// a one-shot plays out.
+TL_TEST(sound_bank_destroy_cuts_a_loop_and_lets_a_one_shot_finish) {
+    FakeMixer mixer;
+    SoundBankHost host = mixer.host();
+    RunicRandom rng(7);
+    auto out = [](uint32_t) {};
+
+    SoundObject loop = node_with(true, false, 0.0f);
+    loop.bank.fade_time = 0.5f;
+    tl::core::sound_object_scene_activated(loop, {}, host, rng, out);
+    TL_CHECK(!loop.bank.channels.empty());
+    const int32_t looping = loop.bank.channels.back().id;
+    tl::core::sound_bank_destroy(loop.bank, host);
+    TL_CHECK(!mixer.channels[looping].playing);
+    TL_CHECK(loop.bank.channels.empty());
+    TL_CHECK(loop.bank.slots.empty());
+
+    SoundObject once = node_with(false, false, 0.0f);
+    tl::core::sound_object_scene_activated(once, {}, host, rng, out);
+    const int32_t one_shot = once.bank.channels.back().id;
+    tl::core::sound_bank_destroy(once.bank, host);
+    TL_CHECK(mixer.channels[one_shot].playing);
+    TL_CHECK(once.bank.slots.empty());
+}

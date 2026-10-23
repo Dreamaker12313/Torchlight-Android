@@ -217,6 +217,7 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
     objects_.clear();
     index_.clear();
     update_order_.clear();
+    frame_order_.clear();
     logic_groups_.clear();
     timelines_ = scene.timelines;
     unimplemented_.clear();
@@ -902,7 +903,12 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
         }
     }
 
-    // The update order.
+    build_update_order();
+}
+
+// PORT: the descriptors in their update order (`update_order_`), and those of them a frame
+// steps (`frame_order_`).
+void LevelScript::build_update_order() {
     std::vector<uint32_t> order(std::begin(kDescriptorOrder), std::end(kDescriptorOrder));
     for (const Object& o : objects_) {
         if (std::find(order.begin(), order.end(), o.type) == order.end()) order.push_back(o.type);
@@ -911,6 +917,10 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
         for (const Object& o : objects_) {
             if (o.type == t) update_order_.push_back(o.id);
         }
+    }
+    for (int64_t id : update_order_) {
+        const Object* o = find(id);
+        if (o != nullptr && updates_each_frame(o->type)) frame_order_.push_back(id);
     }
 }
 
@@ -924,6 +934,35 @@ LevelScript::Object* LevelScript::find(int64_t id) {
 const LevelScript::Object* LevelScript::find(int64_t id) const {
     const auto it = index_.find(id);
     return it == index_.end() ? nullptr : &objects_[it->second];
+}
+
+// PORT: the descriptors `update`'s switch acts on; the rest it passes over.
+bool LevelScript::updates_each_frame(uint32_t type) {
+    switch (type) {
+        case type::kTimeline:
+        case type::kSound:
+        case type::kPlayerSphereTrigger:
+        case type::kPlayerBoxTrigger:
+        case type::kUnitTrigger:
+        case type::kTimer:
+        case type::kCameraController:
+        case type::kAnimationController:
+        case type::kSkillController:
+        case type::kSkipCutscene:
+        case type::kGameStateController:
+        case type::kDamageShape: return true;
+        default: return false;
+    }
+}
+
+// PORT: the level machine's own bookkeeping: an accessor.
+bool LevelScript::has_wires() const {
+    for (const Object& o : objects_) {
+        for (const Membership& m : o.logic) {
+            if (!m.links.empty()) return true;
+        }
+    }
+    return false;
 }
 
 // PORT: the level machine's own bookkeeping: an accessor.
@@ -2687,6 +2726,22 @@ void LevelScript::stop_layout_timelines(QuestState& quests, std::vector<ScriptEv
     }
     for (int64_t id : driven) {
         if (Object* o = find(id)) timeline_stop_to(*o, false, quests, out);
+    }
+}
+
+// `CLayout::callFunctionOnObjects`, state 1 on each
+// `CSoundObject` child: `CSoundObject::stop` only when its bank loops.
+void LevelScript::stop_layout_sounds(QuestState& quests, std::vector<ScriptEvent>& out) {
+    for (Object& o : objects_) {
+        if (o.type != type::kSound || !o.sound.bank.looping) continue;
+        sound_object_stop(o.sound, sound_host_, sound_output(o, quests, out));
+    }
+}
+
+// `CSoundObject::~CSoundObject`: its bank deleted.
+void LevelScript::release_sound_nodes() {
+    for (Object& o : objects_) {
+        if (o.type == type::kSound) sound_bank_destroy(o.sound.bank, sound_host_);
     }
 }
 
@@ -4514,6 +4569,7 @@ void LevelScript::update_near_unit_list(const Vec3& view, std::vector<ScriptEven
 void LevelScript::calculate_active_range(const Object& o, Character& c, const Vec3& view,
                                          std::vector<ScriptEvent>& out) {
     ActiveRangeInput in;
+    const UnitStats& stats = stats_for(o.unit);
     const Vec3 at = position_of(o);
     in.distance =
         std::sqrt((view.x - at.x) * (view.x - at.x) + 0.0f + (view.z - at.z) * (view.z - at.z));
@@ -4525,7 +4581,7 @@ void LevelScript::calculate_active_range(const Object& o, Character& c, const Ve
         const Character* master = c.master.machine->character(c.master.node);
         master_active = master != nullptr && master->active;
     }
-    in.forced = stats_for(o.unit).boss_champion || master_active || o.ai == ai_state::kDying;
+    in.forced = stats.boss_champion || master_active || o.ai == ai_state::kDying;
     // The current skill (`+0x398`) still casting (`core::still_casting`), or
     // any skill on the manager's running list (`+0x1c8`, `+0x50`).
     if (const UnitSkill* held = active_unit_skill(c)) {
@@ -4540,11 +4596,10 @@ void LevelScript::calculate_active_range(const Object& o, Character& c, const Ve
     // Effect 0x2c, a unit's own passive `PERCENT ACTIVE DISTANCE BONUS`, and
     // the template's `ACTIVERANGEMOD`, which a unit in AI state 5 or 6 does
     // not get.
-    in.active_distance_bonus = stats_for(o.unit).active_distance_bonus;
+    in.active_distance_bonus = stats.active_distance_bonus;
     if (o.ai != 5 && o.ai != 6) in.active_range_mod = active_range_mod_;
     in.master_is_player = c.master_player;
     in.think_index = c.think_index;
-    const UnitStats& stats = stats_for(o.unit);
     in.unit_shadows = stats.shadows;
     in.shadows_enabled = shadows_enabled_;
     in.unit_shadow_range = unit_shadow_range_;
@@ -4800,9 +4855,9 @@ void LevelScript::update(float frame_delta, const Vec3& player, QuestState& ques
     update_dialog_ui(frame_delta, quests, out);
 
     // `CLevel::updateLayouts`: the
-    // descriptors in order.
-    for (size_t i = 0; i < update_order_.size(); ++i) {
-        Object* o = find(update_order_[i]);
+    // descriptors in order. Every type this switch acts on is in `updates_each_frame`.
+    for (size_t i = 0; i < frame_order_.size(); ++i) {
+        Object* o = find(frame_order_[i]);
         if (o == nullptr) continue;
         switch (o->type) {
             case type::kTimeline:

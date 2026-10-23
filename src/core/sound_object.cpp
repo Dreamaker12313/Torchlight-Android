@@ -96,6 +96,12 @@ void sound_bank_clear(NodeSoundBank& bank, SoundBankHost& host) {
     bank.slots.clear();
 }
 
+// `CSoundBank::~CSoundBank`.
+void sound_bank_destroy(NodeSoundBank& bank, SoundBankHost& host) {
+    if (bank.looping) sound_bank_stop(bank, true, host);
+    sound_bank_clear(bank, host);
+}
+
 // `CSoundBank::update`.
 void sound_bank_update(NodeSoundBank& bank, float delta, const Vec3* node, const Vec3& listener,
                        SoundBankHost& host, RunicRandom& volatile_rng) {

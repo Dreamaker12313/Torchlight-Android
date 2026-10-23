@@ -183,6 +183,8 @@ struct SettingsMenu {
     /// DIVERGENCE (platform): a Switch has no Xbox 360 storage device; a port that hides Set
     /// Storage Device sets this, and the walk passes over it.
     bool storage_hidden = false;
+    /// DIVERGENCE (platform): iOS's Storage row sets `GameSettings::text_size` instead.
+    bool text_size_row = false;
 
     /// `CSoundManager::updateAudioLevels`, wherever the screen calls it.
     std::function<void(const AudioLevels&)> update_audio_levels;

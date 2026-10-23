@@ -38,8 +38,24 @@ void UnitTypeHierarchy::parse(const tl::formats::AdmSection& root) {
 
 // `CHierarchy::getTypeIDByName`.
 uint32_t UnitTypeHierarchy::id_of(const std::string& name) const {
-    const auto it = by_name_.find(upper(name));
+    const auto it = by_name_.find(name);
     return it == by_name_.end() ? kUnknown : it->second;
+}
+
+// PORT: the order of `upper`'s keys, compared byte by byte as `std::string` does
+// (`std::toupper` in the "C" locale, which the game never leaves, folds a-z alone).
+bool UnitTypeHierarchy::NameLess::operator()(const std::string& a, const std::string& b) const {
+    const auto fold = [](char c) {
+        const auto u = static_cast<unsigned char>(c);
+        return static_cast<unsigned char>(u >= 'a' && u <= 'z' ? u - ('a' - 'A') : u);
+    };
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char x = fold(a[i]);
+        const unsigned char y = fold(b[i]);
+        if (x != y) return x < y;
+    }
+    return a.size() < b.size();
 }
 
 std::string UnitTypeHierarchy::name_of(uint32_t id) const {

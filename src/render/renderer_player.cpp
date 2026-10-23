@@ -150,40 +150,17 @@ void Renderer::Impl::update_game_camera(const Ogre::Vector3& player_at) {
     const float full = kDefaultCameraDistance * camera_mult;
     if (!(camera_dolly > 0.0f)) camera_dolly = full;
     // Not in cinematic mode (`CCameraControl::processInput`, `+0x98`).
-    if (camera_orbit_input != 0.0f && dt > 0.0f && !camera_cinematic.on) {
-        // TorchlightCam rotates the view around the player. The port uses the same heading for
-        // camera-relative movement, so rotating it here keeps movement directions intuitive.
-        camera_yaw += camera_orbit_input * 1.8f * dt;
-    }
-    if (camera_pitch_input != 0.0f && dt > 0.0f && !camera_cinematic.on) {
-        camera_pitch_adjust = std::clamp(camera_pitch_adjust + camera_pitch_input * 0.8f * dt,
-                                         -0.35f, 0.35f);
-    }
+    cam.touch.step(dt, camera_cinematic.on, camera_yaw, camera_dolly, camera_mult);
     if (camera_zoom_input != 0.0f && dt > 0.0f && !camera_cinematic.on) {
         const float stick = std::max(-1.0f, std::min(1.0f, camera_zoom_input));
         camera_dolly = tl::core::zoom_dolly(
             camera_dolly, static_cast<std::int16_t>(std::lround(stick * tl::core::kStickMax)),
             camera_mult, dt);
     }
-    if (camera_zoom_delta != 0.0f && !camera_cinematic.on) {
-        camera_dolly += camera_zoom_delta;
-        const float farthest = tl::core::kZoomDefaultScale * camera_mult;
-        if (camera_dolly < tl::core::kZoomMin) camera_dolly = tl::core::kZoomMin;
-        if (camera_dolly > farthest) camera_dolly = farthest;
-    }
     const float dolly = close_up ? 14.0f : camera_dolly;
-    const float pitch = std::clamp(
-        ((1.0f - (dolly - 14.0f) / (full - 14.0f)) * -0.5f + 1.0f) * 0.75f,
-        0.25f, 1.25f);
-    // Pitch moves the eye along an arc around the focus. Keeping the eye-to-focus distance
-    // constant prevents a pitch adjustment from looking like an unintended zoom.
-    const float base_angle = std::atan2(pitch, 0.5f);
-    const float eye_distance = dolly * std::sqrt(pitch * pitch + 0.25f);
-    const float angle = std::clamp(base_angle + camera_pitch_adjust, 0.2f, 1.35f);
-    const float horizontal = eye_distance * std::cos(angle);
-    const float vertical = eye_distance * std::sin(angle);
-    Ogre::Vector3 offset(-std::sin(camera_yaw) * horizontal, vertical,
-                         -std::cos(camera_yaw) * horizontal);
+    const float pitch = ((1.0f - (dolly - 14.0f) / (full - 14.0f)) * -0.5f + 1.0f) * 0.75f;
+    Ogre::Vector3 offset =
+        cam.touch.turned(Ogre::Vector3(0.5f * dolly, pitch * dolly, -0.5f * dolly), dolly);
     if (cam.offset.length() == 0.0f) cam.offset = offset;
     offset = (cam.offset - offset) * std::pow(0.0001f, dt) + offset;
     cam.offset = offset;
@@ -561,21 +538,12 @@ void Renderer::Impl::drive_player(float delta) {
         step_player(delta, tl::core::InputState{});
         return;
     }
-    // The right stick controls the camera only while gameplay has the pad. iOS assigns its
-    // vertical axis to pitch and uses pinch for zoom; controller platforms keep stick zoom.
-    const bool camera_input_blocked = player_death.dying || inventory_menu.visible() ||
-                                      quest_dialog.visible() || script_dialog_open();
-    camera_orbit_input = camera_input_blocked ? 0.0f : in.look_x;
-    camera_pitch_input = camera_input_blocked ? 0.0f : in.camera_pitch;
-    camera_zoom_input = camera_input_blocked ? 0.0f : in.zoom;
-    camera_zoom_delta = camera_input_blocked ? 0.0f : in.zoom_delta;
-#if !defined(TL_PLATFORM_IOS)
-    // On controller platforms, keep the original vertical zoom and hold LB to tilt.
-    if (!camera_input_blocked && in.tab_prev) {
-        camera_pitch_input = in.zoom;
-        camera_zoom_input = 0.0f;
-    }
-#endif
+    // The right stick zooms only while the game itself has the pad
+    // (is the in-game dispatch; the menus take their own).
+    const bool camera_blocked = player_death.dying || inventory_menu.visible() ||
+                                quest_dialog.visible() || script_dialog_open();
+    camera_zoom_input = camera_blocked ? 0.0f : in.zoom;
+    game_camera.touch.take(in, camera_blocked);
 
     // The menu's edges are taken every frame, so a button held from before the menu
     // opened is not a fresh press.
@@ -776,8 +744,8 @@ void Renderer::Impl::drive_player(float delta) {
     }
     inventory_button_held = in.inventory;
 
-    // Automap controls: toggle with 'M' / Right Stick click, zoom with +/-
-    const bool map_toggle_edge = in.map_toggle && !map_toggle_held;
+    // Automap controls: toggle with 'M' / Right Stick click (a turned free camera's reset), zoom
+    const bool map_toggle_edge = in.map_toggle && !map_toggle_held && !game_camera.touch.took_r3;
     map_toggle_held = in.map_toggle;
     if (map_toggle_edge) {
         automap.cycle_mode();
@@ -923,19 +891,7 @@ void Renderer::Impl::drive_player(float delta) {
             const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
             const bool vendor_tray = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
             if (vendor_screen) {
-                // RB advances the vendor category (needed for Baklah's extra stock tabs);
-                // LB switches focus between vendor stock and the player's bag so items can
-                // be sold back. Stick left/right also steps the focused tray's category.
-                if (tab_next_edge) {
-                    inventory_menu.cycle_vendor_tab(1);
-                    play_ui(tl::core::InterfaceSound::Navigate);
-                    update_menu();
-                }
-                if (tab_prev_edge) {
-                    inventory_menu.focus_next_tray(1);
-                    play_ui(tl::core::InterfaceSound::Navigate);
-                    update_menu();
-                }
+                tray_bumpers(true, tab_next_edge, tab_prev_edge);
                 if (std::abs(in.stick_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
                         inventory_menu.step_tray_tab(in.stick_x > 0.0f ? 1 : -1);
@@ -947,18 +903,7 @@ void Renderer::Impl::drive_player(float delta) {
                     inventory_stick_x_held = false;
                 }
             } else {
-                // Match the vendor controls: RB advances the focused tray's
-                // category; LB switches between the player's and pet's bags.
-                if (tab_next_edge) {
-                    inventory_menu.step_bag_tab(1);
-                    play_ui(tl::core::InterfaceSound::Navigate);
-                    update_menu();
-                }
-                if (tab_prev_edge) {
-                    inventory_menu.swap_bag_focus(0);
-                    play_ui(tl::core::InterfaceSound::Navigate);
-                    update_menu();
-                }
+                tray_bumpers(false, tab_next_edge, tab_prev_edge);
                 if (std::abs(in.stick_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
                         inventory_menu.step_bag_tab(in.stick_x > 0.0f ? 1 : -1);
@@ -2163,7 +2108,8 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                             // before the sound: the death particle (PARTICLE_DEATH
                             // or its censored twin) for a death the level script deals.
                             play_death_particle(stats_for_unit(it->first),
-                                                at->_getDerivedPosition());
+                                                at->_getDerivedPosition(),
+                                                character_ref(event.node_id));
                             play_sound(stats_for_unit(it->first).sounds[tl::core::SoundSlot::Death],
                                        at->_getDerivedPosition());
                         }
@@ -2459,19 +2405,21 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                     if (unit_node_position(event.node_id, from) &&
                         unit_node_position(event.target_node, at)) {
                         tl::core::UnitStats victim = player_stats;
+                        CharacterRef struck;
                         if (event.target_node != 0) {
                             tl::core::LevelScript* of = event.target_machine != nullptr
                                                             ? event.target_machine
                                                             : script_owning(event.target_node);
                             victim = stats_for_unit(of != nullptr ? of->unit_of(event.target_node)
                                                                   : std::string());
+                            struck = character_ref(event.target_node, of);
                         }
                         if (!event.blocked && event.amount != 0.0f) {
-                            play_hit_particle(victim, from, at);
+                            play_hit_particle(victim, from, at, struck);
                         }
                         for (int i = 0; i < event.absorbed; ++i) show_absorbed(at, victim);
                         play_strike_particle(attacker, from, at, victim.radius, event.critical,
-                                             event.blocked);
+                                             event.blocked, character_ref(event.node_id));
                     }
                 }
                 // `rollAttack`: the knock-back, the degraded

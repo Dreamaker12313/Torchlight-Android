@@ -1769,15 +1769,7 @@ void Renderer::Impl::step_unit_themes() {
     // `CBaseUnit::update`, the theme half: each placed
     // unit's own `CEffectManager` (`+0x1b8`) themes; none without a manager.
     static const std::vector<const tl::core::UnitTheme*> kNoEffectThemes;
-    std::map<const SceneUnit*, const std::vector<const tl::core::UnitTheme*>*> effect_themes;
-    const std::vector<MachineView> views = machines();
-    for (const MachineView& view : views) {
-        for (const int64_t node : view.script->units_with_effects()) {
-            const tl::core::EffectManager* effects = view.script->unit_effects(node);
-            const SceneUnit* drawn = scene_unit_of(view.script, node);
-            if (effects != nullptr && drawn != nullptr) effect_themes[drawn] = &effects->themes();
-        }
-    }
+    const UnitThemeSources sources = unit_theme_sources();
     for (auto& entry : scene_units) {
         SceneUnit& su = entry.second;
         if (su.entity == nullptr) continue;
@@ -1792,11 +1784,11 @@ void Renderer::Impl::step_unit_themes() {
         bool dead = false;
         int32_t visible = -1;
         int32_t ai_state = -1;
-        for (const MachineView& view : views) {
-            if (view.script->unit_is_dead(su.node)) dead = true;
+        for (const tl::core::LevelScript* machine : sources.machines) {
+            if (machine->unit_is_dead(su.node)) dead = true;
             if (visible < 0) {
-                visible = view.script->unit_visible(su.node);
-                ai_state = view.script->unit_ai_state(su.node);
+                visible = machine->unit_visible(su.node);
+                ai_state = machine->unit_ai_state(su.node);
             }
         }
         // A unit no machine runs (the menu's): its node's own flag.
@@ -1856,16 +1848,36 @@ void Renderer::Impl::step_unit_themes() {
                 su.themes.themes.add_unit_theme("CHAMPION", &unit_themes);
             }
         }
-        const auto held = effect_themes.find(&su);
-        su.themes.themes.update(held != effect_themes.end() ? *held->second : kNoEffectThemes,
-                                [&](const tl::core::UnitTheme* theme, bool removed) {
-                                    TL_LOG_INFO("unit '%s': theme %s %s", entry.first.c_str(),
-                                                theme != nullptr ? theme->name.c_str() : "(none)",
-                                                removed ? "off" : "on");
-                                    unit_theme_updated(su.themes, su.entity, type, theme, removed);
-                                });
+        const auto held = sources.effect_themes.find(&su);
+        su.themes.themes.update(
+            held != sources.effect_themes.end() ? *held->second : kNoEffectThemes,
+            [&](const tl::core::UnitTheme* theme, bool removed) {
+                TL_LOG_INFO("unit '%s': theme %s %s", entry.first.c_str(),
+                            theme != nullptr ? theme->name.c_str() : "(none)",
+                            removed ? "off" : "on");
+                unit_theme_updated(su.themes, su.entity, type, theme, removed);
+            });
         update_theme_particle_positions(su.themes, su.entity);
     }
+}
+
+// PORT: what step_unit_themes() reads of the machines, gathered once a frame.
+Renderer::Impl::UnitThemeSources Renderer::Impl::unit_theme_sources() {
+    UnitThemeSources out;
+    for (const MachineView& view : machines()) {
+        // One with no characters and no dead unit says not dead, -1 and -1 for every node,
+        // and has no unit with effects.
+        if (!view.script->has_characters() && !view.script->has_dead_units()) continue;
+        out.machines.push_back(view.script);
+        for (const int64_t node : view.script->units_with_effects()) {
+            const tl::core::EffectManager* effects = view.script->unit_effects(node);
+            const SceneUnit* drawn = scene_unit_of(view.script, node);
+            if (effects != nullptr && drawn != nullptr) {
+                out.effect_themes[drawn] = &effects->themes();
+            }
+        }
+    }
+    return out;
 }
 
 bool Renderer::Impl::ui_in_cinematic() const {

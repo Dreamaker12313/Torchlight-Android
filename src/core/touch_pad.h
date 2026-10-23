@@ -38,7 +38,7 @@ public:
         std::uint32_t held = 0;     ///< buttons down now
         std::uint32_t pressed = 0;  ///< pressed since the last take(), held or not
         float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;  ///< -1..1, y down
-        float pinch_dolly = 0.0f;   ///< signed dolly delta accumulated since the last take()
+        float pinch_dolly = 0.0f;  ///< signed dolly delta accumulated since the last take()
     };
 
     /// One thing to draw: a disc at a centre, in window pixels.

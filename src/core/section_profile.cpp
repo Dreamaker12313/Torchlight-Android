@@ -24,6 +24,7 @@ const char* section_name(Section section) {
         case Section::Ai: return "ai";
         case Section::Pathing: return "pathing";
         case Section::Motion: return "motion";
+        case Section::Route: return "route";
         case Section::Count: break;
     }
     return "?";

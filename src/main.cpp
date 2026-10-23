@@ -19,6 +19,7 @@
 #include "core/asset_path.h"
 #include "core/audio.h"
 #include "core/input.h"
+#include "core/job_pool.h"
 #include "core/level_memory.h"
 #include "core/log.h"
 #include "core/menu_manager.h"
@@ -29,6 +30,7 @@
 #include "core/settings_menu.h"
 #include "core/touch_pad.h"
 #include "core/waypoints.h"
+#include "usage.h"
 
 #if defined(TL_HAVE_OGRE)
 #include "render/gpu_skinning.h"
@@ -273,6 +275,7 @@ struct Options {
     unsigned height = 720;
     bool size_given = false;  ///< `--width` or `--height`: config.txt's size stands aside
     bool fullscreen = false;  ///< config.txt's `fullscreen` (the desktop's)
+    bool vsync = true;        ///< config.txt's `vsync` (the desktop's)
     /// Dress the subject as an unequipped character: the player unit's
     /// <SLOT>_BASE textures on the body plus HELMET_BASE_MESH. The menu's
     /// default; `--base-outfit` asks for it anywhere.
@@ -397,6 +400,7 @@ struct Options {
     /// Whether the minimap is disabled.
     bool no_minimap = false;
     int fps_overlay = -1;  ///< `--fps` 1, `--no-fps` 0, -1 the default
+    int fps_limit = -1;    ///< `--fps-limit N` (0 none), -1 config.txt's
     int tips = -1;         ///< `--tips` 1, `--no-tips` 0, -1 the default
 
     /// Whether to start with fullscreen automap overlay.
@@ -453,6 +457,9 @@ struct Options {
     /// `--cpu-skinning`: characters skinned on the CPU from the start, as the debug
     /// menu's GPU SKINNING row does.
     bool cpu_skinning = false;
+    /// `--workers N`: threads beside the game's for its fork-join work (core/job_pool.h); 0
+    /// keeps all of it on the game's thread. -1: the default.
+    int workers = -1;
     /// `--bench SECONDS`: RendererConfig::bench_seconds.
     float bench_seconds = 0.0f;
     bool invulnerable = false;  ///< `--invulnerable`: RendererConfig::invulnerable
@@ -501,7 +508,7 @@ struct Options {
     /// `--mod-data <dir>`: a mod root containing MEDIA/, mounted before base data.
     std::vector<std::string> mod_data;
     /// `--console-ui DIR`: the console interface for a PC archive
-    /// (`RendererConfig::console_ui`), mounted as an overlay when present.
+    /// (`RendererConfig::console_ui`), unused beside the Xbox 360 pak.
     std::string console_ui;
 
     /// `--no-hud`: leave the game screen's HUD off.
@@ -605,6 +612,25 @@ bool set_flag_option(Options& o, const std::string& arg) {
     return false;
 }
 
+// `--name N` into a count, negatives read as 0.
+bool set_count_option(Options& o, const std::string& arg, const char* value) {
+    static const std::pair<const char*, int Options::*> kOptions[] = {
+        {"--quest-slot", &Options::quest_slot},
+        {"--inventory-tab", &Options::inventory_tab},
+        {"--workers", &Options::workers},
+        {"--level-up", &Options::level_ups},
+        {"--stat-points", &Options::stat_points},
+        {"--skill-points", &Options::skill_points},
+        {"--foremen-kills", &Options::foremen_kills},
+    };
+    for (const auto& [name, field] : kOptions) {
+        if (arg != name) continue;
+        o.*field = std::max(0, std::atoi(value));
+        return true;
+    }
+    return false;
+}
+
 #if defined(TL_DEVICE_BUILD)
 // A device build's defaults: it has no command line, so they are its whole
 // interface.
@@ -673,7 +699,8 @@ Options parse_args(int argc, char** argv) {
         const std::string arg = argv[i];
         const bool has_next = (i + 1 < argc);
 
-        if (has_next && set_string_option(o, arg, argv[i + 1])) {
+        if (has_next &&
+            (set_string_option(o, arg, argv[i + 1]) || set_count_option(o, arg, argv[i + 1]))) {
             ++i;
             continue;
         }
@@ -723,8 +750,6 @@ Options parse_args(int argc, char** argv) {
         } else if (arg == "--quest-dump" && has_next) {
             o.quest_dump = argv[++i];
             o.play = true;
-        } else if (arg == "--quest-slot" && has_next) {
-            o.quest_slot = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--quest-offer" && has_next) {
             o.quest_offers.push_back(argv[++i]);
             o.play = true;
@@ -740,14 +765,6 @@ Options parse_args(int argc, char** argv) {
             o.item_slots.push_back(std::atoi(argv[++i]));
         } else if (arg == "--quest-level" && has_next) {
             o.quest_level = std::max(1, std::atoi(argv[++i]));
-        } else if (arg == "--inventory-tab" && has_next) {
-            o.inventory_tab = std::max(0, std::atoi(argv[++i]));
-        } else if (arg == "--level-up" && has_next) {
-            o.level_ups = std::max(0, std::atoi(argv[++i]));
-        } else if (arg == "--stat-points" && has_next) {
-            o.stat_points = std::max(0, std::atoi(argv[++i]));
-        } else if (arg == "--skill-points" && has_next) {
-            o.skill_points = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--skill-set" && has_next) {
             o.skill_set = std::atoi(argv[++i]) == 0 ? 0 : 1;
         } else if (arg == "--learn-skill" && has_next) {
@@ -768,8 +785,6 @@ Options parse_args(int argc, char** argv) {
         } else if (arg == "--effects-dump" && has_next) {
             o.effects_dump = argv[++i];
             o.play = true;
-        } else if (arg == "--foremen-kills" && has_next) {
-            o.foremen_kills = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--bench" && has_next) {
             o.bench_seconds = std::strtof(argv[++i], nullptr);
         } else if (arg == "--tips") {
@@ -801,6 +816,8 @@ Options parse_args(int argc, char** argv) {
             o.fps_overlay = 1;
         } else if (arg == "--no-fps") {
             o.fps_overlay = 0;
+        } else if (arg == "--fps-limit" && has_next) {
+            o.fps_limit = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--map-zoom" && has_next) {
             o.map_zoom = static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--equip" && has_next) {
@@ -1153,123 +1170,6 @@ Options parse_args(int argc, char** argv) {
     return o;
 }
 
-constexpr const char* kUsage =
-    "torchlight - open-source Torchlight engine\n"
-    "\n"
-    "  --game-data <path>    where the game's media lives\n"
-    "  --pak <zip>           mount this archive in place of <game-data>/Pak.zip\n"
-    "                        (e.g. a PC archive with the Xbox's render data)\n"
-    "  --ogre-media <path>   OGRE's Media dir (RTShaderLib); has a default\n"
-    "  --mesh <name>         mesh to display (default: Alchemist.MESH)\n"
-    "  --menu                load the town main-menu backdrop\n"
-    "  --no-menu             skip the front end, go straight into the game\n"
-    "  --menu-dump <png>     frame of the main menu, before it is played\n"
-    "  --wardrobe-dump <png> frame of the main menu's wardrobe editor\n"
-    "  --wardrobe-picks <row>=<n>,...\n"
-    "                        looks the wardrobe dump picks first\n"
-    "  --bestiary-dump <png> frame of the main menu's bestiary\n"
-    "  --bestiary-picks unit=<n|NAME|all>,animation=<n>,zoom=<x>,turn=<deg>\n"
-    "                        what the bestiary dump shows (all: a frame per unit)\n"
-    "  --level-list-dump <png>\n"
-    "                        frame of the main menu's Choose Level biome list\n"
-    "  --hud-dump <png>      frame of the level with the game HUD over it\n"
-    "  --no-hud              leave the game screen's HUD off\n"
-    "  --extra-data <path>   mount another archive or directory beside the\n"
-    "                        install (repeatable). The console HUD's art\n"
-    "                        ships only in the Xbox release; see\n"
-    "                        scripts/extract_console_ui.py\n"
-    "  --mod-data <dir>      mount a mod folder containing MEDIA/ before base\n"
-    "                        (repeatable; same-path files override the game)\n"
-    "  --auto-new-game       take New Game without anyone pressing it\n"
-    "  --layout <path>       load a .cmp layout by archive path\n"
-    "  --rng-trace <file>    append every seeding and draw of a --dungeon\n"
-    "                        floor's generator to <file>, for\n"
-    "                        diffing against a trace of the original\n"
-    "  --dungeon <name>[,floor]\n"
-    "                        generate and load one floor of a procedural\n"
-    "                        dungeon by its media/dungeons/ NAME, e.g.\n"
-    "                        Test_Cave .. Test_Sunken; implies --play.\n"
-    "                        Seeded as the original seeds a floor: the log's\n"
-    "                        'Seeding: n' differs from run to run\n"
-    "  --equip <mesh>        wear a wardrobe mesh (repeatable; full path)\n"
-    "  --naked               wear nothing; just the base body\n"
-    "  --link-animation <n>  link <n>.SKELETON beside the mesh (repeatable)\n"
-    "  --animation <name>    play an animation (default: Idle, linked)\n"
-    "  --animation-time <s>  where to park that animation before the loop\n"
-    "  --fov <degrees>       vertical field of view (default: from the\n"
-    "                        authored FOV 45 at 4:3, so 34.52 at 16:9)\n"
-    "  --turntable <deg/s>   subject spin while running (default: 9, 0 off)\n"
-    "  --width/--height <n>  frame size (default: 1280x720)\n"
-    "  --play                steer the character: left stick, or WASD\n"
-    "  --walk <seconds>      scripted walk, then stop (implies --play)\n"
-    "  --at <x,z>            stand the character there, for surveying\n"
-    "  --no-particles        leave the particles out (bisecting a fault)\n"
-    "  --pu-smoke            a ParticleUniverse system at the player (with --dump-at)\n"
-    "  --pu-particles <p>    particle layouts drawn: an archive-path prefix,\n"
-    "                        'all' (the default) or 'none'; repeatable\n"
-    "  --no-torchlight       leave the projected light map out\n"
-    "  --light-map-dump      with every frame dump, the light map beside it\n"
-    "                        (<png>.lightmap.png)\n"
-    "  --draw-dump <dir>     with a frame dump, every draw recorded into <dir>\n"
-    "                        (frame.txt, glsl/)\n"
-    "  --dump-gamma          frame dumps with brightness and contrast drawn,\n"
-    "                        as the window always is\n"
-    "  --walk-dump <png>    frame taken after the scripted walk\n"
-    "  --walk-to <x,z[,png]> find a route there and walk it (implies --play);\n"
-    "                        repeatable, so a journey can be done in legs\n"
-    "  --skills-dump <png>  a frame with the console skills tab over it\n"
-    "  --skill-points <n>   skill points to spend on that tab (default 0)\n"
-    "  --skill-set <0|1>    which skill set's row that tab shows (default 0)\n"
-    "  --skill-select <name> put that tab's cursor on a named skill\n"
-    "  --learn-skill <name> spend a skill point on it (repeatable)\n"
-    "  --effects-dump <txt> the player's live effects and affixes, as text\n"
-    "  --skill-map          open the map-to-button sheet over that tab\n"
-    "  --pad-script <list>  press pad buttons from a script: up,down,left,right,\n"
-    "                       dup,ddown,a,b,x,y,start,back,lt,rt,lb,rb,rs_up,rs_down,wait,\n"
-    "                       text=<name>, shot=<png> (menus included)\n"
-    "  --talk-to <n[,png]>  walk to a named unit and open what they say\n"
-    "  --talk-to-step <n>   the same, in the --stand/--walk-after list's order\n"
-    "  --godspeed           the debug menu's GODSPEED on, in that list's order\n"
-    "  --debug-level <n>    the debug menu's LEVEL row, up to level n and a staff worn, in "
-    "that list's order\n"
-    "  --use-prop <unit>    A on the nearest prop of that unit, at any distance\n"
-    "  --slay <unit>        the player's killing blow on that placed unit, in that list's "
-    "order\n"
-    "  --teleport <x,z>     --at in that list's order; the pets come along\n"
-    "  --fishing-keys <k>   after --talk-to \"Fishing Hole\": "
-    "wait=S,bite,a,b,land,ok,shot=PNG\n"
-    "  --class <name>       Destroyer, Vanquisher or Alchemist; skips creation\n"
-    "  --audio              open the audio device even when headless\n"
-    "  --mute               never open the audio device, even windowed\n"
-    "  --touch-pad          draw the phone's on-screen pad (a frame dump of it)\n"
-    "  --cpu-skinning       skin characters on the CPU, not in their shaders\n"
-    "  --bench <seconds>    play windowed for that long, then quit (the fps lines)\n"
-    "  --invulnerable       the player takes no damage (frame comparisons)\n"
-    "  --tips / --no-tips   context tips ('Your health is low...'); off when headless\n"
-    "  --tip-press <b|y>    that button on the open tip, in the --fight list's order\n"
-    "  --pet <Dog|Cat|none> which animal follows the character (default Dog)\n"
-    "  --pet-stance <s>     aggressive, defensive (default) or passive\n"
-    "  --give-item <n[,enchant]> make an item for the player and wear it (repeatable)\n"
-    "  --pet-item <n[,c]>   put an item in the pet's bag (repeatable)\n"
-    "  --pet-learn <scroll> give the pet a spell scroll and learn it (repeatable)\n"
-    "  --pet-use <item>     give the pet an item and use it on itself (repeatable)\n"
-    "  --pet-fish <name>    feed it a fish: Web Fish, Dogfish, ... (repeatable)\n"
-    "  --no-starting-fish   leave the Xbox Improbably Large Fish out of the bag\n"
-    "  --send-pet-to-town   send it shopping once the level is up\n"
-    "  --pet-dump <png>     frame with the pet and its HUD panel\n"
-    "  --create-dump <png>  one frame of the character creation screen\n"
-    "  --difficulty-dump <png>  one frame of the difficulty screen\n"
-    "  --load-character-dump <png>  one frame of the Load Character screen\n"
-    "  --load-character-keys <keys>  press these first: u d a b x y\n"
-    "  --skip-after <s>      fire Skip Cutscene <s> seconds into each --visit\n"
-    "  --dump-at <s>,<png>   run the scene forward <s> seconds, then dump;\n"
-    "                        repeatable, and two of them prove motion\n"
-    "  --headless            render offscreen, no window\n"
-    "  --dump-frame <png>    render one frame to a PNG and exit\n"
-    "  --help                this text\n";
-
-void print_usage() { std::fputs(kUsage, stdout); }
-
 // `config.txt` (core/run_config.h), read before anything else happens and
 // applied to the options. A device makes the file with everything off, beside
 // its game files; with `debug` off it writes none of the frame dumps it
@@ -1280,14 +1180,20 @@ Options with_run_config(Options o) {
 #if defined(TL_DEVICE_BUILD)
     std::string folder = o.game_data;
     if (!folder.empty() && folder.back() != '/') folder += '/';
+    tl::core::RunConfig device_defaults;
+#if defined(TL_PLATFORM_ANDROID)
+    // A phone's display runs at up to 120 Hz; the game is held to 60 unless the file says.
+    device_defaults.fps_limit = 60;
+#endif
     const tl::core::RunConfig config =
-        tl::core::load_run_config(folder + "config.txt", tl::core::RunConfig{}, /*create=*/true);
+        tl::core::load_run_config(folder + "config.txt", device_defaults, /*create=*/true);
     if (!config.debug) {
         o.menu_dump.clear();
         o.dump_frame.clear();
         o.hud_dump.clear();
     }
     if (o.fps_overlay == -1) o.fps_overlay = config.fps ? 1 : 0;
+    if (o.fps_limit == -1) o.fps_limit = static_cast<int>(config.fps_limit);
 #else
     const bool player = player_folder();
     std::FILE* present = std::fopen("config.txt", "rb");
@@ -1305,6 +1211,8 @@ Options with_run_config(Options o) {
             o.height = config.height;
         }
         o.fullscreen = config.fullscreen;
+        o.vsync = config.vsync;
+        if (o.fps_limit == -1) o.fps_limit = static_cast<int>(config.fps_limit);
     }
 #endif
     return o;
@@ -1337,8 +1245,9 @@ constexpr const char* kBuildName = "ios";
 constexpr const char* kBuildName = "desktop";
 #endif
 
-// `--pad-script`, `--touch-pad` and `--cpu-skinning`, before anything is drawn.
+// `--pad-script`, `--touch-pad`, `--cpu-skinning` and `--workers`, before anything is drawn.
 void apply_input_options(const Options& opts) {
+    if (opts.workers >= 0) tl::core::set_job_workers(static_cast<unsigned>(opts.workers));
     if (!opts.pad_script.empty()) tl::core::set_pad_script(opts.pad_script);
     if (opts.touch_pad) {
         tl::core::touch_pad().set_screen(static_cast<float>(opts.width),
@@ -1410,6 +1319,8 @@ void apply_window_options(const Options& opts, tl::render::RendererConfig& rc) {
     rc.width = opts.width;
     rc.height = opts.height;
     rc.fullscreen = opts.fullscreen;
+    rc.vsync = opts.vsync;
+    rc.fps_limit = opts.fps_limit > 0 ? static_cast<unsigned>(opts.fps_limit) : 0;
 }
 #endif
 
@@ -1462,10 +1373,6 @@ int main(int argc, char** argv) {
     // switches the boost off again (Renderer::Impl::FrameClock).
     tl::core::set_loading_boost(true);
     TL_LOG_INFO("game data: %s", opts.game_data.c_str());
-    TL_LOG_INFO("mod data: %zu folder(s)", opts.mod_data.size());
-    for (const std::string& mod : opts.mod_data) {
-        TL_LOG_INFO("mod data folder: %s", mod.c_str());
-    }
     tl::core::AssetIndex assets;
     if (!prepare_run(opts, assets)) {
         tl::core::log_shutdown();

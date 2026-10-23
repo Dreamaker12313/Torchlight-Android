@@ -48,8 +48,10 @@ bool LevelScript::set_destination(Character& c, const UnitStats& stats, float x,
     const bool cinematic = ui_in_cinematic();
     std::vector<Vec3> nodes;
     const Vec3 from = c.motion.position;
-    const bool found =
-        nav_->find_nodes(from, {x, 0.0f, z}, *passability_, cinematic, nodes, c.search_cap);
+    bool found = false;
+    timed(Section::Route, [&] {
+        found = nav_->find_nodes(from, {x, 0.0f, z}, *passability_, cinematic, nodes, c.search_cap);
+    });
     auto restore = [&]() {
         if (was_on_grid && state != 5 && state != 6) avoidance_add(c);
     };

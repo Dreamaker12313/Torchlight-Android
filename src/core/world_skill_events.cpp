@@ -22,7 +22,7 @@ void World::update_live_skill_events(float delta) {
     // `updateEvent`: while a timeline updates, an
     // `ATTACHOWNER` event moves its owner to the damage shape (`SCALEATTACHDISTANCE`);
     // `moveToPosition` refusing stops it. The owner is
-    // `getOwnerCharacter`'s. INVENTED: `stopEvent` is the event leaving the list.
+    // `getOwnerCharacter`'s.
     for (size_t k = 0; k < live_skill_events.size();) {
         LiveSkillEvent& event = live_skill_events[k];
         if (event.listed) update_skill_event_lines(event);
@@ -59,7 +59,8 @@ void World::update_live_skill_events(float delta) {
         if (!moved) {
             TL_LOG_INFO("skills: '%s' cannot carry the character on; its event stops",
                         event.skill.c_str());
-            live_skill_events.erase(live_skill_events.begin() + static_cast<long>(k));
+            stop_skill_event(event);
+            ++k;
             continue;
         }
         ++k;
@@ -274,36 +275,42 @@ void World::reset_skill_events(const std::string& skill, uint32_t run,
             ++k;
             continue;
         }
-        // `CSkillEvent::stopEvent`: `CLayout::stop(false)`,
-        // `stopAllParticles(loop)` and `disableAllDamageShapes`.
-        // INVENTED: looping sounds (`CSoundObject::stop`) are not stopped.
-        for (size_t i = event.first; i < event.end && i < nested_scripts.size(); ++i) {
-            NestedScript& machine = nested_scripts[i];
-            std::vector<tl::core::ScriptEvent> events;
-            machine.script.stop_layout_timelines(quest_log.state(), events);
-            machine.script.disable_damage_shapes(quest_log.state(), events);
-            if (!events.empty()) apply_script_events(events, machine.nodes);
-        }
-        // `CSkillEvent::stopAllParticles`: the layout's
-        // own `Particle` is `CParticleWrapper::stop` at once; a `Layout Link
-        // Particle`'s `CParticle::Stop(loop)`. Holders go
-        // once nothing in them lives.
-        view_stop_particles(event.holders, event.loop);
-        // and `CUnitSpawner::stopAllParticles()` on each spawner
-        // (`+0xc0`): its particle layouts `CLayout::stop(false)`.
-        for (size_t i = event.first; i < event.end && i < nested_scripts.size(); ++i) {
-            for (const tl::core::LevelScript::NodeRecord& n :
-                 nested_scripts[i].script.nodes_of_type(tl::formats::cmp_type::kUnitSpawner)) {
-                const auto placed = spawner_particles.find(n.node);
-                if (placed == spawner_particles.end()) continue;
-                for (const auto& layout : placed->second) view_stop_emission(layout.second);
-            }
-        }
-        // Its particles and its layout go with the ended ones, between walks of the level's
-        // machines (release_ended_skill_events()).
-        event.listed = false;
+        stop_skill_event(event);
         ++k;
     }
+}
+
+void World::stop_skill_event(LiveSkillEvent& event) {
+    // `CSkillEvent::stopEvent`: `CLayout::stop(false)`,
+    // `stopAllParticles(loop)` and `disableAllDamageShapes`.
+    // The layout is a timeline layout (`CSkillEvent::CSkillEvent`), so the stop
+    // reaches its timelines and its `Sound` nodes.
+    for (size_t i = event.first; i < event.end && i < nested_scripts.size(); ++i) {
+        NestedScript& machine = nested_scripts[i];
+        std::vector<tl::core::ScriptEvent> events;
+        machine.script.stop_layout_timelines(quest_log.state(), events);
+        machine.script.stop_layout_sounds(quest_log.state(), events);
+        machine.script.disable_damage_shapes(quest_log.state(), events);
+        if (!events.empty()) apply_script_events(events, machine.nodes);
+    }
+    // `CSkillEvent::stopAllParticles`: the layout's
+    // own `Particle` is `CParticleWrapper::stop` at once; a `Layout Link
+    // Particle`'s `CParticle::Stop(loop)`. Holders go
+    // once nothing in them lives.
+    view_stop_particles(event.holders, event.loop);
+    // and `CUnitSpawner::stopAllParticles()` on each spawner
+    // (`+0xc0`): its particle layouts `CLayout::stop(false)`.
+    for (size_t i = event.first; i < event.end && i < nested_scripts.size(); ++i) {
+        for (const tl::core::LevelScript::NodeRecord& n :
+             nested_scripts[i].script.nodes_of_type(tl::formats::cmp_type::kUnitSpawner)) {
+            const auto placed = spawner_particles.find(n.node);
+            if (placed == spawner_particles.end()) continue;
+            for (const auto& layout : placed->second) view_stop_emission(layout.second);
+        }
+    }
+    // Its particles and its layout go with the ended ones, between walks of the level's
+    // machines (release_ended_skill_events()).
+    event.listed = false;
 }
 
 void World::retire_skill_layout(size_t first, size_t end) {
@@ -312,6 +319,8 @@ void World::retire_skill_layout(size_t first, size_t end) {
         if (machine.retired || machine.script.has_characters()) continue;
         machine.retired = true;
         machine.running = false;
+        // The layout goes, and its `Sound` nodes' banks with it (`CSoundBank::~CSoundBank`).
+        machine.script.release_sound_nodes();
         // Nothing addresses its nodes again; what they hold goes with its holder lists.
         machine.nodes.clear();
         level_machines.erase(

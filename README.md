@@ -135,12 +135,17 @@ settings, which are kept with the saves (`save/settings.txt`). Each line is
 | `debug` | `0` | the debug tools: the debug menu, the bestiary, the wardrobe editor, Choose Level, frame dumps, and the log file. When off, the menus do not offer them at all |
 | `logs` | `0` | the log file on its own (`debug=1` turns it on too) |
 | `fps` | `0` | the frame-rate overlay. **L3** toggles it in game, and the change is saved here |
+| `fps_limit` | `0` (Android `60`) | the most frames a second the game draws; `0` for no limit. On Android the display is asked for that rate too, so a 120 Hz screen can run at 60 |
 | `width`, `height` | `1280`, `720` | **desktop builds only:** the window size, or the screen resolution in fullscreen |
 | `fullscreen` | `0` | **desktop builds only:** `1` fills the screen at `width` x `height` |
+| `vsync` | `1` | **desktop builds only:** `1` waits for the screen's refresh; `0` draws frames as fast as the machine can |
 
-**Resolution is a desktop setting.** The Switch and Android builds always
-render at their screen's own size and ignore `width`, `height` and
-`fullscreen`. They do not write those lines into a new file.
+**Resolution is a desktop setting.** The Switch renders at its screen's
+own size, Android at the share of it chosen in the launcher (below); both
+ignore `width`, `height`, `fullscreen` and `vsync`. They do not write those lines into a new file.
+If the screen cannot show `width` x `height` (the window is clamped to the
+desktop, or the window manager makes a fullscreen window the monitor's size),
+the game is laid out for the size the window really has.
 
 Where the file lives:
 
@@ -191,7 +196,11 @@ the system's folder picker:
 
 The launcher remembers the folder and checks it on every start. If `pak.zip` is
 missing it asks again, and if `music/` is missing it offers to play without
-music. Android 12 (API 31) or newer is required, on an arm64 device.
+music. Before each start it shows two sliders: the resolution, 25% to 100%
+of the screen's (the system scales the frame up to the screen), and the
+frame limit, `config.txt`'s `fps_limit` (no limit at either end); and two
+switches, the frame-rate overlay (`fps`) and the free camera (`free_camera`). Android 12
+(API 31) or newer is required, on an arm64 device.
 
 ### iOS
 
@@ -202,8 +211,11 @@ open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there
 The app reads and writes its saves and settings in that same Documents folder.
 Touch controls appear on screen when first touched.
 On iOS, the right stick rotates the camera horizontally and adjusts its pitch vertically; pinch
-with two fingers anywhere in the play area to zoom. On controller platforms, vertical stick still
-zooms, and holding LB while moving it vertically adjusts pitch.
+with two fingers anywhere in the play area to zoom. On the other platforms the camera is the console's
+and the right stick zooms. `free_camera=1` in `config.txt` (or **Debug > FREE CAMERA**, with
+`debug=1`) turns on the free camera on any platform: the right stick across turns it, a pinch
+zooms on a touch screen (iOS, Android, the Switch in handheld), and R3 puts the view back
+(otherwise R3 still toggles the map). `free_camera=0` gives iOS the console's camera too.
 
 The iOS build supports unpacked mods. Put each extracted mod in its own
 subfolder under `Documents/mods/`, keeping the mod's `media/` directory

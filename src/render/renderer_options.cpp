@@ -43,7 +43,9 @@ void Renderer::Impl::create_options_screens() {
     // DIVERGENCE (platform): no storage device to pick on a Switch.
     settings_menu.storage_hidden = true;
 #if defined(TL_PLATFORM_IOS)
+    // DIVERGENCE (platform): on iOS the Storage row is the Text Size setting.
     settings_menu.storage_hidden = false;
+    settings_menu.text_size_row = true;
 #endif
     settings_menu.update_audio_levels = [](const tl::core::AudioLevels& levels) {
         const tl::core::AudioGains gains = tl::core::audio_gains(levels);
@@ -188,9 +190,8 @@ void Renderer::Impl::refresh_settings_menu() {
     static const char* const kTextSizeNames[] = {"Small", "Medium", "Large"};
     const int text_size = std::clamp(game_settings().text_size, 0, 2);
     settings_screen.set_caption("Text24", std::string("Text Size: ") + kTextSizeNames[text_size]);
-    constexpr float kTextSizes[] = {0.9f, 1.0f, 1.25f};
     const float previous_scale = ui_text_scale();
-    set_ui_text_scale(kTextSizes[text_size]);
+    set_ui_text_scale(ui_text_size_scale(text_size));
     if (previous_scale != ui_text_scale()) {
         hud.resize(config.width, config.height);
         game_hud.resize(config.width, config.height);

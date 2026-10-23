@@ -13,10 +13,13 @@
 // port's own interface pack (`ui_pack/`, what a PC pak is drawn with when no
 // `console_ui/` is beside it).
 //
-// Last, before the game starts, its one setting the engine cannot change once
-// running: the resolution it renders at, as a share of the screen's (the
-// system scales the smaller frame up to the screen, its proportions kept).
-// The engine reads it from `render_scale.txt`, a percentage.
+// Last, before the game starts, its settings: on sliders, the resolution it
+// renders at, as a share of the screen's (the system scales the smaller frame
+// up to the screen, its proportions kept), which the engine cannot change once
+// running and reads from `render_scale.txt`, a percentage, and the frame limit;
+// on switches, the frame-rate overlay and the free camera. Those three are lines
+// of the game folder's `config.txt` (`fps_limit`, `fps`, `free_camera`), which the
+// game reads and keeps too.
 package port.android;
 
 import android.app.Activity;
@@ -30,6 +33,11 @@ import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
+import android.view.View;
+import android.widget.LinearLayout;
+import android.widget.SeekBar;
+import android.widget.Switch;
+import android.widget.TextView;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -44,8 +52,13 @@ public final class Launcher extends Activity {
     private static final String KEY_FOLDER = "game_data";
     private static final String KEY_NO_MUSIC = "play_without_music";
     private static final String KEY_SCALE = "render_scale";
-    /** The resolutions offered, in percent of the screen's width and height. */
-    private static final int[] SCALES = {100, 90, 80, 75, 70, 60, 50};
+    /** The resolutions offered, in percent of the screen's width and height: the engine's range. */
+    private static final int MIN_SCALE = 25;
+    private static final int SCALE_STEP = 5;
+    /** The frame limits offered; 0, at both ends of the slider, is none. */
+    private static final int[] LIMITS = {0, 15, 30, 45, 60, 75, 90, 105, 120, 0};
+    /** The engine's own default on Android, when config.txt does not say. */
+    private static final int DEFAULT_LIMIT = 60;
 
     /**
      * The game is running in this process (in the background, or this activity was started over
@@ -123,25 +136,101 @@ public final class Launcher extends Activity {
         return (int) (size * (1.0f / factor));
     }
 
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density);
+    }
+
+    private static String scaleText(int[] screen, int percent) {
+        return "Resolution: " + percent + "%   " + scaled(screen[0], percent) + " x "
+                + scaled(screen[1], percent) + (percent == 100 ? "   (the screen's own)" : "");
+    }
+
+    private static String limitText(int fps) {
+        return "Frame limit: " + (fps == 0 ? "none" : fps + " frames a second");
+    }
+
+    /** A slider under its label, the label kept saying what the slider is at. */
+    private interface Label {
+        String of(int position);
+    }
+
+    private SeekBar slider(LinearLayout box, int max, int position, Label label, Runnable moved) {
+        TextView text = new TextView(this);
+        text.setText(label.of(position));
+        text.setPadding(0, dp(12), 0, dp(4));
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(max);
+        bar.setProgress(position);
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {
+                text.setText(label.of(progress));
+                if (fromUser) moved.run();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar b) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar b) {}
+        });
+        box.addView(text);
+        box.addView(bar);
+        return bar;
+    }
+
+    /** An on/off line under the sliders. */
+    private Switch toggle(LinearLayout box, String text, boolean on) {
+        Switch toggle = new Switch(this);
+        toggle.setText(text);
+        toggle.setChecked(on);
+        toggle.setPadding(0, dp(12), 0, 0);
+        box.addView(toggle);
+        return toggle;
+    }
+
     private void askForResolution(String folder) {
         waiting = true;
         int[] screen = screenSize();
-        int chosen = prefs().getInt(KEY_SCALE, 100);
-        String[] items = new String[SCALES.length];
-        int checked = 0;
-        for (int i = 0; i < SCALES.length; ++i) {
-            int p = SCALES[i];
-            items[i] = p + "%   " + scaled(screen[0], p) + " x " + scaled(screen[1], p)
-                    + (p == 100 ? "   (the screen's own)" : "");
-            if (p == chosen) checked = i;
+        int chosen = Math.max(MIN_SCALE, Math.min(100, prefs().getInt(KEY_SCALE, 100)));
+        int limit = readConfig(folder, "fps_limit", DEFAULT_LIMIT);
+        boolean fps = readConfig(folder, "fps", 0) != 0;
+        boolean freeCamera = readConfig(folder, "free_camera", 0) != 0;
+        int limitAt = 0;
+        for (int i = 1; i < LIMITS.length - 1; ++i) {
+            if (Math.abs(LIMITS[i] - limit) < Math.abs(LIMITS[limitAt] - limit)) limitAt = i;
         }
-        final int[] pick = {SCALES[checked]};
+        if (limit == 0) limitAt = LIMITS.length - 1;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(4), dp(24), 0);
+        final boolean[] limitMoved = {false};
+        SeekBar scale = slider(box, (100 - MIN_SCALE) / SCALE_STEP, (chosen - MIN_SCALE) / SCALE_STEP,
+                p -> scaleText(screen, MIN_SCALE + p * SCALE_STEP), () -> {});
+        SeekBar frames = slider(box, LIMITS.length - 1, limitAt, p -> limitText(LIMITS[p]),
+                () -> limitMoved[0] = true);
+        Switch overlay = toggle(box, "Frame-rate overlay", fps);
+        Switch camera = toggle(box, "Free camera", freeCamera);
+
         new AlertDialog.Builder(this)
-                .setTitle("Resolution")
-                .setSingleChoiceItems(items, checked, (d, which) -> pick[0] = SCALES[which])
+                .setTitle("Settings")
+                .setView(box)
                 .setCancelable(false)
                 .setPositiveButton("Play", (d, w) -> {
-                    prefs().edit().putInt(KEY_SCALE, pick[0]).apply();
+                    prefs().edit().putInt(KEY_SCALE, MIN_SCALE + scale.getProgress() * SCALE_STEP).apply();
+                    if (limitMoved[0]) {
+                        writeConfig(folder, "fps_limit", LIMITS[frames.getProgress()], DEFAULT_LIMIT,
+                                "the most frames a second the game draws; 0 for no limit.");
+                    }
+                    if (overlay.isChecked() != fps) {
+                        writeConfig(folder, "fps", overlay.isChecked() ? 1 : 0, 0,
+                                "the frame-rate overlay; L3 switches it in the game, and it is kept here.");
+                    }
+                    if (camera.isChecked() != freeCamera) {
+                        writeConfig(folder, "free_camera", camera.isChecked() ? 1 : 0, 0,
+                                "the right stick turns the camera and R3 resets it; a pinch zooms.");
+                    }
                     waiting = false;
                     start(folder);
                 })
@@ -149,6 +238,65 @@ public final class Launcher extends Activity {
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER))
                 .setNegativeButton("Quit", (d, w) -> finish())
                 .show();
+    }
+
+    /**
+     * A number line of `config.txt` in the game folder, as the engine reads it (`fps_limit`, or
+     * `0`/`1` for a switch): `fallback`, the engine's own default, when it says nothing.
+     */
+    private static int readConfig(String folder, String wanted, int fallback) {
+        try {
+            for (String line : read(new File(folder, "config.txt")).split("\r?\n")) {
+                String[] kv = line.split("#", 2)[0].split("=", 2);
+                if (kv.length < 2 || !kv[0].trim().equalsIgnoreCase(wanted)) continue;
+                int value = Integer.parseInt(kv[1].trim());
+                if (value >= 0 && value <= 1000) return value;
+            }
+        } catch (IOException | NumberFormatException e) {
+            // No file yet, or a line the engine would pass over too.
+        }
+        return fallback;
+    }
+
+    /**
+     * One line of `config.txt` set, the rest of the file kept; a key it lacks is added under its
+     * comment. With no file yet, and the engine's default asked for, none is made: the engine
+     * writes its own on the first start.
+     */
+    private static void writeConfig(String folder, String wanted, int value, int fallback,
+            String comment) {
+        File file = new File(folder, "config.txt");
+        String text;
+        try {
+            text = read(file);
+        } catch (IOException e) {
+            if (value == fallback) return;
+            text = "";
+        }
+        StringBuilder out = new StringBuilder();
+        boolean set = false;
+        String[] lines = text.isEmpty() ? new String[0] : text.split("\r?\n", -1);
+        // The piece after the last line break is not a line.
+        int count = lines.length > 0 && lines[lines.length - 1].isEmpty() ? lines.length - 1 : lines.length;
+        for (int i = 0; i < count; ++i) {
+            String line = lines[i];
+            String key = line.split("#", 2)[0].split("=", 2)[0].trim();
+            if (!set && key.equalsIgnoreCase(wanted) && line.contains("=")) {
+                out.append(wanted).append('=').append(value).append('\n');
+                set = true;
+            } else {
+                out.append(line).append('\n');
+            }
+        }
+        if (!set) {
+            out.append("# ").append(wanted).append(": ").append(comment).append('\n');
+            out.append(wanted).append('=').append(value).append('\n');
+        }
+        try (OutputStream o = new FileOutputStream(file)) {
+            o.write(out.toString().getBytes("UTF-8"));
+        } catch (IOException e) {
+            // The engine then keeps what the file said.
+        }
     }
 
     private void askForStorage() {

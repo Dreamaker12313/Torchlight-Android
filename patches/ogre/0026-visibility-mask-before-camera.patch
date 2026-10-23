@@ -1,0 +1,45 @@
+Torchlight: two tests in RenderQueue::processVisibleObject moved ahead of the work
+they make pointless. Each render pass (the view, the light map, the shadow map)
+visits every object of every node in its frustum, about a thousand in a crowd
+fight, while the light map queues a dozen and the shadow map thirty:
+- The visibility flags against the viewport's mask before _notifyCurrentCamera.
+  OGRE 14 announced the camera to every object (LOD, bone-attached children, a
+  billboard chain's vertex buffer) and only then rejected it in isVisible(). The
+  mask does not depend on the camera.
+- receiveShadows only when a shadow technique is in use. getReceivesShadows()
+  visits each renderable's material; without a shadow technique the result only
+  feeds receiverAabb, which only shadow camera setups read. The port has none.
+What is drawn is unchanged. Not __SWITCH__-guarded: every target runs these passes.
+
+diff --git a/OgreMain/src/OgreRenderQueue.cpp b/OgreMain/src/OgreRenderQueue.cpp
+index 3de5fa283..b9e90d93b 100644
+--- a/OgreMain/src/OgreRenderQueue.cpp
++++ b/OgreMain/src/OgreRenderQueue.cpp
+@@ -254,12 +254,25 @@ namespace Ogre {
+         bool onlyShadowCasters, 
+         VisibleObjectsBoundsInfo* visibleBounds)
+     {
+-        // receiveShadows is a material property, so we can query it before LOD
+-        bool receiveShadows = getQueueGroup(mo->getRenderQueueGroup())->getShadowsEnabled() && mo->getReceivesShadows();
++        // Torchlight: receiveShadows only when a shadow technique is in use. Without one,
++        // onlyShadowCasters is never set and only the shadow camera setups read what it adds to
++        // the bounds (receiverAabb); getReceivesShadows() visits every renderable's material, for
++        // every object in every pass. The group is still made here, as it was.
++        SceneManager* sm = Root::getSingleton()._getCurrentSceneManager();
++        RenderQueueGroup* group = getQueueGroup(mo->getRenderQueueGroup());
++        bool receiveShadows = (!sm || sm->isShadowTechniqueInUse()) && group->getShadowsEnabled() &&
++                              mo->getReceivesShadows();
+ 
+         if(onlyShadowCasters && !mo->getCastShadows() && !receiveShadows)
+             return;
+ 
++        // Torchlight: the viewport's visibility mask before the camera is announced. isVisible()
++        // tests it after, so a pass whose mask takes few objects (a render texture's) still ran
++        // every object's _notifyCurrentCamera - LOD, children on bones, a chain's vertex buffer
++        // - only to reject it. The mask does not depend on the camera.
++        if (sm && !(mo->getVisibilityFlags() & sm->_getCombinedVisibilityMask()))
++            return;
++
+         mo->_notifyCurrentCamera(cam);
+         if (!mo->isVisible())
+             return;

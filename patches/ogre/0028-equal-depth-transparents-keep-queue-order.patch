@@ -1,0 +1,28 @@
+Torchlight: transparent renderables at the same distance from the camera keep the order they
+were queued in. `DistanceSortDescendingLess` broke the tie by comparing pass pointers, which is
+deterministic within a run but not between runs: the heap's addresses differ (Windows randomises
+them; on the console any change to what was allocated before moves them), so two alpha-blended
+particle systems at one point - the town lantern's glow and sparkle - drew in either order, and a
+frame of the same scene came out 1.8-2.1% different from run to run with the clock pinned
+(2026-10-23). Up to 2,000 entries the list is sorted with `std::stable_sort`, so treating the
+two as equal keeps the queue's order, which follows the scene graph; beyond that the radix sort
+already orders equal distances by pass hash, which is the same every run. Not __SWITCH__-guarded: every target draws the
+same frames from the same scene.
+
+diff --git a/OgreMain/src/OgreRenderQueueSortingGrouping.cpp b/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
+index df4c58a2c..47a23a128 100644
+--- a/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
++++ b/OgreMain/src/OgreRenderQueueSortingGrouping.cpp
+@@ -56,8 +56,10 @@ namespace {
+                 Real bdist = b.renderable->getSquaredViewDepth(camera);
+                 if (Math::RealEqual(adist, bdist))
+                 {
+-                    // Must return deterministic result, doesn't matter what
+-                    return a.pass < b.pass;
++                    // Torchlight: equal, so the stable sort keeps the order they were queued in.
++                    // The pass pointers' order changed from run to run (the heap's addresses),
++                    // and with it which of two alpha-blended systems at one point drew last.
++                    return false;
+                 }
+                 else
+                 {

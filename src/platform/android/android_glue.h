@@ -54,6 +54,9 @@ int render_height();
 /// Measure the window again, before a render window is made on it.
 void measure_screen();
 
+/// The frame rate asked of the display, for this window and every window after it (0 none).
+void set_frame_rate(float fps);
+
 /// Stop and restart the audio stream while the app is in the background
 /// (platform_audio.cpp).
 void set_audio_paused(bool paused);

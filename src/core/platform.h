@@ -2,6 +2,7 @@
 // what each target can say about its memory, clocks and cores.
 #pragma once
 
+#include <chrono>
 #include <map>
 #include <string>
 
@@ -34,6 +35,28 @@ void pump_events();
 /// returns true; the console reports the applet's own lifecycle.
 bool should_keep_running();
 
+/// The thread that runs the frames and pumps their events: the only one `keep_responsive`
+/// pumps on (Android's looper belongs to it). Call once, from that thread.
+void mark_event_thread();
+
+/// Each platform's `pump_events` says it has run, so `keep_responsive` leaves the frames'
+/// own pumping alone.
+void note_events_pumped();
+
+/// For long synchronous work (a level loading): on the event thread, at most every 100 ms,
+/// `pump_events` and `should_keep_running`, so the system does not take the game for hung
+/// (Windows' "Not Responding", Android's ANR, the Switch's HOME button unanswered). Cheap to
+/// call often; does nothing on another thread.
+void keep_responsive();
+
+/// The frame rate the game holds itself to (config.txt's `fps_limit`; 0 for none), told to the
+/// display where it takes a request: Android's `ANativeWindow_setFrameRate`, which lets a 120 Hz
+/// screen run at 60. Elsewhere nothing.
+void platform_set_frame_rate(float fps);
+
+/// Sleep until `deadline` as closely as the platform's timers allow (the frame limiter).
+void platform_sleep_until(std::chrono::steady_clock::time_point deadline);
+
 /// How much of the process's heap is in use, in bytes, and how much it has. False when the
 /// platform cannot say (the desktop).
 bool memory_usage(unsigned long long& used, unsigned long long& total);
@@ -62,6 +85,11 @@ void stop_profiler();
 
 /// Label the samples taken from now on: the level, a test phase.
 void profiler_mark(const char* label);
+
+/// Place the calling thread as the game's `index`-th worker (core/job_pool.h): on the console
+/// the first goes to core 2 above the mixer, the rest to core 1 below Mesa's own thread. Call
+/// from the worker itself. A no-op where the system schedules.
+void prepare_worker_thread(unsigned index);
 
 /// Where the GL driver waits on the GPU, by kind (`gpu_wait_name`), as time and calls since
 /// the last call, for the game's thread and for every other. False on the desktop.

@@ -26,7 +26,8 @@ endif()
 set(TL_APP_GLUE "${ANDROID_NDK}/sources/android/native_app_glue")
 add_library(tl_android_glue STATIC "${TL_APP_GLUE}/android_native_app_glue.c")
 target_include_directories(tl_android_glue SYSTEM PUBLIC "${TL_APP_GLUE}")
-target_link_libraries(tl_android_glue PUBLIC android log)
+# nativewindow: `ANativeWindow_setFrameRate` (API 30), which libandroid does not carry.
+target_link_libraries(tl_android_glue PUBLIC android nativewindow log)
 
 # The NDK's CPU probe, which OgreMain calls on Android (android_getCpuFamily,
 # for its SIMD choice); shipped as source, like the glue.

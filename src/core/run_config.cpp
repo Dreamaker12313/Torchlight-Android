@@ -61,13 +61,19 @@ std::string run_config_text(const RunConfig& defaults) {
         << "# fps:   the frame-rate overlay; L3 switches it in the game, and it is kept here.\n"
         << "debug=" << (defaults.debug ? 1 : 0) << "\n"
         << "logs=" << (defaults.logs ? 1 : 0) << "\n"
-        << "fps=" << (defaults.fps ? 1 : 0) << "\n";
+        << "fps=" << (defaults.fps ? 1 : 0) << "\n"
+        << "# fps_limit: the most frames a second the game draws; 0 for no limit.\n"
+        << "fps_limit=" << defaults.fps_limit << "\n"
+        << "# free_camera: the right stick turns the camera and R3 resets it; a pinch zooms.\n"
+        << "free_camera=" << (defaults.free_camera ? 1 : 0) << "\n";
     if (defaults.width > 0 && defaults.height > 0) {
         out << "# width, height: the window's size, or the screen's resolution in fullscreen.\n"
             << "# fullscreen: 1 fills the screen at that resolution.\n"
+            << "# vsync: 1 waits for the screen's refresh; 0 draws frames as fast as it can.\n"
             << "width=" << defaults.width << "\n"
             << "height=" << defaults.height << "\n"
-            << "fullscreen=" << (defaults.fullscreen ? 1 : 0) << "\n";
+            << "fullscreen=" << (defaults.fullscreen ? 1 : 0) << "\n"
+            << "vsync=" << (defaults.vsync ? 1 : 0) << "\n";
     }
     return out.str();
 }
@@ -85,6 +91,12 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
         if (key == "logs") config.logs = on;
         if (key == "fps") config.fps = on;
         if (key == "fullscreen") config.fullscreen = on;
+        if (key == "vsync") config.vsync = on;
+        if (key == "free_camera") config.free_camera = on;
+        if (key == "fps_limit") {
+            const long number = std::strtol(value.c_str(), nullptr, 10);
+            if (number >= 0 && number <= 1000) config.fps_limit = static_cast<unsigned>(number);
+        }
         if (key == "width" || key == "height") {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             const unsigned size = number > 0 && number <= 16384 ? static_cast<unsigned>(number) : 0;
@@ -141,6 +153,7 @@ bool save_run_config_value(const std::string& key, bool value) {
     if (wanted == "debug") g_config.debug = value;
     if (wanted == "logs") g_config.logs = value;
     if (wanted == "fps") g_config.fps = value;
+    if (wanted == "free_camera") g_config.free_camera = value;
     if (g_path.empty()) return false;
     std::string text;
     if (!read_file(g_path, text)) text = run_config_text(g_config);

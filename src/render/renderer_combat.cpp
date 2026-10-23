@@ -28,7 +28,8 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
         if (frozen) {
             // Shattered: `ICEEXPLODE` (slot 9) at the centre, `CRYSTALEXPLODE`
             // for 0.2 seconds at the magnitude's default.
-            start_character_particle(victim, tl::core::character_particle::kIceExplode, centre);
+            start_character_particle(victim, tl::core::character_particle::kIceExplode, centre,
+                                     character_ref(event.node_id, owner));
             start_death_shake("CRYSTALEXPLODE", 0.2f, 1.0f, from_ogre(centre));
             burst = true;
         } else if (event.burst) {
@@ -37,7 +38,8 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
             const auto names = tl::core::character_particle_names(victim.particles);
             if (!names[tl::core::character_particle::kExplode].empty() &&
                 game_settings().show_blood) {
-                start_character_particle(victim, tl::core::character_particle::kExplode, centre);
+                start_character_particle(victim, tl::core::character_particle::kExplode, centre,
+                                         character_ref(event.node_id, owner));
                 const float magnitude = tl::core::volatile_random().between(0.5f, 0.75f);
                 start_death_shake("DEATHEXPLODE", 0.3f, magnitude, from_ogre(centre));
                 burst = true;

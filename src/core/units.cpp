@@ -66,8 +66,24 @@ void UnitBook::add(const std::string& name, const UnitStats& stats) {
 
 // PORT: a unit of the port's book by name.
 const UnitStats* UnitBook::find(const std::string& name) const {
-    const auto it = by_name_.find(key_of(name));
+    const auto it = by_name_.find(name);
     return it == by_name_.end() ? nullptr : &it->second;
+}
+
+// PORT: the book's order, `key_of`'s lower case compared byte by byte as `std::string` does
+// (`std::tolower` in the "C" locale, which the game never leaves, folds A-Z alone).
+bool UnitBook::NameLess::operator()(const std::string& a, const std::string& b) const {
+    const auto fold = [](char c) {
+        const auto u = static_cast<unsigned char>(c);
+        return static_cast<unsigned char>(u >= 'A' && u <= 'Z' ? u + ('a' - 'A') : u);
+    };
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char x = fold(a[i]);
+        const unsigned char y = fold(b[i]);
+        if (x != y) return x < y;
+    }
+    return a.size() < b.size();
 }
 
 }  // namespace tl::core

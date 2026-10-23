@@ -56,17 +56,17 @@ index 0000000..10a0567
 +			void setWidthChange(size_t chainIndex, Real widthDeltaPerSecond);
 +
 +			/** Runic: the flipbook the chains share and the frame one chain shows
-+				(`Ogre::RibbonTrail::setFrame` 0x26bca0).
++				(`Ogre::RibbonTrail::setFrame`).
 +			*/
 +			void setFrame(unsigned int chainIndex, int flipbookWidth, int flipbookHeight, int frame);
 +
 +			/** Runic: what the head and the tail element are tinted by
-+				(`Ogre::RibbonTrail::setStartEndColors` 0x268f40).
++				(`Ogre::RibbonTrail::setStartEndColors`).
 +			*/
 +			void setStartEndColors(const ColourValue& start, const ColourValue& end);
 +
 +			/** Runic: lay the chains out along a line to `end` with a sine displacement
-+				(`Ogre::RibbonTrail::updateTrailBeam` 0x2690c0), or not.
++				(`Ogre::RibbonTrail::updateTrailBeam`), or not.
 +			*/
 +			void updateTrailBeam(bool beam, const Vector3& end, Real sineAngle, const Vector3& force,
 +				Real frequencyMin, Real frequencyMax);

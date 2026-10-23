@@ -791,7 +791,9 @@ void World::kill_player(int64_t attacker) {
     // `executeProcs(0x69, attacker)`: the `CAST SKILL ON DEATH` effects.
     player_execute_procs(tl::core::kEffectCastSkillOnDeath, proc_target_attacker(attacker));
     // the death particle, by "Show Blood".
-    if (subject_node != nullptr) play_death_particle(player_stats, view_position(subject_node));
+    if (subject_node != nullptr) {
+        play_death_particle(player_stats, view_position(subject_node), CharacterRef{});
+    }
 
     // `findRandomAnimation("DIE")`: the first match, then
     // each later one on `randomBetweenVolatile(0, 1000) < 500`. None: `clearAnimations`.

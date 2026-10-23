@@ -1,8 +1,9 @@
 #include "core/log.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
-#include <vector>
+#include <string>
 
 namespace tl::core {
 namespace {
@@ -55,22 +56,31 @@ void log_write(LogLevel level, const char* file, int line, const std::string& me
 
 void log_writef(LogLevel level, const char* file, int line, const char* fmt, ...) {
     if (level < g_min_level) return;  // before the formatting, not after it
+    // The prefix and the message formatted once into the stack, which holds nearly every line;
+    // a longer one is formatted again into a string of its length.
+    char stack[512];
+    const int prefix = std::snprintf(stack, sizeof(stack), "[%s] %s:%d: ", level_tag(level),
+                                     short_file(file), line);
+    const size_t at = prefix > 0 ? std::min(static_cast<size_t>(prefix), sizeof(stack) - 1) : 0;
     va_list ap;
     va_start(ap, fmt);
-    va_list ap_probe;
-    va_copy(ap_probe, ap);
-    const int needed = std::vsnprintf(nullptr, 0, fmt, ap_probe);
-    va_end(ap_probe);
-
-    std::string message;
-    if (needed > 0) {
-        std::vector<char> buf(static_cast<size_t>(needed) + 1);
-        std::vsnprintf(buf.data(), buf.size(), fmt, ap);
-        message.assign(buf.data(), static_cast<size_t>(needed));
-    }
+    va_list again;
+    va_copy(again, ap);
+    const int needed = std::vsnprintf(stack + at, sizeof(stack) - at, fmt, ap);
     va_end(ap);
-
-    log_write(level, file, line, message);
+    std::string out;
+    if (needed <= 0) {
+        out.assign(stack, at);
+    } else if (at + static_cast<size_t>(needed) < sizeof(stack)) {
+        out.assign(stack, at + static_cast<size_t>(needed));
+    } else {
+        out.assign(stack, at);
+        out.resize(at + static_cast<size_t>(needed) + 1);
+        std::vsnprintf(&out[at], static_cast<size_t>(needed) + 1, fmt, again);
+        out.resize(at + static_cast<size_t>(needed));
+    }
+    va_end(again);
+    detail::sink_write(level, out);
 }
 
 }  // namespace tl::core

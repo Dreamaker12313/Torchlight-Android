@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <utility>
 
 namespace tl::core {
 
@@ -260,6 +264,7 @@ struct AstarNode {
     int cx = 0;
     int cz = 0;
     int parent = -1;
+    bool closed = false;
     std::array<int, 8> children{-1, -1, -1, -1, -1, -1, -1, -1};
 };
 
@@ -277,8 +282,8 @@ void record_child(AstarNode& node, int child_index) {
 /// `CAstarPathfinder::propagateDown`: an improved cost
 /// cascaded to the cached children through a LIFO stack (`CAstarPathfinder::push`;
 /// `pop`, inline on the console).
-void relax_children(std::vector<AstarNode>& pool, int node_index) {
-    std::vector<int> stack;
+void relax_children(std::vector<AstarNode>& pool, int node_index, std::vector<int>& stack) {
+    stack.clear();
     auto relax_from = [&](int from_index) {
         const float candidate = pool[static_cast<size_t>(from_index)].g + 1.0f;
         for (int child_index : pool[static_cast<size_t>(from_index)].children) {
@@ -298,6 +303,136 @@ void relax_children(std::vector<AstarNode>& pool, int node_index) {
         stack.pop_back();
         relax_from(popped);
     }
+}
+
+/// `createPath`'s open list (`generateSuccessor`): a new node goes before the
+/// first whose f, as it stands now, is at least its own, and an improved node keeps its place,
+/// so the list is not sorted. Kept in blocks, each with a bound no f in it exceeds: an
+/// improvement only lowers an f, so a bound stays true untouched, and a block wholly under the
+/// new f is passed over.
+class OpenList {
+public:
+    void reset(int first, float f) {
+        for (size_t b = 0; b < end_; ++b) blocks_[b].items.clear();
+        head_ = 0;
+        end_ = 0;
+        open_block().items.push_back(first);
+        blocks_[0].bound = f;
+    }
+
+    bool empty() const { return head_ == end_; }
+
+    int pop_front() {
+        Block& block = blocks_[head_];
+        const int index = block.items[block.start++];
+        if (block.start == block.items.size()) ++head_;
+        return index;
+    }
+
+    void insert(int index, float f, const std::vector<AstarNode>& pool) {
+        for (size_t b = head_; b < end_; ++b) {
+            Block& block = blocks_[b];
+            if (block.bound < f) continue;
+            float most = -std::numeric_limits<float>::infinity();
+            for (size_t i = block.start; i < block.items.size(); ++i) {
+                const float at = pool[static_cast<size_t>(block.items[i])].f;
+                if (at >= f) {
+                    block.items.insert(block.items.begin() + static_cast<std::ptrdiff_t>(i), index);
+                    split_if_full(b, pool);
+                    return;
+                }
+                most = std::max(most, at);
+            }
+            block.bound = most;
+        }
+        Block& last = empty() ? open_block() : blocks_[end_ - 1];
+        last.items.push_back(index);
+        last.bound = std::max(last.bound, f);
+        split_if_full(end_ - 1, pool);
+    }
+
+private:
+    static constexpr size_t kSplitAt = 128;
+
+    struct Block {
+        std::vector<int> items;
+        size_t start = 0;  // items before it have been popped
+        float bound = 0.0f;
+    };
+
+    Block& open_block() {
+        if (blocks_.size() == end_) blocks_.emplace_back();
+        Block& block = blocks_[end_++];
+        block.items.clear();
+        block.start = 0;
+        block.bound = -std::numeric_limits<float>::infinity();
+        return block;
+    }
+
+    static float bound_of(const Block& block, const std::vector<AstarNode>& pool) {
+        float most = -std::numeric_limits<float>::infinity();
+        for (size_t i = block.start; i < block.items.size(); ++i) {
+            most = std::max(most, pool[static_cast<size_t>(block.items[i])].f);
+        }
+        return most;
+    }
+
+    void split_if_full(size_t b, const std::vector<AstarNode>& pool) {
+        if (blocks_[b].items.size() - blocks_[b].start <= kSplitAt) return;
+        // A kept block taken for the upper half and turned into place behind `b`: only the
+        // blocks in use move, never the storage kept beyond them.
+        open_block();
+        const auto at = [this](size_t i) {
+            return blocks_.begin() + static_cast<std::ptrdiff_t>(i);
+        };
+        std::rotate(at(b + 1), at(end_ - 1), at(end_));
+        Block& block = blocks_[b];
+        Block& upper = blocks_[b + 1];
+        const auto first = block.items.begin() + static_cast<std::ptrdiff_t>(block.start);
+        const auto half = first + (block.items.end() - first) / 2;
+        upper.items.assign(half, block.items.end());
+        block.items.erase(half, block.items.end());
+        block.bound = bound_of(block, pool);
+        upper.bound = bound_of(upper, pool);
+    }
+
+    std::vector<Block> blocks_;
+    size_t head_ = 0;  // the first block not yet popped empty
+    size_t end_ = 0;   // blocks in use; the rest are kept for their storage
+};
+
+/// PORT: a search's working memory, kept between searches. `createPath` finds a cell's node by
+/// walking its open and closed lists; a stamped table answers the same, without clearing a
+/// cell per search.
+struct SearchScratch {
+    std::vector<uint32_t> stamp;
+    std::vector<int> slot;
+    uint32_t generation = 0;
+    std::vector<AstarNode> pool;
+    OpenList open;
+    std::vector<int> stack;
+
+    void begin(size_t cells) {
+        if (stamp.size() < cells) {
+            stamp.resize(cells, 0);
+            slot.resize(cells, -1);
+        }
+        if (++generation == 0) {
+            std::fill(stamp.begin(), stamp.end(), 0);
+            generation = 1;
+        }
+        pool.clear();
+    }
+    int node_at(size_t at) const { return stamp[at] == generation ? slot[at] : -1; }
+    void set_node(size_t at, int index) {
+        stamp[at] = generation;
+        slot[at] = index;
+    }
+};
+
+SearchScratch& search_scratch() {
+    thread_local SearchScratch scratch;
+    return scratch;
 }
 
 }  // namespace
@@ -350,11 +485,9 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
     if (start_cx == goal_cx && start_cz == goal_cz) return false;  // already there
 
     // `CAstarPathfinder::createPath`.
-    const size_t count = walkable_.size();
-    std::vector<int> state(count, -1);  // cell index -> pool index, or -1
-    std::vector<bool> closed(count, false);
-    std::vector<AstarNode> pool;
-    pool.reserve(256);
+    SearchScratch& scratch = search_scratch();
+    scratch.begin(walkable_.size());
+    std::vector<AstarNode>& pool = scratch.pool;
 
     AstarNode start_node;
     start_node.cx = start_cx;
@@ -367,10 +500,11 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
     start_node.g = 0.0f;
     start_node.f = start_node.h;
     pool.push_back(start_node);
-    state[static_cast<size_t>(index_of(start_cx, start_cz))] = 0;
+    scratch.set_node(static_cast<size_t>(index_of(start_cx, start_cz)), 0);
 
-    std::vector<int> open_order{0};  // sorted ascending by f, front = lowest
-    int best_node = -1;              // the closest approach found, by lowest h
+    OpenList& open_order = scratch.open;
+    open_order.reset(0, start_node.f);
+    int best_node = -1;  // the closest approach found, by lowest h
     int expansions = 0;
     constexpr float kCloseEnough = 2.0f;
 
@@ -378,7 +512,7 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
     auto generate_successor = [&](int parent_index, int nx, int nz) {
         const size_t at = static_cast<size_t>(index_of(nx, nz));
         const float tentative_g = pool[static_cast<size_t>(parent_index)].g + 1.0f;
-        int existing = state[at];
+        const int existing = scratch.node_at(at);
         if (existing >= 0) {
             record_child(pool[static_cast<size_t>(parent_index)], existing);
             AstarNode& node = pool[static_cast<size_t>(existing)];
@@ -387,7 +521,7 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
                 node.f = tentative_g + node.h;
                 node.parent = parent_index;
                 // Quirk kept: the open list is not re-sorted on an improvement.
-                if (closed[at]) relax_children(pool, existing);
+                if (node.closed) relax_children(pool, existing, scratch.stack);
             }
             return;
         }
@@ -402,13 +536,10 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
         node.parent = parent_index;
         const int new_index = static_cast<int>(pool.size());
         pool.push_back(node);
-        state[at] = new_index;
+        scratch.set_node(at, new_index);
         record_child(pool[static_cast<size_t>(parent_index)], new_index);
         // Before the first node with f >= its own: a tie pops ahead of what was open.
-        const auto insert_at = std::find_if(open_order.begin(), open_order.end(), [&](int idx) {
-            return pool[static_cast<size_t>(idx)].f >= node.f;
-        });
-        open_order.insert(insert_at, new_index);
+        open_order.insert(new_index, node.f, pool);
         if (best_node < 0 || node.h < pool[static_cast<size_t>(best_node)].h) best_node = new_index;
     };
 
@@ -454,10 +585,8 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
         int current = -1;
         if (open_order.empty()) valid = false;
         if (!open_order.empty()) {
-            current = open_order.front();
-            open_order.erase(open_order.begin());
-            const AstarNode& popped = pool[static_cast<size_t>(current)];
-            closed[static_cast<size_t>(index_of(popped.cx, popped.cz))] = true;
+            current = open_order.pop_front();
+            pool[static_cast<size_t>(current)].closed = true;
         }
 
         if (goal_snapped && best_node >= 0 &&

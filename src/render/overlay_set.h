@@ -11,8 +11,6 @@
 
 namespace tl::render {
 
-float ui_text_scale();
-
 inline void set_caption(Ogre::OverlayElement* element, const Ogre::DisplayString& text) {
     if (element->getCaption() != text) element->setCaption(text);
 }

@@ -208,6 +208,7 @@ void CollisionWorld::add_triangle(const Vec3& p0, const Vec3& p1, const Vec3& p2
         Group& g = found->second;
         if (fresh) {
             group_order_.push_back(group_);
+            group_walk_.push_back(&g);
             g.low = t.low;
             g.high = t.high;
         } else {
@@ -378,6 +379,7 @@ void CollisionWorld::quadtree_add(uint32_t face) {
         at = quad_[at].child[into];
     }
     quad_[at].data.push_back(face);
+    quad_[at].boxes.push_back({face_low.x, face_low.z, face_high.x, face_high.z});
 }
 
 void CollisionWorld::quadtree_sort(uint32_t node, const Vec3& low, const Vec3& high, bool test,
@@ -395,9 +397,12 @@ void CollisionWorld::quadtree_sort(uint32_t node, const Vec3& low, const Vec3& h
         }
         return;
     }
-    for (const uint32_t face : n.data) {
-        const Tri& t = tris_[face];
-        if (bounds_intersect_xz(low, high, t.low, t.high)) out.push_back(face);
+    for (size_t i = 0; i < n.data.size(); ++i) {
+        // `bounds_intersect_xz(low, high, face low, face high)`, off the copy beside the index.
+        const QuadNode::FaceBox& b = n.boxes[i];
+        if (!(b.high_x < low.x || b.high_z < low.z || high.x < b.low_x || high.z < b.low_z)) {
+            out.push_back(n.data[i]);
+        }
     }
     if (!n.split) return;
     for (const uint32_t index : n.child) {
@@ -435,6 +440,24 @@ void CollisionWorld::build() {
     quadtree_reset(level_low_, level_high_, smallest);
     for (const uint32_t face : level_faces_) quadtree_add(face);
     indexed_ = level_faces_.size();
+    sorted_low_ = sorted_high_ = Vec3{};
+    for (size_t i = 0; i < level_faces_.size(); ++i) {
+        const Tri& t = tris_[level_faces_[i]];
+        if (i == 0) {
+            sorted_low_ = t.low;
+            sorted_high_ = t.high;
+        } else {
+            expand_bounds(sorted_low_, sorted_high_, t.low);
+            expand_bounds(sorted_low_, sorted_high_, t.high);
+        }
+    }
+}
+
+bool CollisionWorld::may_sort_any(const Vec3& low, const Vec3& high) const {
+    if (indexed_ != level_faces_.size() || quad_.empty() || level_faces_.empty()) return false;
+    // `quadtree_sort` keeps a face only where this test passes for it, and every face's box
+    // lies inside this one.
+    return bounds_intersect_xz(low, high, sorted_low_, sorted_high_);
 }
 
 // PORT: the port's collision lists emptied.
@@ -443,6 +466,7 @@ void CollisionWorld::clear() {
     group_ = 0;
     groups_.clear();
     group_order_.clear();
+    group_walk_.clear();
     level_faces_.clear();
     quad_.clear();
     quad_smallest_ = 1.0f;
@@ -651,8 +675,9 @@ bool CollisionWorld::object_sphere_collision(const Vec3& start, const Vec3& end,
     const Vec3 box_low{low.x - radius, low.y - radius, low.z - radius};
     const Vec3 box_high{high.x + radius, high.y + radius, high.z + radius};
 
-    for (const int64_t id : group_order_) {
-        const Group& g = groups_.find(id)->second;
+    for (size_t i = 0; i < group_order_.size(); ++i) {
+        const int64_t id = group_order_[i];
+        const Group& g = *group_walk_[i];
         if (!g.enabled) continue;  // `COLLIDEABLE` (+0x155) and live (+0x164)
         if (!bounds_intersect(g.low, g.high, reach_low, reach_high)) continue;
         // The unit's own list, every face of it (the original turns the sweep
@@ -690,8 +715,9 @@ bool CollisionWorld::object_ray_collision(const Vec3& start, const Vec3& end, Co
     Vec3 high = start;
     expand_bounds(low, high, end);
 
-    for (const int64_t id : group_order_) {
-        const Group& g = groups_.find(id)->second;
+    for (size_t i = 0; i < group_order_.size(); ++i) {
+        const int64_t id = group_order_[i];
+        const Group& g = *group_walk_[i];
         if (!g.enabled || !g.blocks) continue;
         if (!bounds_intersect(g.low, g.high, low, high)) continue;
         CollisionHit unit_hit;

@@ -200,6 +200,15 @@ tl::core::SkillCastContext World::unit_cast_context(tl::core::LevelScript& machi
     return context;
 }
 
+// PORT: unit_cast_context()'s lasting work, in its order, for a frame that reads no context.
+void World::prepare_unit_cast(tl::core::LevelScript& machine, int64_t node) {
+    ensure_effect_data();
+    (void)unit_effect_manager(&machine, node);
+    load_unit_types();
+    ensure_item_index();
+    if (SceneUnit* drawn = scene_unit_of(&machine, node)) (void)unit_catalog(drawn->mesh);
+}
+
 // `CCharacter::castSkill` for a level unit:
 // the runner's cast (`SkillRunner::cast`), the mana spent, and the cast's
 // animation cue played on the unit's model.

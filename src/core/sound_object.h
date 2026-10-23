@@ -91,6 +91,11 @@ void sound_bank_stop(NodeSoundBank& bank, bool immediate, SoundBankHost& host);
 /// slot's sounds are released and the slots emptied.
 void sound_bank_clear(NodeSoundBank& bank, SoundBankHost& host);
 
+/// `CSoundBank::~CSoundBank`, as `CSoundObject::~CSoundObject`
+/// deletes its bank: a looping bank is stopped at once
+/// (`stop(true)`, no fade), then cleared.
+void sound_bank_destroy(NodeSoundBank& bank, SoundBankHost& host);
+
 /// `CSoundBank::update(delta, node)`.
 void sound_bank_update(NodeSoundBank& bank, float delta, const Vec3* node, const Vec3& listener,
                        SoundBankHost& host, RunicRandom& volatile_rng);

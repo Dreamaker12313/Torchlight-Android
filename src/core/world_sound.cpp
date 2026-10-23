@@ -23,9 +23,14 @@ void World::disturb_targeted_mimic() {
 
 /// The `.ANIMATION` manifest beside one character mesh, read once; empty when none ships.
 const tl::core::AnimationManifest& World::manifest_for(const std::string& mesh_path) {
+    const auto known = manifests_by_mesh.find(mesh_path);
+    if (known != manifests_by_mesh.end()) return *known->second;
     const std::string dir = dir_of_asset(mesh_path);
     const auto found = manifests.find(dir);
-    if (found != manifests.end()) return found->second;
+    if (found != manifests.end()) {
+        manifests_by_mesh.emplace(mesh_path, &found->second);
+        return found->second;
+    }
 
     tl::core::AnimationManifest manifest;
     std::string stem = mesh_path;
@@ -48,7 +53,10 @@ const tl::core::AnimationManifest& World::manifest_for(const std::string& mesh_p
         TL_LOG_INFO("  animation manifest for '%s': %zu tagged animation(s)", mesh_path.c_str(),
                     manifest.size());
     }
-    return manifests.emplace(dir, std::move(manifest)).first->second;
+    const tl::core::AnimationManifest& made =
+        manifests.emplace(dir, std::move(manifest)).first->second;
+    manifests_by_mesh.emplace(mesh_path, &made);
+    return made;
 }
 
 void World::music_node_input(const tl::core::ScriptEvent& event) {

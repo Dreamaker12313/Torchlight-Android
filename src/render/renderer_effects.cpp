@@ -27,11 +27,11 @@ void Renderer::Impl::add_text_event(const tl::core::TextEvent& event) {
     text_events.push_back(event);
 }
 
-// `CCharacter::loadModel` makes the slot's `CParticle` once; each use calls
-// `CParticle::Start`. DIVERGENCE: the layout is placed
-// anew per use (no restart of a placed layout here), so two quick blows show two.
+// `CCharacter::loadModel` makes the slot's `CParticle` once; each use moves it and
+// calls `CParticle::Start`, which restarts the cache it holds.
+// Placed on first use, and again once `Stop(true)` has taken the last one down.
 void Renderer::Impl::start_character_particle(const tl::core::UnitStats& unit, int slot,
-                                              const Ogre::Vector3& at) {
+                                              const Ogre::Vector3& at, CharacterRef who) {
     if (slot < 0 || tl::core::character_particle::kCount <= slot) return;
     const std::string name =
         tl::core::character_particle_names(unit.particles)[static_cast<size_t>(slot)];
@@ -40,15 +40,48 @@ void Renderer::Impl::start_character_particle(const tl::core::UnitStats& unit, i
     // in `media/particles/preload.dat`; an unlisted name makes nothing.
     const std::string file = preloaded_particle_file(name);
     if (file.empty()) return;
+    SlotParticle& held = slot_particles[{who, slot}];
+    if (!held.holders.empty() && held.file == file) {
+        const Ogre::Vector3 moved = at - to_ogre(held.at);
+        held.at = from_ogre(at);
+        uint32_t cparticle = 0;
+        for (Ogre::SceneNode* holder : held.holders) holder->translate(moved);
+        for (ParticleSystem& system : holder_systems(held.holders)) {
+            restart_particle_system(system);
+            if (cparticle == 0) cparticle = system.cparticle;
+        }
+        if (cparticle != 0) cparticle_started(cparticle);
+        TL_LOG_INFO("character particle: %s (slot %d) again at (%.2f, %.2f, %.2f)", name.c_str(),
+                    slot, static_cast<double>(at.x), static_cast<double>(at.y),
+                    static_cast<double>(at.z));
+        return;
+    }
     std::vector<Ogre::SceneNode*> holders =
-        place_particle_layout(file, at, Ogre::Quaternion::IDENTITY, nullptr);
-    if (holders.empty()) return;
+        place_particle_layout(file, at, Ogre::Quaternion::IDENTITY, nullptr, ParticleStart::Cached);
+    if (holders.empty()) {
+        slot_particles.erase({who, slot});
+        return;
+    }
     TL_LOG_INFO("character particle: %s (slot %d) at (%.2f, %.2f, %.2f)", name.c_str(), slot,
                 static_cast<double>(at.x), static_cast<double>(at.y), static_cast<double>(at.z));
+    // A slot whose file changed (a transform) keeps its old layout to its timer, unheld.
+    held.holders = holders;
+    held.at = from_ogre(at);
+    held.file = file;
     TransientParticles transient;
     transient.holders = std::move(holders);
     transient.self_timed = true;
     transient_particles.push_back(std::move(transient));
+}
+
+void Renderer::Impl::forget_slot_particles(const std::set<const Ogre::SceneNode*>& going) {
+    for (auto it = slot_particles.begin(); it != slot_particles.end();) {
+        const std::vector<Ogre::SceneNode*>& holders = it->second.holders;
+        const bool gone =
+            std::any_of(holders.begin(), holders.end(),
+                        [&going](const Ogre::SceneNode* h) { return going.count(h); });
+        it = gone ? slot_particles.erase(it) : std::next(it);
+    }
 }
 
 // `CCharacter::updateEffects`, `fxShouldPlay` / `playFX`:
@@ -61,8 +94,8 @@ void Renderer::Impl::play_effect_fx(tl::core::EffectManager& effects, const Ogre
         const std::string file = preloaded_particle_file(name);
         if (file.empty()) continue;
         const Ogre::Vector3 at = centre + Ogre::Vector3::UNIT_Y * 0.1f;
-        std::vector<Ogre::SceneNode*> holders =
-            place_particle_layout(file, at, Ogre::Quaternion::IDENTITY, nullptr);
+        std::vector<Ogre::SceneNode*> holders = place_particle_layout(
+            file, at, Ogre::Quaternion::IDENTITY, nullptr, ParticleStart::Cached);
         if (holders.empty()) continue;
         TL_LOG_INFO("effect particle: %s on %s at (%.2f, %.2f, %.2f)", name.c_str(), who.c_str(),
                     static_cast<double>(at.x), static_cast<double>(at.y),
@@ -877,28 +910,23 @@ std::vector<Ogre::SceneNode*> Renderer::Impl::place_particle_layout(const std::s
     }
     const size_t before = particle_systems.size();
     const bool riding = parent != nullptr;
-    // Depth 1: a particle file, not a level.
-    const bool outer_particle_file = placing_particle_file;
-    placing_particle_file = true;
-    cparticle_places_next_layout = start != ParticleStart::Live;
-    const bool placed = place_layout(path, riding ? Ogre::Vector3::ZERO : at,
-                                     riding ? Ogre::Quaternion::IDENTITY : facing, 1);
-    cparticle_places_next_layout = false;
-    placing_particle_file = outer_particle_file;
+    // A kept `CParticle` of the file only where a new one would be no one's.
+    const bool keepable =
+        start == ParticleStart::Cached && particle_owner == 0 && node_sink == nullptr;
+    bool placed = keepable && unpark_particle(path, at, facing, riding);
+    if (!placed) {
+        // Depth 1: a particle file, not a level.
+        const bool outer_particle_file = placing_particle_file;
+        placing_particle_file = true;
+        cparticle_places_next_layout = start != ParticleStart::Live;
+        placed = place_layout(path, riding ? Ogre::Vector3::ZERO : at,
+                              riding ? Ogre::Quaternion::IDENTITY : facing, 1);
+        cparticle_places_next_layout = false;
+        placing_particle_file = outer_particle_file;
+    }
     if (!placed) return holders;
     arm_particle_timer(before, particle_systems.size());
-    for (size_t i = before; i < particle_systems.size(); ++i) {
-        ParticleSystem& system = particle_systems[i];
-        Ogre::SceneNode* holder = system.holder();
-        if (holder == nullptr || system.claimed) continue;
-        system.claimed = true;
-        if (std::find(holders.begin(), holders.end(), holder) != holders.end()) continue;
-        if (riding) {
-            if (Ogre::Node* up = holder->getParent()) up->removeChild(holder);
-            parent->addChild(holder);
-        }
-        holders.push_back(holder);
-    }
+    claim_particle_holders(before, parent, holders);
     if (start != ParticleStart::Live) {
         // The `CParticle`'s node: the parent it rides, or `at`.
         const Ogre::Vector3 origin = riding ? parent->_getDerivedPosition() : at;
@@ -906,7 +934,8 @@ std::vector<Ogre::SceneNode*> Renderer::Impl::place_particle_layout(const std::s
             register_cparticle(path, before, origin, [&holders](const ParticleSystem& system) {
                 return std::find(holders.begin(), holders.end(), system.holder()) != holders.end();
             });
-        if (start == ParticleStart::Now) {
+        if (keepable && id != 0) remember_parkable(id, path, holders, at, facing, riding);
+        if (start == ParticleStart::Now || start == ParticleStart::Cached) {
             if (id != 0) {
                 cparticle_started(id);
             } else if (const ParticleFileExtras* extras = particle_extras(path)) {
@@ -915,6 +944,74 @@ std::vector<Ogre::SceneNode*> Renderer::Impl::place_particle_layout(const std::s
         }
     }
     return holders;
+}
+
+// PORT: drawing, the systems placed from `before` on that no list holds yet: theirs, each
+// holder once, moved under `parent` when they ride it.
+void Renderer::Impl::claim_particle_holders(size_t before, Ogre::SceneNode* parent,
+                                            std::vector<Ogre::SceneNode*>& holders) {
+    for (size_t i = before; i < particle_systems.size(); ++i) {
+        ParticleSystem& system = particle_systems[i];
+        Ogre::SceneNode* holder = system.holder();
+        if (holder == nullptr || system.claimed) continue;
+        system.claimed = true;
+        if (std::find(holders.begin(), holders.end(), holder) != holders.end()) continue;
+        if (parent != nullptr) {
+            if (Ogre::Node* up = holder->getParent()) up->removeChild(holder);
+            parent->addChild(holder);
+        }
+        holders.push_back(holder);
+    }
+}
+
+// PORT: a `Cached` placement's file and each holder's pose in the placement's frame, for
+// `unpark_particle`.
+void Renderer::Impl::remember_parkable(uint32_t id, const std::string& file,
+                                       const std::vector<Ogre::SceneNode*>& holders,
+                                       const Ogre::Vector3& at, const Ogre::Quaternion& facing,
+                                       bool riding) {
+    PlacedParticle& placement = placed_particles[id];
+    placement.file = file;
+    placement.holders = holders;
+    const Ogre::Vector3 frame_at = riding ? Ogre::Vector3::ZERO : at;
+    const Ogre::Quaternion frame_back = riding ? Ogre::Quaternion::IDENTITY : facing.Inverse();
+    for (const Ogre::SceneNode* holder : holders) {
+        placement.frames.emplace_back(frame_back * (holder->getPosition() - frame_at),
+                                      frame_back * holder->getOrientation());
+    }
+}
+
+bool Renderer::Impl::unpark_particle(const std::string& file, const Ogre::Vector3& at,
+                                     const Ogre::Quaternion& facing, bool riding) {
+    const auto found = parked_particles.find(file);
+    if (found == parked_particles.end() || found->second.empty()) return false;
+    ParkedParticle parked = std::move(found->second.back());
+    found->second.pop_back();
+    const Ogre::Vector3 frame_at = riding ? Ogre::Vector3::ZERO : at;
+    const Ogre::Quaternion frame = riding ? Ogre::Quaternion::IDENTITY : facing;
+    Ogre::SceneNode* root = scene->getRootSceneNode();
+    for (size_t i = 0; i < parked.holders.size(); ++i) {
+        Ogre::SceneNode* holder = parked.holders[i];
+        parked_holders.erase(holder);
+        holder->setPosition(frame_at + frame * parked.frames[i].first);
+        holder->setOrientation(frame * parked.frames[i].second);
+        root->addChild(holder);
+    }
+    // Each system as `place_torchlight_particle` leaves a new one.
+    for (const ParticleSystem& kept : parked.systems) {
+        ParticleSystem system;
+        system.pu = kept.pu;
+        system.node = kept.node;
+        system.node_owner = &scripted_nodes;
+        system.fixed_timeout = kept.fixed_timeout;
+        system.finite_window = kept.finite_window;
+        system.non_expiring = kept.non_expiring;
+        if (!system.pu.is_light) hold_particle_with_the_world(system);
+        start_torchlight_particle(system.pu);
+        particle_systems.push_back(std::move(system));
+        particle_index_add(particle_systems.size() - 1);
+    }
+    return true;
 }
 
 uint32_t Renderer::Impl::register_cparticle(
@@ -968,18 +1065,18 @@ void Renderer::Impl::update_visible_particles(bool paused) {
 
     size_t shown = 0;
     size_t hidden = 0;
+    // Each `CParticle`'s first system, in one walk.
+    std::unordered_map<uint32_t, const ParticleSystem*> firsts;
+    for (const ParticleSystem& system : particle_systems) {
+        if (system.cparticle != 0) firsts.emplace(system.cparticle, &system);
+    }
     for (auto& [id, placed] : placed_particles) {
         if (!placed.listed) continue;
         // The link's `CParticle` (`+0x1f0`); a `NO CULLING` one (`+0x127`) never joined.
         // INVENTED: links are all enabled (the original skips disabled ones, vtable +0x48).
-        const ParticleSystem* first = nullptr;
-        for (const ParticleSystem& system : particle_systems) {
-            if (system.cparticle == id) {
-                first = &system;
-                break;
-            }
-        }
-        if (first == nullptr) continue;
+        const auto found = firsts.find(id);
+        if (found == firsts.end()) continue;
+        const ParticleSystem* first = found->second;
         const Ogre::Vector3 at = first->link_position;
 
         // `CGameUI::getScreenPosition(position, up, matrix)`:
@@ -1066,12 +1163,15 @@ void Renderer::Impl::play_particle_extras(const ParticleFileExtras& extras, cons
 void Renderer::Impl::forget_dead_cparticles() {
     // A placement leaves no trace of its own going: its systems do.
     if (placed_particles.size() < 256) return;
-    std::set<uint32_t> live;
+    // Sorted and kept between frames: a set made each frame was a node per system.
+    std::vector<uint32_t>& live = live_cparticles;
+    live.clear();
     for (const ParticleSystem& system : particle_systems) {
-        if (system.cparticle != 0) live.insert(system.cparticle);
+        if (system.cparticle != 0) live.push_back(system.cparticle);
     }
+    std::sort(live.begin(), live.end());
     for (auto it = placed_particles.begin(); it != placed_particles.end();) {
-        if (live.count(it->first) != 0) {
+        if (std::binary_search(live.begin(), live.end(), it->first)) {
             ++it;
             continue;
         }
@@ -1153,13 +1253,14 @@ void Renderer::Impl::view_claim_particles(size_t mark, std::vector<Ogre::SceneNo
 
 // PORT: drawing, whether a system hanging from one of `holders` still has particles.
 bool Renderer::Impl::view_particles_alive(const std::vector<Ogre::SceneNode*>& holders) const {
-    for (const ParticleSystem& system : particle_systems) {
-        Ogre::SceneNode* holder = system.holder();
-        if (holder == nullptr ||
-            std::find(holders.begin(), holders.end(), holder) == holders.end()) {
-            continue;
+    // A lookup of the systems' own index, brought up to date first if a destruction left it stale.
+    const_cast<Impl*>(this)->ensure_particle_index();
+    for (const Ogre::SceneNode* holder : holders) {
+        const auto found = particle_index.by_holder.find(holder);
+        if (found == particle_index.by_holder.end()) continue;
+        for (size_t i : found->second) {
+            if (torchlight_particle_has_particles(particle_systems[i].pu)) return true;
         }
-        if (torchlight_particle_has_particles(system.pu)) return true;
     }
     return false;
 }
@@ -1167,12 +1268,7 @@ bool Renderer::Impl::view_particles_alive(const std::vector<Ogre::SceneNode*>& h
 // PORT: drawing, a skill event's systems stopped: the layout's own at once (every one when
 // `loop`), a linked file's let die out.
 void Renderer::Impl::view_stop_particles(const std::vector<Ogre::SceneNode*>& holders, bool loop) {
-    for (ParticleSystem& system : particle_systems) {
-        Ogre::SceneNode* holder = system.holder();
-        if (holder == nullptr ||
-            std::find(holders.begin(), holders.end(), holder) == holders.end()) {
-            continue;
-        }
+    for (ParticleSystem& system : holder_systems(holders)) {
         if (system.owner == 0 || loop) {
             if (!system.finished) {
                 stop_torchlight_particle(system.pu);
@@ -1187,13 +1283,8 @@ void Renderer::Impl::view_stop_particles(const std::vector<Ogre::SceneNode*>& ho
 
 // PORT: drawing, the systems hanging from `holders` stop emitting.
 void Renderer::Impl::view_stop_emission(const std::vector<Ogre::SceneNode*>& holders) {
-    for (ParticleSystem& system : particle_systems) {
-        Ogre::SceneNode* holder = system.holder();
-        if (holder == nullptr || system.finished ||
-            std::find(holders.begin(), holders.end(), holder) == holders.end()) {
-            continue;
-        }
-        stop_particle_emission(system);
+    for (ParticleSystem& system : holder_systems(holders)) {
+        if (!system.finished) stop_particle_emission(system);
     }
 }
 
@@ -1208,13 +1299,8 @@ void Renderer::Impl::view_translate(const std::vector<Ogre::SceneNode*>& holders
 // PORT: drawing, each system of `line_holders` at `start`, its `Line` emitter's end at `end`.
 void Renderer::Impl::view_stretch_lines(const std::vector<Ogre::SceneNode*>& line_holders,
                                         const Ogre::Vector3& start, const Ogre::Vector3& end) {
-    for (ParticleSystem& system : particle_systems) {
-        Ogre::SceneNode* holder = system.holder();
-        if (holder == nullptr ||
-            std::find(line_holders.begin(), line_holders.end(), holder) == line_holders.end()) {
-            continue;
-        }
-        holder->_setDerivedPosition(start);
+    for (ParticleSystem& system : holder_systems(line_holders)) {
+        system.holder()->_setDerivedPosition(start);
         set_torchlight_particle_line_end(system.pu, end - start);
     }
 }
@@ -1314,21 +1400,41 @@ namespace renderer_detail {
 /// The level's characters a missile can meet, gathered across every machine.
 }  // namespace renderer_detail
 
-// `CBaseUnit::sphereCollision(start, end, radius, ...)`.
-bool Renderer::Impl::unit_collider_sweep(int64_t id, const tl::core::Vec3& from,
-                                         const tl::core::Vec3& to, float radius, float& t) {
-    t = 2.0f;
-    const Ogre::Entity* entity = nullptr;
+// PORT: each unit's drawn entity, the last of the placed units with its id, else the last of
+// the spawned ones, found in one walk of both for all of a sweep's units; then each swept.
+void Renderer::Impl::unit_collider_sweeps(const std::vector<int64_t>& ids,
+                                          const tl::core::Vec3& from, const tl::core::Vec3& to,
+                                          float radius, std::vector<float>& t,
+                                          std::vector<char>& drawn) {
+    std::unordered_map<int64_t, size_t> wanted;
+    wanted.reserve(ids.size());
+    for (size_t i = 0; i < ids.size(); ++i) wanted.emplace(ids[i], i);
+    std::vector<const Ogre::Entity*> placed(ids.size(), nullptr);
+    std::vector<const Ogre::Entity*> made_ones(ids.size(), nullptr);
     for (const auto& entry : scene_units) {
-        if (entry.second.node == id && entry.second.entity != nullptr) entity = entry.second.entity;
+        if (entry.second.entity == nullptr) continue;
+        const auto at = wanted.find(entry.second.node);
+        if (at != wanted.end()) placed[at->second] = entry.second.entity;
     }
-    if (entity == nullptr) {
-        for (const auto& owner : spawned) {
-            for (const SpawnedUnit& made : owner.second) {
-                if (made.id == id && made.entity != nullptr) entity = made.entity;
-            }
+    for (const auto& owner : spawned) {
+        for (const SpawnedUnit& made : owner.second) {
+            if (made.entity == nullptr) continue;
+            const auto at = wanted.find(made.id);
+            if (at != wanted.end()) made_ones[at->second] = made.entity;
         }
     }
+    t.assign(ids.size(), 2.0f);
+    drawn.assign(ids.size(), 0);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        const Ogre::Entity* entity = placed[i] != nullptr ? placed[i] : made_ones[i];
+        drawn[i] = unit_collider_sweep(entity, from, to, radius, t[i]) ? 1 : 0;
+    }
+}
+
+// `CBaseUnit::sphereCollision(start, end, radius, ...)`.
+bool Renderer::Impl::unit_collider_sweep(const Ogre::Entity* entity, const tl::core::Vec3& from,
+                                         const tl::core::Vec3& to, float radius, float& t) {
+    t = 2.0f;
     if (entity == nullptr || !entity->isVisible() || entity->getParentSceneNode() == nullptr) {
         return false;
     }
@@ -1370,10 +1476,14 @@ bool Renderer::Impl::unit_collider_sweep(int64_t id, const tl::core::Vec3& from,
     const Ogre::Vector3 b = inverse * (Ogre::Vector3(to.x, to.y, to.z) - at);
     const tl::core::Vec3 start{a.x, a.y, a.z};
     const tl::core::Vec3 end{b.x, b.y, b.z};
-    // `CCollisionList::sphereCollision` over the model's faces (`+0x38`).
-    unit_collider.sort_for_collision(
-        {std::min(a.x, b.x) - radius, std::min(a.y, b.y) - radius, std::min(a.z, b.z) - radius},
-        {std::max(a.x, b.x) + radius, std::max(a.y, b.y) + radius, std::max(a.z, b.z) + radius});
+    // `CCollisionList::sphereCollision` over the model's faces (`+0x38`); a box that meets none
+    // of them sorts nothing, and nothing is met.
+    const tl::core::Vec3 box_low{std::min(a.x, b.x) - radius, std::min(a.y, b.y) - radius,
+                                 std::min(a.z, b.z) - radius};
+    const tl::core::Vec3 box_high{std::max(a.x, b.x) + radius, std::max(a.y, b.y) + radius,
+                                  std::max(a.z, b.z) + radius};
+    if (!unit_collider.may_sort_any(box_low, box_high)) return true;
+    unit_collider.sort_for_collision(box_low, box_high);
     tl::core::CollisionHit hit;
     if (!unit_collider.pre_sorted_sphere_collision(start, end, radius, /*objects=*/false, hit)) {
         return true;
@@ -1468,6 +1578,7 @@ void Renderer::Impl::convert_unit_body(tl::core::LevelScript* machine, int64_t n
     remember_state(entity, kUnitIdleAnimation, started);
     scene_units.emplace(unit, SceneUnit{entity, mesh_path, 1.0f, node, kUnitIdleAnimation, true,
                                         kUnitIdleAnimation, started, 0.0f, stats.armed});
+    scene_units_changed = true;
     for (int64_t owner : owners) spawned[owner].push_back(SpawnedUnit{holder, entity, unit, node});
     std::string right_hand;
     std::string left_hand;
@@ -1485,9 +1596,9 @@ void Renderer::Impl::convert_unit_body(tl::core::LevelScript* machine, int64_t n
     // `CParticle::Start` on the new model's particle 8, `TRANSFORM`.
     tl::core::Vec3 feet;
     if (machine != nullptr && machine->unit_position(node, feet)) {
-        start_character_particle(
-            stats, tl::core::character_particle::kTransform,
-            Ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z));
+        start_character_particle(stats, tl::core::character_particle::kTransform,
+                                 Ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z),
+                                 character_ref(node, machine));
     }
     TL_LOG_INFO("transform: node %lld drawn as %s (%s)", static_cast<long long>(node), unit.c_str(),
                 mesh_path.c_str());
@@ -1520,6 +1631,7 @@ Ogre::Entity* Renderer::Impl::view_spawn_unit_model(const std::string& unit,
     const auto placed =
         scene_units.emplace(unit, SceneUnit{entity, mesh_path, 1.0f, id, kUnitIdleAnimation, true,
                                             kUnitIdleAnimation, started, 0.0f, armed});
+    scene_units_changed = true;
     {
         // The authored hands; a rolled one goes on later (`sync_unit_equipment`).
         const tl::core::UnitStats held = stats_for_unit(unit);

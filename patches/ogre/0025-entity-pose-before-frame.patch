@@ -1,0 +1,49 @@
+Torchlight: two public hooks on Entity for working out skinned poses before the
+frame, on the game's worker threads (the crowd fight's "cull+animate" is mostly
+OGRE evaluating skeletons one entity after another during render-queue fill).
+`_cacheBoneMatricesForFrame` runs the private `cacheBoneMatrices`, which stamps
+the bones with the frame about to be drawn, so the frame's own lazy call finds
+them current and skips the work; `_isAnimationDirty` is updateAnimation's own
+test, so entities OGRE would not re-pose are left alone. Header only, no
+behaviour change for a caller that does not use them. Not __SWITCH__-guarded:
+every target runs the pass.
+
+diff --git a/OgreMain/include/OgreEntity.h b/OgreMain/include/OgreEntity.h
+index 1205256b3..3d9316c34 100644
+--- a/OgreMain/include/OgreEntity.h
++++ b/OgreMain/include/OgreEntity.h
+@@ -724,6 +724,16 @@ namespace Ogre {
+         */
+         void _updateAnimation(void);
+ 
++        /** Torchlight: the skeleton's pose for the frame about to be drawn, worked out now
++            (cacheBoneMatrices). For a pass over skinned entities on worker threads before the
++            frame: it touches only this entity's skeleton instance and the tag points on it, and
++            the frame's own updateAnimation then finds the bones current and does not repeat it.
++        */
++        bool _cacheBoneMatricesForFrame(void) { return cacheBoneMatrices(); }
++
++        /// Torchlight: whether an animation state changed since the pose was last worked out.
++        bool _isAnimationDirty(void) const;
++
+         /** Tests if any animation applied to this entity.
+ 
+             An entity is animated if any animation state is enabled, or any manual bone
+diff --git a/OgreMain/src/OgreEntity.cpp b/OgreMain/src/OgreEntity.cpp
+index 24be46376..705805f19 100644
+--- a/OgreMain/src/OgreEntity.cpp
++++ b/OgreMain/src/OgreEntity.cpp
+@@ -1293,6 +1293,13 @@ namespace Ogre {
+         return mHardwareVertexAnimVertexData.get();
+     }
+     //-----------------------------------------------------------------------
++    // Torchlight: updateAnimation's own test, for a pass that poses entities before the frame.
++    bool Entity::_isAnimationDirty(void) const
++    {
++        return mAnimationState &&
++               mFrameAnimationLastUpdated != mAnimationState->getDirtyFrameNumber();
++    }
++    //-----------------------------------------------------------------------
+     bool Entity::cacheBoneMatrices(void)
+     {
+         Root& root = Root::getSingleton();

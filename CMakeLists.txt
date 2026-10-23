@@ -163,12 +163,13 @@ file(GLOB_RECURSE TL_RENDER_SOURCES CONFIGURE_DEPENDS src/render/*.cpp)
 
 if(ANDROID)
     # What a NativeActivity loads: libtorchlight.so (cmake/android.cmake).
-    add_library(torchlight SHARED src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
+    add_library(torchlight SHARED src/main.cpp src/console_interface.cpp src/usage.cpp
+        ${TL_RENDER_SOURCES})
 elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     enable_language(OBJCXX)
     set(TL_IOS_GAME_DATA_DIR "" CACHE PATH
         "Optional local game data directory (pak.zip, music/, console_ui/) to bundle in the iOS app")
-    add_executable(torchlight MACOSX_BUNDLE src/main.cpp src/console_interface.cpp
+    add_executable(torchlight MACOSX_BUNDLE src/main.cpp src/console_interface.cpp src/usage.cpp
         src/platform/ios/ios_app.mm ${TL_RENDER_SOURCES})
     set_target_properties(torchlight PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/Info.plist.in"
@@ -210,7 +211,8 @@ elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
                 "$<TARGET_BUNDLE_DIR:torchlight>/GameData")
     endif()
 else()
-    add_executable(torchlight src/main.cpp src/console_interface.cpp ${TL_RENDER_SOURCES})
+    add_executable(torchlight src/main.cpp src/console_interface.cpp src/usage.cpp
+        ${TL_RENDER_SOURCES})
 endif()
 target_include_directories(torchlight PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(torchlight PRIVATE tl_core)

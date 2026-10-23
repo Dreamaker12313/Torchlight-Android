@@ -59,6 +59,9 @@ void Renderer::Impl::setup_light_map(const tl::formats::AdmSection& rules) {
 
         map.light_quad = light_map_quad(0.5f, map.light_material, Ogre::RENDER_QUEUE_BACKGROUND);
         map.light_quad->setVisibilityFlags(kVisibilityLightMap);
+        // What the original's per-frame `setCorners` leaves (step_light_map): the same corners
+        // and their own box at the origin, in place of the never-culled one it was made with.
+        map.light_quad->setCorners(-0.5f, 0.5f, 0.5f, -0.5f);
         map.light_mask =
             light_map_quad(1.0f, map.mask_material, static_cast<Ogre::uint8>(kLightMapGroupLast));
         map.light_mask->setVisibilityFlags(kVisibilityLightMap);
@@ -214,7 +217,8 @@ void Renderer::Impl::step_light_map(float dt) {
         if (random.between(0.0f, 10.0f) > 7.0f) map.flicker_angle += random.between(-0.2f, 0.2f);
         while (map.flicker_angle >= 6.2831855f) map.flicker_angle -= 6.2831855f;
     }
-    map.light_quad->setCorners(-0.5f, 0.5f, 0.5f, -0.5f);
+    // The original also sets the quad's corners again here each frame, to the same ones; what
+    // that leaves is set once where the quad is made, since on GL each set maps the buffer.
 }
 
 /// `ProjectorCam` 100 above the camera's focus and `ProjectorCamShadow` 5
@@ -365,7 +369,6 @@ void Renderer::Impl::apply_environment(const std::string& layout_path) {
     // to CAMERAMULT (+0x98, load) and its dolly to CAMERAMULT * 28.5; no
     // template: 1 and 28.5.
     camera_dolly = kDefaultCameraDistance * camera_mult;
-    camera_pitch_adjust = 0.0f;
     // CGameClient::unloadCurrentLevel ends every shake
     // and speed modifier.
     //
@@ -902,6 +905,7 @@ void Renderer::Impl::dress_placed_unit(Ogre::Entity* entity, const MeshPlacement
         placement.unit,
         SceneUnit{entity, placement.mesh, placement.animation_rate, placement.node_id,
                   placement.animation, placement.loops, placement.animation, started, 0.0f, armed});
+    scene_units_changed = true;
     {
         const tl::core::UnitStats held = stats_for_unit(placement.unit);
         equip_unit_items(entity, placement.unit, held.right_hand, held.left_hand);

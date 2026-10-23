@@ -6,11 +6,15 @@
 //             log. Off, the menus do not offer them at all.
 //   logs=0    the log file, on its own (debug=1 turns it on too).
 //   fps=0     the frame-rate overlay; L3 switches it, and the choice is kept here.
+//   fps_limit=0   the most frames a second the game draws, 0 for no limit (Android: 60).
+//   free_camera=0 the right stick turns the camera (render/touch_camera.h), R3 resets it; the
+//                 Debug menu's FREE CAMERA switches it and keeps the choice here (iOS: 1).
 //
-// The desktop builds read three more (a device's screen is its own):
+// The desktop builds read four more (a device's screen is its own):
 //
 //   width=1280, height=720   the window's size, or the screen's in fullscreen
 //   fullscreen=0             1: fullscreen at that resolution
+//   vsync=1                  0: frames as fast as the machine draws them
 //
 // A device makes the file with these defaults where its game files are (the
 // Switch's `sdmc:/switch/torchlight/`, the folder the Android launcher was
@@ -32,6 +36,13 @@ struct RunConfig {
     unsigned width = 0;
     unsigned height = 0;
     bool fullscreen = false;
+    bool vsync = true;
+    unsigned fps_limit = 0;
+#if defined(TL_PLATFORM_IOS)
+    bool free_camera = true;
+#else
+    bool free_camera = false;
+#endif
 };
 
 /// The text a new `config.txt` holds: `defaults` written out, with a line

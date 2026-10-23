@@ -3,7 +3,6 @@
 // qualify a bare or relative reference against it. The port's own (ADR 0002).
 // Split from renderer.cpp; the shared declarations are in renderer_impl.h.
 #include "render/renderer_impl.h"
-#include "formats/dat_text.h"
 
 #include <dirent.h>
 
@@ -52,7 +51,6 @@ bool g_material_scripts_indexed = false;
 std::unordered_map<std::string, std::vector<std::string>> g_paths_under;
 
 std::vector<std::string> g_mod_roots;
-std::string lowered(const std::string& text);
 
 std::string normalise_mod_path(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
@@ -67,8 +65,8 @@ bool read_mod_file_case_insensitive(const std::string& root, const std::string& 
     size_t begin = 0;
     while (begin < wanted.size()) {
         const size_t slash = wanted.find('/', begin);
-        const std::string component = wanted.substr(begin, slash == std::string::npos
-                                                               ? std::string::npos : slash - begin);
+        const std::string component =
+            wanted.substr(begin, slash == std::string::npos ? std::string::npos : slash - begin);
         DIR* directory = opendir(path.c_str());
         if (!directory) return false;
         std::string match;
@@ -160,9 +158,7 @@ const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename) 
     return it == g_archive_index.end() ? nullptr : &it->second;
 }
 
-void set_mod_roots(const std::vector<std::string>& roots) {
-    g_mod_roots = roots;
-}
+void set_mod_roots(const std::vector<std::string>& roots) { g_mod_roots = roots; }
 
 bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes) {
     for (const std::string& root : g_mod_roots) {
@@ -171,49 +167,48 @@ bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes) {
     return false;
 }
 
+// Every file under the mod folder `root` ending in `suffix` whose path relative to it starts
+// with `prefix` (lower case), added to `paths` relative to `root`.
+void collect_mod_files(const std::string& root, const std::string& prefix, const char* suffix,
+                       std::vector<std::string>& paths) {
+    std::vector<std::string> pending{root};
+    while (!pending.empty()) {
+        const std::string current = pending.back();
+        pending.pop_back();
+        DIR* directory = opendir(current.c_str());
+        if (!directory) continue;
+        while (dirent* entry = readdir(directory)) {
+            if (entry->d_name[0] == '.') continue;
+            const std::string child = join_path(current, entry->d_name);
+            if (is_dir(child)) {
+                pending.push_back(child);
+                continue;
+            }
+            if (!ends_with_lower(entry->d_name, suffix)) continue;
+            const std::string relative = child.substr(root.size() + 1);
+            if (lowered(relative).compare(0, prefix.size(), prefix) == 0) paths.push_back(relative);
+        }
+        closedir(directory);
+    }
+}
+
 std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix) {
     std::vector<std::string> paths;
     const std::string prefix = lowered(normalise_mod_path(dir));
-    for (const std::string& root : g_mod_roots) {
-        std::vector<std::string> pending{root};
-        while (!pending.empty()) {
-            const std::string current = pending.back();
-            pending.pop_back();
-            DIR* directory = opendir(current.c_str());
-            if (!directory) continue;
-            while (dirent* entry = readdir(directory)) {
-                if (entry->d_name[0] == '.') continue;
-                const std::string child = join_path(current, entry->d_name);
-                if (is_dir(child)) {
-                    pending.push_back(child);
-                    continue;
-                }
-                if (!ends_with_lower(entry->d_name, suffix)) continue;
-                const std::string relative = child.substr(root.size() + 1);
-                if (lowered(relative).compare(0, prefix.size(), prefix) == 0)
-                    paths.push_back(relative);
-            }
-            closedir(directory);
-        }
-    }
-    std::sort(paths.begin(), paths.end(), [](const std::string& a, const std::string& b) {
-        return lowered(a) < lowered(b);
-    });
-    paths.erase(std::unique(paths.begin(), paths.end(), [](const std::string& a, const std::string& b) {
-                    return lowered(a) == lowered(b);
-                }), paths.end());
+    for (const std::string& root : g_mod_roots) collect_mod_files(root, prefix, suffix, paths);
+    std::sort(paths.begin(), paths.end(),
+              [](const std::string& a, const std::string& b) { return lowered(a) < lowered(b); });
+    paths.erase(std::unique(paths.begin(), paths.end(),
+                            [](const std::string& a, const std::string& b) {
+                                return lowered(a) == lowered(b);
+                            }),
+                paths.end());
     return paths;
 }
 
-
-tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size) {
-    if (tl::formats::looks_like_dat_text(data, size))
-        return tl::formats::parse_dat_text(data, size);
-    return tl::formats::parse_adm(data, size);
-}
-
-std::vector<std::string> data_paths_under(const std::string& dir) {
-    std::vector<std::string> paths = archive_paths_in_listing_order(dir, ".dat.adm");
+// A mod's data files under `dir` that `paths` (the archive's) does not have, after them.
+std::vector<std::string> with_mod_paths(std::vector<std::string> paths, const std::string& dir) {
+    if (g_mod_roots.empty()) return paths;
     std::vector<std::string> mods = mod_paths_under(dir, ".dat");
     std::vector<std::string> mod_adm = mod_paths_under(dir, ".dat.adm");
     mods.insert(mods.end(), mod_adm.begin(), mod_adm.end());
@@ -226,8 +221,12 @@ std::vector<std::string> data_paths_under(const std::string& dir) {
     return paths;
 }
 
+std::vector<std::string> data_paths_under(const std::string& dir) {
+    return with_mod_paths(archive_paths_under(dir, ".dat.adm"), dir);
+}
+
 std::vector<std::string> data_paths_in_listing_order(const std::string& dir) {
-    return data_paths_under(dir);
+    return with_mod_paths(archive_paths_in_listing_order(dir, ".dat.adm"), dir);
 }
 
 /// Every archive path under `dir` whose basename ends in `suffix`.
@@ -314,8 +313,8 @@ void index_material_scripts() {
 // parsing the whole archive aborts on its duplicate names. A name declared
 // only elsewhere - the palace pillar's `palace_tileset/palace_stairs02_mat`,
 // in `media/models/palace_secret_door/palace.material` in both releases -
-// left the mesh without one. This parses the script that declares it. The
-// scripts are read once, on the first such name, and not kept.
+// left the mesh without one. This parses the script that declares it, from the
+// index the mount builds (`mount_resources`).
 void parse_material_declaring(const std::string& material) {
     if (!g_material_scripts_indexed) index_material_scripts();
     const auto it = g_material_scripts.find(lowered(material));
@@ -498,6 +497,136 @@ std::string resolve_texture(const std::string& name, const std::string& dir,
     return nearest_texture(name, dir);
 }
 
+/// Resolve an archive path as a layout spells it to the archive's own spelling.
+///
+/// Layout data is uppercase throughout - `MEDIA/LIGHTS/PALACE/PALACE_GRADIENT_01.MESH`
+/// - while the archive stores `media/lights/palace/palace_gradient_01.Mesh`.
+/// Every component differs, including the extension. That matters more than it
+/// looks: `ZipArchive::exists()`, which ResourceGroupManager falls back to for a
+/// path its basename index cannot answer, compares the basename **exactly**, so
+/// the uppercase form finds nothing at all.
+///
+/// The basename index is case-insensitive, so it answers the question; when a
+/// basename occurs in several directories the referring path disambiguates.
+namespace {
+std::string resolve_archive_path_impl(const std::string& reference, bool quiet) {
+    if (reference.empty()) return {};
+
+    // Runic's data mixes separators freely - a particle node names
+    // `media\particles\textures\sequence\flame2x4.dds` while the layout beside it
+    // uses forward slashes - and a path split on '/' alone treats the whole
+    // backslashed string as one basename, which matches nothing. The town's
+    // torches had no flames for exactly this reason. tl::core::AssetIndex
+    // already normalises separators for direct file access; this is the same
+    // rule for the layer OGRE answers.
+    std::string path = reference;
+    for (char& c : path) {
+        if (c == '\\') c = '/';
+    }
+
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) return path;
+
+    const size_t slash = path.find_last_of('/');
+    const std::string basename = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    const std::string dir =
+        (slash == std::string::npos) ? std::string() : path.substr(0, slash + 1);
+
+    const std::vector<Ogre::FileInfo>* found = archive_entries(basename);
+    if (!found || found->empty()) return {};
+    if (found->size() == 1) return found->front().path + found->front().basename;
+
+    for (const Ogre::FileInfo& info : *found) {
+        if (info.path.size() != dir.size()) continue;
+        if (std::equal(dir.begin(), dir.end(), info.path.begin(), [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) ==
+                       std::tolower(static_cast<unsigned char>(b));
+            })) {
+            return info.path + info.basename;
+        }
+    }
+
+    if (!quiet) {
+        TL_LOG_WARN("'%s' is ambiguous and no copy sits in '%s'", basename.c_str(), dir.c_str());
+    }
+    return {};
+}
+}  // namespace
+
+std::string resolve_archive_path(const std::string& reference) {
+    return resolve_archive_path_impl(reference, false);
+}
+
+// PORT: asset lookup, the same without the warning.
+std::string resolve_archive_path_quiet(const std::string& reference) {
+    return resolve_archive_path_impl(reference, true);
+}
+
+namespace {
+/// The game's `.adm` data files, as read, kept across `Renderer::restart()`.
+///
+/// Every level change is a restart, and a restart drops every table built out
+/// of the archive with the Impl that held it: the skill files (read three
+/// times over), the affixes, the monster and prop units, the quests, the stat
+/// curves, `masterresourceunits` - a couple of thousand small files, each a
+/// seek, a read and an inflate, which on the console is an unbuffered SD card
+/// read per file. The archive itself does not change while the process runs,
+/// so the second level onwards takes them from here; parsing them is still
+/// done afresh, by the same code, so what the tables hold cannot differ.
+///
+/// Only `.adm`: meshes, textures and sounds are read once by OGRE or the mixer
+/// and are far larger. Bounded, because applet mode is the tighter budget: a
+/// file that would take it past the limit is simply read the old way.
+struct DataFileCache {
+    /// What was mounted when the cache was filled; see remember_mounts().
+    std::string mounts;
+    std::unordered_map<std::string, std::vector<uint8_t>> files;
+    size_t bytes = 0;
+};
+DataFileCache g_data_files;
+constexpr size_t kDataFileBudget = 32u * 1024u * 1024u;
+}  // namespace
+
+void remember_mounts(const std::string& mounts) {
+    if (mounts == g_data_files.mounts) return;
+    g_data_files = DataFileCache{};
+    g_data_files.mounts = mounts;
+}
+
+/// Read a resource out of the mounted archive. Empty on any failure.
+std::vector<uint8_t> read_resource(const std::string& path) {
+    const bool data_file = ends_with_lower(path, ".adm");
+    if (data_file) {
+        const auto found = g_data_files.files.find(path);
+        if (found != g_data_files.files.end()) return found->second;
+    }
+    std::vector<uint8_t> mod_bytes;
+    if (read_mod_resource(path, mod_bytes)) {
+        TL_LOG_INFO("mod override: %s", path.c_str());
+        if (data_file && !mod_bytes.empty() &&
+            g_data_files.bytes + mod_bytes.size() <= kDataFileBudget) {
+            g_data_files.bytes += mod_bytes.size();
+            g_data_files.files.emplace(path, mod_bytes);
+        }
+        return mod_bytes;
+    }
+    auto& groups = Ogre::ResourceGroupManager::getSingleton();
+    try {
+        Ogre::DataStreamPtr stream = groups.openResource(path, kGameGroup);
+        if (!stream) return {};
+        std::vector<uint8_t> bytes(stream->size());
+        if (!bytes.empty()) stream->read(bytes.data(), bytes.size());
+        if (data_file && !bytes.empty() && g_data_files.bytes + bytes.size() <= kDataFileBudget) {
+            g_data_files.bytes += bytes.size();
+            g_data_files.files.emplace(path, bytes);
+        }
+        return bytes;
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_WARN("could not read '%s': %s", path.c_str(), e.getDescription().c_str());
+        return {};
+    }
+}
+
 }  // namespace tl::render::renderer_detail
 
 namespace tl::render {
@@ -530,8 +659,8 @@ std::vector<std::string> Renderer::Impl::data_paths_under(const std::string& dir
     return renderer_detail::data_paths_under(dir);
 }
 
-tl::formats::AdmFile Renderer::Impl::parse_data_group(const uint8_t* data, size_t size) const {
-    return renderer_detail::parse_data_group(data, size);
+std::vector<std::string> Renderer::Impl::data_paths_in_listing_order(const std::string& dir) const {
+    return renderer_detail::data_paths_in_listing_order(dir);
 }
 
 // PORT: the archive hook (core/world.h) answered by the mounted archive.

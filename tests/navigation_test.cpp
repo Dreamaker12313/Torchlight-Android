@@ -6,6 +6,8 @@
 #include "test_support.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -402,4 +404,81 @@ TL_TEST(a_route_search_goes_through_a_passage_two_cells_wide) {
     for (size_t i = 1; i < nodes.size(); ++i) {
         TL_CHECK(std::fabs(nodes[i].z - nodes[i - 1].z) < PassabilityMap::kCell * 1.5f);
     }
+}
+
+namespace {
+
+/// A 60-unit floor cluttered with closed boxes on the map grid and unit circles on the object
+/// grid, from a fixed generator, so a run of searches meets dead ends, detours and ties.
+void build_cluttered(NavGrid& nav, PassabilityMap& grid, uint32_t& seed) {
+    CollisionWorld world;
+    add_floor(world, 60.0f);
+    world.build();
+    build_nav(nav, grid, world);
+    auto next = [&seed](float span) {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24) * span;
+    };
+    for (int i = 0; i < 70; ++i) {
+        const float x = next(56.0f) - 28.0f;
+        const float z = next(56.0f) - 28.0f;
+        const bool across = next(1.0f) < 0.5f;
+        const Vec3 low{x, -1000.0f, z};
+        const Vec3 high{x + (across ? next(12.0f) + 0.4f : 0.9f), 1000.0f,
+                        z + (across ? 0.9f : next(12.0f) + 0.4f)};
+        grid.increment_map_passability(low, high, 0.0f);
+        nav.refresh(grid, low, high);
+    }
+    for (int i = 0; i < 120; ++i) {
+        const Vec3 at{next(56.0f) - 28.0f, 0.0f, next(56.0f) - 28.0f};
+        grid.increment_object_passability(at, at, 0.5f + next(0.6f));
+    }
+}
+
+}  // namespace
+
+// `CAstarPathfinder::createPath`: thousands of searches, both expansion caps,
+// with and without the object grid, every route folded into one number. The number was taken
+// from the open list as the console keeps it (a linked list, each new node before the first
+// whose f as it stands is at least its own, an improved node left in place); any other order
+// of pops changes it.
+TL_TEST(route_searches_over_a_cluttered_floor_pop_in_the_consoles_order) {
+    uint32_t seed = 12345u;
+    NavGrid nav;
+    PassabilityMap grid;
+    build_cluttered(nav, grid, seed);
+    auto next = [&seed](float span) {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24) * span;
+    };
+    uint64_t digest = 1469598103934665603ull;
+    auto fold = [&digest](uint32_t value) {
+        for (int i = 0; i < 4; ++i) {
+            digest ^= (value >> (8 * i)) & 0xffu;
+            digest *= 1099511628211ull;
+        }
+    };
+    auto bits = [](float value) {
+        uint32_t out = 0;
+        std::memcpy(&out, &value, sizeof out);
+        return out;
+    };
+    std::vector<Vec3> nodes;
+    int found = 0;
+    for (int i = 0; i < 3000; ++i) {
+        const Vec3 from{next(64.0f) - 32.0f, 0.0f, next(64.0f) - 32.0f};
+        const Vec3 to{next(64.0f) - 32.0f, 0.0f, next(64.0f) - 32.0f};
+        const bool ignore_objects = (i % 3) == 0;
+        const int cap = (i % 2) == 0 ? 150 : 800;
+        const bool ok = nav.find_nodes(from, to, grid, ignore_objects, nodes, cap);
+        found += ok ? 1 : 0;
+        fold(ok ? 1u : 0u);
+        fold(static_cast<uint32_t>(nodes.size()));
+        for (const Vec3& node : nodes) {
+            fold(bits(node.x));
+            fold(bits(node.z));
+        }
+    }
+    TL_CHECK_EQ(found, 2985);
+    TL_CHECK_EQ(digest, 0x227031e256f98689ull);
 }

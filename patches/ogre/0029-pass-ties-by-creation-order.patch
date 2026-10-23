@@ -1,0 +1,79 @@
+Torchlight: two passes with the same hash are grouped in the order they were made, not by
+pointer. `PassGroupLess` (the map the opaque render queue groups renderables by pass in)
+compared the passes' addresses when their hashes were equal - common, since many materials share
+one RTSS program - and addresses differ from run to run (the heap's; Windows randomises it, and on
+the console any change to what was allocated earlier moves it). The draws were the same, their
+order not, and where two surfaces lie in one plane (a ground effect over the floor) which one
+showed changed: the crowd fight's frame was 0.19% different between two pinned runs of one build
+(2026-10-23). Each pass now takes a serial when it is made (`Pass::_getSerial`; `operator=` does
+not copy it), and ties go by it. Not __SWITCH__-guarded: every target draws the same frames.
+
+diff --git a/OgreMain/include/OgrePass.h b/OgreMain/include/OgrePass.h
+index 29a33170d..34bfd24bd 100644
+--- a/OgreMain/include/OgrePass.h
++++ b/OgreMain/include/OgrePass.h
+@@ -135,6 +135,8 @@ namespace Ogre {
+         Technique* mParent;
+         String mName; /// Optional name for the pass
+         uint32 mHash; /// Pass hash
++        /// Torchlight: the order passes were made in, for sorting two with the same hash.
++        uint32 mSerial;
+         //-------------------------------------------------------------------------
+         // Colour properties, only applicable in fixed-function passes
+         ColourValue mAmbient;
+@@ -1320,6 +1322,8 @@ namespace Ogre {
+             by the textures which it's TextureUnitState instances are using.
+         */
+         uint32 getHash(void) const { return mHash; }
++        /// Torchlight: the order this pass was made in among all passes.
++        uint32 _getSerial(void) const { return mSerial; }
+         /// Mark the hash as dirty
+         void _dirtyHash(void);
+         /** Internal method for recalculating the hash.
+diff --git a/OgreMain/include/OgreRenderQueueSortingGrouping.h b/OgreMain/include/OgreRenderQueueSortingGrouping.h
+index 4764017f8..93e7fd266 100644
+--- a/OgreMain/include/OgreRenderQueueSortingGrouping.h
++++ b/OgreMain/include/OgreRenderQueueSortingGrouping.h
+@@ -132,8 +132,10 @@ namespace Ogre {
+                 uint32 hashb = b->getHash();
+                 if (hasha == hashb)
+                 {
+-                    // Must differentTransparentQueueItemLessiate by pointer in case 2 passes end up with the same hash
+-                    return a < b;
++                    // Torchlight: two passes with the same hash in the order they were made. The
++                    // pointers' order changed from run to run (the heap's addresses), and with it
++                    // which of two coplanar surfaces drew last.
++                    return a->_getSerial() < b->_getSerial();
+                 }
+                 else
+                 {
+diff --git a/OgreMain/src/OgrePass.cpp b/OgreMain/src/OgrePass.cpp
+index 6be5dccdd..99a6c9beb 100644
+--- a/OgreMain/src/OgrePass.cpp
++++ b/OgreMain/src/OgrePass.cpp
+@@ -118,6 +118,9 @@ namespace Ogre {
+         }
+     }
+     //-----------------------------------------------------------------------------
++    // Torchlight: passes numbered as they are made (Pass::_getSerial).
++    static uint32 msTorchlightPassSerial = 0;
++    //-----------------------------------------------------------------------
+     Pass::Pass(Technique* parent, unsigned short index)
+         : mParent(parent)
+         , mHash(0)
+@@ -172,6 +175,7 @@ namespace Ogre {
+         , mOnlyLightType(Light::LT_POINT)
+         , mFogMode(FOG_NONE)
+     {
++        mSerial = ++msTorchlightPassSerial;
+         // init the hash inline
+         _recalculateHash();
+    }
+@@ -181,6 +185,7 @@ namespace Ogre {
+         : mParent(parent), mQueuedForDeletion(false), mIndex(index), mPassIterationCount(1)
+     {
+         *this = oth;
++        mSerial = ++msTorchlightPassSerial;
+         mParent = parent;
+         mIndex = index;
+         mQueuedForDeletion = false;

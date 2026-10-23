@@ -226,6 +226,8 @@ InputState poll_platform_input() {
     filter_stick(rx, ry, kRightStickDeadzone);
     in.zoom = static_cast<float>(ry) / kStickMax;
     in.look_x = static_cast<float>(rx) / kStickMax;
+    // DIVERGENCE (platform): a pinch zooms, under the Debug menu's FREE CAMERA (render/touch_camera.h).
+    in.zoom_delta = touch.pinch_dolly;
 
     in.confirm = (b & kA) != 0;
     in.skip = (b & kB) != 0;

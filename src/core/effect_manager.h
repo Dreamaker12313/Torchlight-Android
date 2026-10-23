@@ -403,6 +403,8 @@ private:
     std::array<float, kEffectTypeCacheCount> cache_{};
     /// `+0x2c8`: live unit themes.
     std::vector<const UnitTheme*> themes_;
+    /// `calculate_effect_values`' working list, kept for its storage.
+    std::vector<std::pair<int, const UnitTheme*>> theme_scratch_;
 };
 
 /// `CEffect::setOwner` for every effect held while it lives: sets the manager's

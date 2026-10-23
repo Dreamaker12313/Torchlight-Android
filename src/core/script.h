@@ -988,6 +988,11 @@ public:
     /// `LAYOUT CONTROL`.
     void play_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out, bool backwards);
     void stop_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out);
+    /// `CLayout::callFunctionOnObjects(stop)` on a timeline or particle
+    /// layout's `Sound` nodes: those whose bank loops are stopped, the rest play out.
+    void stop_layout_sounds(QuestState& quests, std::vector<ScriptEvent>& out);
+    /// The layout going away: each `Sound` node's bank destroyed (`sound_bank_destroy`).
+    void release_sound_nodes();
     /// `CLayout::initOnLoad()`, for a link that does not
     /// start on load: every `Timeline` loses its own `START ON LOAD`.
     void init_on_load();
@@ -1366,6 +1371,8 @@ public:
     /// A placed unit has been killed: `Monster Killed`.
     void unit_killed(int64_t id, QuestState& quests, std::vector<ScriptEvent>& out);
     bool unit_is_dead(int64_t id) const;
+    /// Whether any unit of this machine is dead (`unit_is_dead` is false for every id if not).
+    bool has_dead_units() const { return !dead_.empty(); }
 
     /// The player pressed the skip key: `CSkipCutscene::update`
     /// sees Escape on an enabled node and
@@ -1398,6 +1405,8 @@ public:
     /// every frame (`CSoundObjectDescriptor::update`), wired or not.
     bool has_sound_nodes() const;
     size_t wire_count() const;
+    /// Whether any object has a wire: `wire_count() != 0` without the count.
+    bool has_wires() const;
     size_t trigger_count() const;
     size_t timeline_count() const;
     bool timelines_playing() const;
@@ -2582,6 +2591,9 @@ private:
     /// order within this machine - so a search of the whole level walks
     /// characters rather than every node of every room.
     std::vector<int64_t> character_order_;
+    /// This machine's characters ever given a master (`set_unit_master`), the only ones
+    /// `pets_of` can find: it looks at these, not at every character.
+    std::vector<int64_t> mastered_;
     void forget_character(int64_t id);
     std::set<int64_t> dead_;
     PassabilityMap* passability_ = nullptr;
@@ -2628,6 +2640,11 @@ private:
     /// order, then node order within a
     /// descriptor - `CDescriptorManager::update`.
     std::vector<int64_t> update_order_;
+    /// PORT: `update_order_` without the descriptors whose per-frame update does nothing here
+    /// (`updates_each_frame`), for `update` to walk.
+    std::vector<int64_t> frame_order_;
+    static bool updates_each_frame(uint32_t type);
+    void build_update_order();
     std::vector<int64_t> logic_groups_;
     std::vector<tl::formats::CmpTimeline> timelines_;
 

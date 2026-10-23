@@ -765,6 +765,8 @@ public:
 
     /// The `.ANIMATION` manifest beside each character mesh, by mesh directory.
     std::map<std::string, tl::core::AnimationManifest> manifests;
+    /// `manifests`' entries by the mesh path asked with (its directory picks the entry).
+    std::unordered_map<std::string, const tl::core::AnimationManifest*> manifests_by_mesh;
 
     /// The sleeping mimic the same pass points at, by machine and node. DIVERGENCE: the PC
     /// targets it under the pointer (`CGameClient::updateIngame`); a pad cannot.
@@ -1192,6 +1194,10 @@ public:
     };
 
     std::multimap<std::string, SceneUnit> scene_units;
+    /// `scene_units` by node, each list in the multimap's order; rebuilt on the next lookup
+    /// after an entry is added or erased (`scene_units_changed`).
+    std::unordered_map<int64_t, std::vector<SceneUnit*>> scene_units_by_node;
+    bool scene_units_changed = true;
 
     /// The state each animation this engine started runs on, by entity and lower-cased
     /// `.SKELETON` stem, so `Stop` can switch off one animation (a skeleton's internal
@@ -1523,9 +1529,32 @@ public:
         bool stopped = false;
         /// A character's own particle: taken down once its layout's timer stopped it.
         bool self_timed = false;
+        /// A missile's own (`CMissile +0x100`): gone once none of its systems is still
+        /// updating, whatever its layout's timer (`CMissile::handleDeathOfMissile`).
+        bool missile = false;
     };
 
     std::vector<TransientParticles> transient_particles;
+
+    /// A character a particle slot belongs to: the machine that runs it and its node; the
+    /// player is both null.
+    struct CharacterRef {
+        const void* machine = nullptr;
+        int64_t node = 0;
+        bool operator<(const CharacterRef& o) const {
+            return machine != o.machine ? std::less<const void*>()(machine, o.machine)
+                                        : node < o.node;
+        }
+    };
+    /// A character's slot `CParticle` (`CCharacter +0x4a8`): its placed layout, until the layout's
+    /// timer has stopped it and its holders are destroyed (`CParticle::Stop(true)` handing the
+    /// cache back). Where it was put and which file it is.
+    struct SlotParticle {
+        std::vector<Ogre::SceneNode*> holders;
+        ogre::Vector3 at = ogre::Vector3::ZERO;
+        std::string file;
+    };
+    std::map<std::pair<CharacterRef, int>, SlotParticle> slot_particles;
 
     Ogre::Entity* weapon_entity = nullptr;
 

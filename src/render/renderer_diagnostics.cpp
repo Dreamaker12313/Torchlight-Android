@@ -3,6 +3,11 @@
 #include "core/section_profile.h"
 #include "render/gl_thread.h"
 #include "render/renderer_impl.h"
+#include "render/skinned_entities.h"
+
+#include <OgreEntity.h>
+
+#include <vector>
 
 namespace tl::render {
 
@@ -96,14 +101,24 @@ void Renderer::Impl::log_sections(unsigned frames, bool print) {
     if (print) print_sections(frames);
     tl::core::section_totals() = tl::core::SectionTotals{};
     frame_phases.reset();
+    posed_entities = 0;
 }
 
 // PORT: diagnostics, a headless run's own timing windows, every 300 frames (it never reaches
 // run()'s).
 void Renderer::Impl::step_headless_sections() {
-    if (!config.headless || ++headless_profile_frames <= 300) return;
+    if (!config.headless) return;
+    // The sampler's samples from here on belong to the window that starts.
+    const auto mark = [this] {
+        char label[48];
+        std::snprintf(label, sizeof label, "headless window %u", ++headless_profile_windows);
+        tl::core::profiler_mark(label);
+    };
+    if (headless_profile_frames == 0) mark();
+    if (++headless_profile_frames <= 300) return;
     log_sections(headless_profile_frames - 1, true);
     headless_profile_frames = 1;
+    mark();
 }
 
 // PORT: diagnostics, the update's sections (core/section_profile.h) and OGRE's phases a frame
@@ -133,22 +148,53 @@ void Renderer::Impl::print_sections(unsigned frames) {
     };
     TL_LOG_INFO(
         "  per character: ai %.1f a frame at %.1f us, pathing %.1f at %.1f us, "
-        "motion %.1f at %.1f us; render: particles+controllers %.2f, scene graph %.2f, "
-        "cull+animate %.2f, draw calls %.2f ms",
+        "motion %.1f at %.1f us, route searches %.1f at %.1f us; render: poses %.2f (%.1f a "
+        "frame), "
+        "particles+controllers %.2f, scene graph %.2f, cull+animate %.2f, draw calls %.2f ms",
         calls(Section::Ai), per(Section::Ai), calls(Section::Pathing), per(Section::Pathing),
-        calls(Section::Motion), per(Section::Motion),
+        calls(Section::Motion), per(Section::Motion), calls(Section::Route), per(Section::Route),
+        static_cast<double>(frame_phases.poses) / n / 1000.0,
+        static_cast<double>(posed_entities) / n,
         static_cast<double>(frame_phases.controllers) / n / 1000.0,
         static_cast<double>(frame_phases.scene_graph) / n / 1000.0,
         static_cast<double>(frame_phases.cull) / n / 1000.0,
         static_cast<double>(frame_phases.draw) / n / 1000.0);
+    const auto ms = [n](unsigned long long us) { return static_cast<double>(us) / n / 1000.0; };
+    TL_LOG_INFO(
+        "  cull+animate / draw calls: view %.2f / %.2f, render textures %.2f / %.2f, "
+        "minimap %.2f / %.2f ms",
+        ms(frame_phases.cull_by[FramePhases::kView]), ms(frame_phases.draw_by[FramePhases::kView]),
+        ms(frame_phases.cull_by[FramePhases::kTexture]),
+        ms(frame_phases.draw_by[FramePhases::kTexture]),
+        ms(frame_phases.cull_by[FramePhases::kMinimap]),
+        ms(frame_phases.draw_by[FramePhases::kMinimap]));
     const size_t running = static_cast<size_t>(
         std::count_if(nested_scripts.begin(), nested_scripts.end(),
                       [](const NestedScript& machine) { return machine.running; }));
+    size_t entities = 0;
+    std::vector<Ogre::Entity*> skinned;
+    if (scene != nullptr) {
+        for (const auto& entry : scene->getMovableObjects(Ogre::MOT_ENTITY)) {
+            ++entities;
+            auto* entity = static_cast<Ogre::Entity*>(entry.second);
+            if (entity->hasSkeleton()) skinned.push_back(entity);
+        }
+        std::vector<Ogre::Entity*> listed;
+        for (Ogre::Entity* entity : skinned_entities().of(scene)) {
+            if (entity->hasSkeleton()) listed.push_back(entity);
+        }
+        if (listed != skinned) {
+            TL_LOG_WARN("  skinned entities: the registry has %zu, the scene %zu", listed.size(),
+                        skinned.size());
+        }
+    }
     TL_LOG_INFO(
         "  held: %zu linked machine(s), %zu running, %zu on the level's list; %zu "
-        "particle system(s), %zu waiting to die out; %zu skill event(s), %zu missile(s)",
+        "particle system(s), %zu waiting to die out; %zu skill event(s), %zu missile(s); "
+        "%zu entities, %zu skinned",
         nested_scripts.size(), running, level_machines.size(), particle_systems.size(),
-        transient_particles.size(), live_skill_events.size(), missiles.size());
+        transient_particles.size(), live_skill_events.size(), missiles.size(), entities,
+        skinned.size());
 }
 
 }  // namespace tl::render

@@ -19,6 +19,7 @@
 #include "core/touch_pad.h"
 
 #include <android/log.h>
+#include <android/native_window.h>
 #include <android_native_app_glue.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -43,6 +44,7 @@ bool g_started = false;
 bool g_in_background = false;
 SurfaceHooks g_hooks;
 
+float g_frame_rate = 0.0f;
 int g_screen_width = 0;
 int g_screen_height = 0;
 float g_render_scale = 1.0f;
@@ -61,6 +63,10 @@ void on_command(android_app* glue, int32_t command) {
     switch (command) {
         case APP_CMD_INIT_WINDOW:
             measure_window(glue->window);
+            if (g_frame_rate > 0.0f) {
+                ANativeWindow_setFrameRate(glue->window, g_frame_rate,
+                                           ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
+            }
             __android_log_print(ANDROID_LOG_INFO, "torchlight", "window up: %dx%d", g_screen_width,
                                 g_screen_height);
             if (g_in_background) {
@@ -247,6 +253,13 @@ int render_height() {
 
 void measure_screen() {
     if (g_app != nullptr && g_app->window != nullptr) measure_window(g_app->window);
+}
+
+// A request: the system may run the display at that rate, or keep its own.
+void set_frame_rate(float fps) {
+    g_frame_rate = fps;
+    if (g_app == nullptr || g_app->window == nullptr || !(fps > 0.0f)) return;
+    ANativeWindow_setFrameRate(g_app->window, fps, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
 }
 
 }  // namespace tl::core::android
