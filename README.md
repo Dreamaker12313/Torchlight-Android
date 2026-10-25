@@ -2,11 +2,12 @@
 
 基于 GreenSwampDweller/torchlight-rekindled 1.0.1 的 Android 版改写版启动器。
 
-https://img.shields.io/badge/base-torchlight--rekindled%201.0.1-blue.svg
-https://img.shields.io/badge/platform-Android-green.svg
-https://img.shields.io/badge/ABI-arm64--v8a-orange.svg
-https://img.shields.io/badge/signature-debug-red.svg
-
+| 项目 | 说明 |
+| --- | --- |
+| 基础版本 | torchlight-rekindled 1.0.1 |
+| 平台 | Android |
+| ABI | arm64-v8a |
+| 签名 | debug |
 ---
 
 简介
