@@ -1,451 +1,134 @@
-<p align="center">
-  <img src="src/logo_wide.png" alt="Torchlight Rekindled" width="300">
-</p>
+火炬之光重燃 (Torchlight Rekindled)
 
-# Torchlight Rekindled
+基于 GreenSwampDweller/torchlight-rekindled 1.0.1 的 Android 版改写版启动器。
 
-An engine that runs Torchlight (Runic Games, 2009) on a homebrew-enabled
-Nintendo Switch, Android and desktop. Its game logic follows Runic's own
-Xbox 360 port of the game (Xbox Live Arcade, 2011). It draws with OGRE 14 and
-ParticleUniverse.
+https://img.shields.io/badge/base-torchlight--rekindled%201.0.1-blue.svg
+https://img.shields.io/badge/platform-Android-green.svg
+https://img.shields.io/badge/ABI-arm64--v8a-orange.svg
+https://img.shields.io/badge/signature-debug-red.svg
 
-**No game data is included.** You need your own copy of the full game: any
-purchased PC release (Steam, GOG, Epic, retail) or the Xbox 360 release. The
-engine reads it at runtime.
+---
 
-This is a fan project. It is not affiliated with or endorsed by Runic Games or
-the owners of the Torchlight trademark.
+简介
 
-## Supported platforms
+本项目是对原版 Android 启动器的改写版，主要做了三件事：应用汉化、读取 pak.zip 内中文字库、支持外置 MODS。
 
-| platform | notes |
-| --- | --- |
-| Nintendo Switch | homebrew (hbmenu) |
-| Android | arm64, Android 12 or newer |
-| iOS | iPhone and iPad (unsigned build; sign before installing) |
-| Windows | desktop build |
-| Linux | desktop build |
+---
 
-**About the desktop builds:** I don't own a Steam Deck or any similar handheld
-PC, so the Windows and Linux builds have only been tested on a laptop with a
-gamepad connected. Reports from handheld PCs are welcome.
+改动内容
 
-## Screenshots
+1. 名称：火炬之光重燃
 
-**Nintendo Switch**: the town of Torchlight at night.
+· 应用名（桌面图标下的名字）改为 火炬之光重燃。
+· 启动器界面整体改为中文。
 
-<img src="switch.jpg" alt="Torchlight Rekindled on the Nintendo Switch: the Destroyer and his wolf by the burning shrine in the town of Torchlight" width="100%">
+2. 中文字库：读取 pak.zip 里的中文
 
-**Android**: Orden Mines, floor 1, with the on-screen controls (a Galaxy Z Fold6, 120 fps).
+引擎侧
 
-<img src="android.jpg" alt="Torchlight Rekindled on Android: the Destroyer in the Orden Mines with the on-screen gamepad" width="100%">
+· 界面字体的字形范围从 ASCII + Latin-1（U+0020–U+00FF） 扩展到 U+0020–U+9FFF，覆盖 CJK 汉字区与中文标点。
+· 字体光栅尺寸相应调整，让 4 万多个字形能塞进一张 4096×4096 的字体图集。
+· 文字绘制本身走 OGRE 的 UTF-8 解码，因此 pak.zip 里的中文只要有字形，就能正常显示。
 
-## Why
+启动器侧
 
-The PC and Xbox 360 versions of Torchlight both received their last update in
-2011. That is more than fifteen years without a patch.
+· 新增「中文字库」检测项。启动前会：
+  · 直接打开 pak.zip；
+  · 解析其中 media/UI/*.ttf 的 TrueType cmap 表；
+  · 报告有多少个汉字字形，并列出 pak.zip 内所有字体；
+  · 没有汉字字形的 pak.zip 会被明确提示。
 
-The main motivation for this project is to make Torchlight properly playable on
-today's portable devices. The PC version does run on handheld PCs like the
-Steam Deck, but it was made for a mouse and keyboard: it has no real gamepad
-support and no interface designed for a controller. The Xbox 360 version had
-both, and that is the version this engine follows.
+说明：引擎读取的界面字体是 pak.zip 里的 media/UI/BRLNSDB.TTF（菜单）与 Torchlight Regular.ttf（对白）。国内中文版 pak.zip 通常会把这两个文件换成带汉字的字体，所以「读取国内 pak.zip 的中文字库」= 让引擎把这些字体的汉字字形真正画出来，并让你在启动前确认。
 
-Runic Games, the studio behind Torchlight, no longer exists. The Torchlight IP
-now belongs to another company whose focus is Torchlight Infinite. With no
-sign that the original game will ever be revisited by the people who made it,
-this project had to be made.
+3. 外置 MODS
 
-## Game data
+· 启动器新增「MODS」管理界面：
+  · 将 mod 放入游戏文件夹的 mods/ 下（子文件夹，或 .zip / .mod / .pak 文件）；
+  · 在启动器内逐个勾选启用。
+· 启动时写入 args.txt，以 --extra-data 传给引擎，挂在游戏数据之上。
+· 引擎本身支持可重复的 --extra-data，因此新增文件（物品、单位、任务、UI 等）会直接生效。
 
-The engine needs two things from your copy of the game:
+---
 
-| file | where it comes from |
-| --- | --- |
-| `pak.zip` | the game archive, from either release: the Xbox 360's `pak.zip` or a PC release's `Pak.zip` (from its install folder). See [PC or Xbox 360 game data](#pc-or-xbox-360-game-data) for which to use |
-| `music/` | the music folder from your game install. The level themes are not inside the archive. The game runs without it, silently |
+用法
 
-Either spelling, `pak.zip` or `Pak.zip`, is accepted.
+1. 安装 APK
+   · 首次需要允许「安装未知应用」；
+   · 并授予「所有文件访问权限」。
+2. 选择游戏文件夹
+   · 需包含 pak.zip 与 music/，例如 /sdcard/Torchlight。
+3. 主界面可进行：
+   · 更换文件夹
+   · 修改分辨率
+   · 检测中文字库
+   · 管理 MODS
+4. 点击「启动游戏」。
 
-## PC or Xbox 360 game data
+---
 
-Both releases' archives are supported, and the engine tells them apart by their
-contents. There are three ways to play:
+MODS 的边界
 
-1. **The Xbox 360 `pak.zip`.** This is the reference: the engine follows the
-   Xbox 360 release, and its archive carries the console's own HUD, menus and
-   fonts. Nothing else is needed.
+引擎资源索引采用「先挂载者优先」策略，而 --extra-data 是按顺序挂在 pak.zip 之后的，因此：
 
-2. **A PC `Pak.zip` on its own.** It works on every platform, but a PC archive
-   has no console interface: it carries the PC's mouse-driven one instead. The
-   engine therefore draws the port's own interface pack, built in. Its art and
-   layouts are drawn for this port by `scripts/build_ui_pack.py`, with nothing
-   taken from the game. Every build makes it: the Switch `.nro` carries it
-   inside, the Android APK carries it and unpacks it, and the Windows and Linux
-   builds put it beside the program as `ui_pack/`. **This interface is basic
-   and still under construction.**
+操作 是否支持
+新增文件（物品 / 单位 / 任务 / UI…） ✅ 支持
+覆盖 pak.zip 中已存在的同名文件 ❌ 不支持
 
-3. **Hybrid: a PC `Pak.zip` with the Xbox 360 interface.** The game's assets
-   come from the PC archive, and the HUD and menus from the Xbox release's
-   `pak.zip` (ten files, about 4 MB), taken out with
-   `scripts/extract_console_ui.py`:
+这一点与桌面版 ModLauncher 合并 pak 的做法不同。
 
+---
+
+已知限制
+
+· 文字测量不准确：引擎自身的 measure_text（用于对白换行与提示框排版）是按字节数计算的，遇到 UTF-8 中文时宽度会算小。中文能正常显示，但对白框的自动换行和少数居中排版的偏移会不准确。该函数位于 .so 中，无源码，无法在不重编译的情况下修正。
+· 字库光栅尺寸：为兼顾 4 万多个字形，压到了 13pt。中文在原尺寸下清晰，放很大时略软。
+· 签名不同：这是重新签名的版本（debug 签名），与原版签名不同；安装前必须先卸载原版。
+
+---
+
+技术细节：.so 的原地补丁
+
+原版 libtorchlight.so（arm64-v8a）中，界面字体创建逻辑有三处关键调用：
+
+```cpp
+addCodePointRange(Ogre::Font::CodePointRange(32, 255)); // 字型范围
+setTrueTypeSize(48 / 32);                               // 光栅尺寸
+```
+
+对应源码位于 src/render/hud.cpp、menu.cpp、menu_chrome.cpp。
+
+补丁表
+
+文件偏移（虚拟地址） 原指令 改后
+0x405440, 0x4054A4, 0x44A1F0, 0x44A254, 0x45E0BC, 0x45E120 movk x8, #0xff, lsl #32 movk x8, #0x9fff, lsl #32
+0x405418 movi v0.2s, #0x42, lsl #24（32.0f） fmov s0, #13.0
+0x44A1C4, 0x45E090 mov w8, #0x42400000（48.0f） mov w8, #0x41500000（13.0f）
+
+· 第 1 组：将字形范围 0x00FF → 0x9FFF。
+· 第 2、3 组：将字体光栅尺寸统一压到 13.0。
+
+---
+
+重新构建
+
+引擎
+
+无需重编译，直接按下文偏移表修改 .so 即可。
+
+启动器
+
+1. 编译 src/android/java/port/android/Launcher.java → classes.dex。
+2. 与改好的 libtorchlight.so 一起打包：
    ```bash
-   python scripts/extract_console_ui.py <path to the Xbox 360 pak.zip> console_ui
+   aapt2 link ...      # 生成未签名 APK
+   zipalign -f 4 ...   # 对齐
+   apksigner sign ...  # 签名
    ```
+3. 修改 AndroidManifest.xml 中 android:label="火炬之光重燃"。
 
-   The first argument is the Xbox archive and the second is the folder to
-   write. The script will not write into the repository's source folders
-   (`src/`, `scripts/`, `tests/`, ...). `console_ui/` at the repository root is
-   ignored by git. Put `console_ui/` beside the PC `Pak.zip`, and it is used in
-   place of the built-in pack. On Windows and Linux that is when the program
-   runs from its own folder; from anywhere else, name it:
-   `--console-ui console_ui` (a path relative to where the program runs, or an
-   absolute one). Besides the console's own art and fonts, it brings what only
-   the Xbox release has: the Chakawary pet, the three Xbox 360 armour sets and
-   two fish.
+---
 
-With the Xbox 360 archive, `console_ui/` and the built-in pack are not used:
-the archive already has the console interface. `--console-ui none` runs a PC
-archive with neither: no HUD, and the menus as plain lists.
+致谢
 
-| | Xbox 360 `pak.zip` | PC `Pak.zip` | PC `Pak.zip` + `console_ui/` |
-| --- | --- | --- | --- |
-| HUD and menus | the console's own | the port's built-in pack: basic, under construction | the console's own |
-| main menu and character creation | the console's | the built-in pack's | the console's |
-| levels, monsters, items, quests | the Xbox 360's | the PC's | the PC's |
-| monsters on a floor | fewer | about half as many again (on one late floor, 137 against 87) | as the PC's |
-| Chakawary pet, Xbox 360 armour sets and fish | yes | no | yes |
-| materials, lights and effects | the Xbox 360's | the PC's (a few props and effects look different) | the PC's |
-| archive size | about 140 MB | about 320 MB (Steam) | about 320 MB, plus 4 MB |
-
-**On lower-spec machines, such as the Switch, the Xbox 360 archive is the
-better choice.** It places fewer monsters on a floor, and a crowd fight is what
-costs a frame most: on the Switch, the same floor ran at about twice the frame
-rate on the Xbox 360 data.
-
-## Configuration: `config.txt`
-
-`config.txt` holds the engine's own switches. These are not the game's
-settings, which are kept with the saves (`save/settings.txt`). Each line is
-`key=value`, where `1` is on and `0` is off, and `#` starts a comment.
-
-| key | default | does |
-| --- | --- | --- |
-| `debug` | `0` | the debug tools: the debug menu, the bestiary, the wardrobe editor, Choose Level, frame dumps, and the log file. When off, the menus do not offer them at all |
-| `logs` | `0` | the log file on its own (`debug=1` turns it on too) |
-| `fps` | `0` | the frame-rate overlay. **L3** toggles it in game, and the change is saved here |
-| `fps_limit` | `0` (Android `60`) | the most frames a second the game draws; `0` for no limit. On Android the display is asked for that rate too, so a 120 Hz screen can run at 60 |
-| `width`, `height` | `1280`, `720` | **desktop builds only:** the window size, or the screen resolution in fullscreen |
-| `fullscreen` | `0` | **desktop builds only:** `1` fills the screen at `width` x `height` |
-| `vsync` | `1` | **desktop builds only:** `1` waits for the screen's refresh; `0` draws frames as fast as the machine can |
-
-**Resolution is a desktop setting.** The Switch renders at its screen's
-own size, Android at the share of it chosen in the launcher (below); both
-ignore `width`, `height`, `fullscreen` and `vsync`. They do not write those lines into a new file.
-If the screen cannot show `width` x `height` (the window is clamped to the
-desktop, or the window manager makes a fullscreen window the monitor's size),
-the game is laid out for the size the window really has.
-
-Where the file lives:
-
-- **Switch and Android:** beside the game data. It is created with the
-  defaults above on first start.
-- **Windows and Linux, run from a player folder** (a `pak.zip` in the working
-  directory, as laid out below): in that folder, created on first start with
-  the defaults above.
-- **Desktop, run from the build tree** (with `--game-data`): read from the
-  working directory if one is there, and never created. Without a file the
-  debug tools and the log stay on.
-
-On the desktop, `--width` and `--height` on the command line take precedence
-over the file.
-
-## Directory structure
-
-Each platform keeps the game files in one folder: the program (or the APK's
-chosen folder), `pak.zip`, `music/`, and optionally `console_ui/`. The game
-writes `config.txt`, its saves and its log into that same folder.
-
-### Switch
-
-```
-sdmc:/switch/torchlight/
-├── torchlight.nro      the engine (OGRE's shader library is inside it)
-├── pak.zip             the game archive
-├── music/              the game's music
-├── console_ui/         only beside a PC Pak.zip
-└── config.txt          made on first start
-```
-
-Start it from the Homebrew Menu (hbmenu).
-
-### Android
-
-The APK holds the engine and OGRE's shader library, but no game files. On
-first start it asks for **All files access**, then for a folder chosen through
-the system's folder picker:
-
-```
-<any folder you choose, e.g. /sdcard/Torchlight/>
-├── pak.zip
-├── music/
-├── console_ui/         only beside a PC Pak.zip
-└── config.txt          made on first start
-```
-
-The launcher remembers the folder and checks it on every start. If `pak.zip` is
-missing it asks again, and if `music/` is missing it offers to play without
-music. Before each start it shows two sliders: the resolution, 25% to 100%
-of the screen's (the system scales the frame up to the screen), and the
-frame limit, `config.txt`'s `fps_limit` (no limit at either end); and two
-switches, the frame-rate overlay (`fps`) and the free camera (`free_camera`). Android 12
-(API 31) or newer is required, on an arm64 device.
-
-### iOS
-
-The Xcode app bundle contains the engine and OGRE's shader library. If game data
-is bundled with a local build, the app copies `pak.zip`, `music/`, and
-`console_ui/` into its Documents folder on first launch. Otherwise, in Files,
-open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there.
-The app reads and writes its saves and settings in that same Documents folder.
-Touch controls appear on screen when first touched.
-On iOS, the right stick rotates the camera horizontally and adjusts its pitch vertically; pinch
-with two fingers anywhere in the play area to zoom. On the other platforms the camera is the console's
-and the right stick zooms. `free_camera=1` in `config.txt` (or **Debug > FREE CAMERA**, with
-`debug=1`) turns on the free camera on any platform: the right stick across turns it, a pinch
-zooms on a touch screen (iOS, Android, the Switch in handheld), and R3 puts the view back
-(otherwise R3 still toggles the map). `free_camera=0` gives iOS the console's camera too.
-
-The iOS build supports unpacked mods. Put each extracted mod in its own
-subfolder under `Documents/mods/`, keeping the mod's `media/` directory
-structure intact. Mod files can override game data, and town `Merge/*.layout`
-files can add placed content such as merchants. Baklah's Unique Gear has been
-verified in game, including his vendor interaction and inventory.
-
-### Build iOS from source
-
-Build on macOS with Xcode (including the iOS SDK), CMake, Python 3 and Git
-installed. Initialise the repository's submodules first, then fetch the small
-header dependency and apply the pinned OGRE patches:
-
-```bash
-git submodule update --init --recursive
-python3 scripts/fetch_stb.py
-python3 scripts/apply_patches.py
-python3 scripts/build_ogre.py --platform ios
-cmake -S . -B build-ios -G Xcode \
-  -DTL_OGRE_BUILD_DIR="$PWD/build-ogre-ios-xcode" \
-  -DTL_IOS_GAME_DATA_DIR="" \
-  -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
-cmake --build build-ios --config Release --target torchlight
-```
-
-`TL_IOS_GAME_DATA_DIR` is deliberately empty in this recipe: the resulting app
-contains the engine, icon and built-in interface, but no copyrighted game data.
-To build a local app that copies your own game files into Documents on first
-launch, set it to a folder containing `pak.zip` and optionally `music/` and
-`console_ui/`. Do not commit or distribute that data.
-
-The unsigned app is `build-ios/Release-iphoneos/torchlight.app`. To make an
-unsigned IPA for personal signing, package the app with `Payload/` at the ZIP
-root:
-
-```bash
-mkdir -p build-ios/ipa/Payload
-cp -R build-ios/Release-iphoneos/torchlight.app build-ios/ipa/Payload/
-ditto -c -k --norsrc --keepParent build-ios/ipa/Payload build-ios/Torchlight-Rekindled-iOS.ipa
-```
-
-The IPA is unsigned. Sign it with your own Apple development certificate and
-provisioning profile before installing it on a device. Select a development
-team in Xcode if you prefer to build and install directly from Xcode.
-
-For an Apple Silicon Simulator build, use
-`python3 scripts/build_ogre.py --platform ios --ios-simulator` and set
-`TL_OGRE_BUILD_DIR` to `build-ogre-ios-simulator-xcode` when configuring CMake.
-
-### Windows
-
-```
-Torchlight/
-├── torchlight.exe
-├── *.dll               the MinGW runtime, FreeType, zlib, ... (copied by the packaging script)
-├── RTShaderLib/        OGRE's shader library, with Main/ inside
-├── LICENSE.txt, README.txt, licenses/   the licences of everything in the folder, and where its source is
-├── pak.zip
-├── music/
-├── console_ui/         only beside a PC Pak.zip (run with --console-ui console_ui)
-└── config.txt          made on first start
-```
-
-Started from this folder with no arguments, it reads the game from the folder
-and opens the main menu. Missing files are reported in a message box.
-
-### Linux
-
-```
-Torchlight/
-├── torchlight
-├── torchlight.sh       starts the program from its own folder
-├── RTShaderLib/        OGRE's shader library, with Main/ inside
-├── LICENSE.txt, README.txt, licenses/   the licences of everything in the folder, and where its source is
-├── pak.zip
-├── music/
-├── console_ui/         only beside a PC Pak.zip (run with --console-ui console_ui)
-└── config.txt          made on first start
-```
-
-Run `./torchlight.sh`. The system's own libraries are not bundled: X11,
-OpenGL/EGL, ALSA, FreeType and zlib. A gamepad is read through evdev. If the
-pad is not picked up, add your user to the `input` group.
-
-## Building
-
-Every platform starts from the same checkout:
-
-```bash
-git clone --recurse-submodules https://github.com/GreenSwampDweller/torchlight-rekindled.git
-cd torchlight-rekindled
-python scripts/fetch_stb.py        # the Vorbis decoder (one header), once
-python scripts/apply_patches.py    # patches external/ogre and external/particleuniverse
-```
-
-Each platform then builds OGRE once (`scripts/build_ogre.py`) and the engine
-after it. **Ninja is required everywhere:** on Windows, GNU Make reads the `C:`
-in paths as a rule separator and fails.
-
-**Every build also needs Python 3 with [Pillow](https://pypi.org/project/pillow/)**
-(`python -m pip install pillow`): it draws the port's own interface pack, which
-every build carries (`cmake/ui_pack.cmake`). CMake looks for one on `PATH` and in
-Windows' usual install folders, and stops at configure when none has Pillow;
-`-DTL_PYTHON=<path to python>` names one. The Switch build uses a Windows
-Python, since devkitPro's shell has none of its own.
-
-### Windows (desktop)
-
-Requirements: [MSYS2](https://www.msys2.org/) with the MINGW64 toolchain.
-
-```bash
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja \
-          mingw-w64-x86_64-freetype mingw-w64-x86_64-zlib mingw-w64-x86_64-python
-```
-
-`C:\msys64\mingw64\bin` must be on `PATH`, not only spelled out in the
-commands. Without it the compiler cannot find its own DLLs, and the build fails
-with no message.
-
-```bash
-python scripts/build_ogre.py --platform desktop
-cmake -S . -B build-desktop -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-desktop
-ctest --test-dir build-desktop          # optional: the unit tests
-```
-
-To run it straight from the build tree:
-
-```bash
-./build-desktop/torchlight.exe --game-data <folder with Pak.zip and music/>
-./build-desktop/torchlight.exe --game-data <PC install> --console-ui console_ui
-```
-
-To make a player folder (`build-desktop/package/Torchlight/`, laid out as
-above):
-
-```bash
-python scripts/package_windows.py
-python scripts/package_windows.py --pak <your pak.zip> --music <your music/>   # also copies your game files in
-```
-
-### Linux (desktop)
-
-Run this on Linux or in WSL. On Debian or Ubuntu the requirements are:
-
-```bash
-sudo apt install build-essential cmake ninja-build python3 \
-    libx11-dev libxrandr-dev libgl-dev libegl-dev libasound2-dev \
-    libfreetype-dev zlib1g-dev
-```
-
-```bash
-python3 scripts/build_ogre.py --platform linux
-cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DTL_OGRE_BUILD_DIR=build-ogre-linux
-cmake --build build-linux
-python3 scripts/package_linux.py        # -> build-linux/package/Torchlight/
-```
-
-`package_linux.py` takes the same `--pak` and `--music` options as the Windows
-script.
-
-### Nintendo Switch
-
-Requirements: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the
-`switch-dev` group and the `switch-mesa`, `switch-sdl2` and `switch-pkg-config`
-portlibs. The Switch build uses **devkitPro's own CMake**, run in devkitPro's
-MSYS2 shell on Windows. It is not interchangeable with MSYS2's.
-
-**A patched Mesa** (Mesa with glthread, worth about 5 ms a frame on the
-console) is linked from `build-mesa-switch/install`. Build it once, in WSL or
-Linux with devkitPro installed: `python3 scripts/build_mesa.py`.
-
-Without it the build still succeeds. It links devkitPro's stock Mesa and prints
-a warning, and the game runs slower.
-
-```bash
-python scripts/build_ogre.py --platform switch
-```
-
-On Windows, in devkitPro's MSYS2 shell (it starts in your home folder, so `cd`
-first):
-
-```bash
-cd /c/path/to/torchlight-rekindled
-cmake -S . -B build-switch -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \
-      -DCMAKE_BUILD_TYPE=Release
-ninja -C build-switch
-```
-
-This produces `build-switch/torchlight.nro`. Copy it to
-`sdmc:/switch/torchlight/` beside `pak.zip` and `music/`, by SD card or over
-FTP.
-
-### Android
-
-Requirements, on Windows: [Android Studio](https://developer.android.com/studio),
-with the SDK Manager's **NDK (Side by side)**, **CMake** and an **Android SDK
-Platform** installed into the default SDK folder (`%LOCALAPPDATA%\Android\Sdk`,
-or set `ANDROID_HOME`). The newest installed version of each is used. Gradle is
-not needed, and Android Studio's own JDK signs the APK. `build_apk.py` draws the
-launcher icons with [Pillow](https://pypi.org/project/pillow/), so the Python
-that runs it needs it: `pip install pillow` (or, for MSYS2's Python,
-`pacman -S mingw-w64-x86_64-python-pillow`).
-
-```bash
-python scripts/build_ogre.py --platform android
-python scripts/build_apk.py game                  # -> build-android/torchlight.apk
-adb install -r build-android/torchlight.apk
-```
-
-The APK is signed with the standard Android debug key
-(`~/.android/debug.keystore`, created if it is missing). Put the game files on
-the device and choose their folder on first start (see
-[Android](#android) above).
-
-## Legal
-
-Torchlight Rekindled is free software, released under the GNU General Public
-License, version 3: see [LICENSE](LICENSE). The third-party components it
-bundles or links, and their licences, are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-No part of the game's data is distributed with this project. To play, you need
-your own legally obtained copy of Torchlight.
-
-Torchlight is copyright © 2009 Runic Games, Inc. All rights reserved.
-Torchlight and Runic Games are trademarks or registered trademarks of their
-respective owners in the U.S. and/or other countries.
-
-Torchlight Rekindled and its maintainers are not associated with or endorsed by
-Runic Games or the current owner of the Torchlight trademark.
+· 原版工程：GreenSwampDweller/torchlight-rekindled
+· 引擎：OGRE
